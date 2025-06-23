@@ -380,6 +380,7 @@ func (c *Cdm) segment_list(represent *dash.Representation) error {
    }
    return nil
 }
+
 func (c *Cdm) get_key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
