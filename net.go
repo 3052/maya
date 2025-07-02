@@ -179,7 +179,7 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
       return data, nil
    }
    // SampleEntry.BoxHeader
-   copy(sample.BoxHeader.Type[:], sinf.Frma.DataFormat[:]) // Firefox
+   sample.BoxHeader.Type = sinf.Frma.DataFormat // Firefox
    return file1.Append(nil)
 }
 
