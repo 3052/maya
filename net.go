@@ -65,6 +65,12 @@ func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    return io.ReadAll(resp.Body)
 }
 
+type Cdm struct {
+   ClientId   string
+   PrivateKey string
+   License    func([]byte) ([]byte, error)
+}
+
 func (i *index_range) Set(data string) error {
    _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
    if err != nil {
@@ -79,11 +85,7 @@ func (i *index_range) String() string {
    return fmt.Sprintf("%v-%v", i[0], i[1])
 }
 
-type Cdm struct {
-   ClientId   string
-   PrivateKey string
-   License    func([]byte) ([]byte, error)
-}
+///
 
 func create(represent *dash.Representation) (*os.File, error) {
    var name strings.Builder
