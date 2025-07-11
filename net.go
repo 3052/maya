@@ -147,13 +147,13 @@ type media_file struct {
 }
 
 func (m *media_file) initialization(data []byte) ([]byte, error) {
-   var file1 file.File
-   err := file1.Read(data)
+   var fileVar file.File
+   err := fileVar.Read(data)
    if err != nil {
       return nil, err
    }
    // Moov
-   moov, ok := file1.GetMoov()
+   moov, ok := fileVar.GetMoov()
    if !ok {
       return data, nil
    }
@@ -182,7 +182,7 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    }
    // SampleEntry.BoxHeader
    sample.BoxHeader.Type = sinf.Frma.DataFormat // Firefox
-   return file1.Append(nil)
+   return fileVar.Append(nil)
 }
 
 // segment can be VTT or anything
@@ -190,34 +190,34 @@ func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    if key == nil {
       return data, nil
    }
-   var file1 file.File
-   err := file1.Read(data)
+   var fileVar file.File
+   err := fileVar.Read(data)
    if err != nil {
       return nil, err
    }
    if m.duration/m.timescale < 10*60 {
-      for _, sample := range file1.Moof.Traf.Trun.Sample {
+      for _, sample := range fileVar.Moof.Traf.Trun.Sample {
          if sample.Duration == 0 {
-            sample.Duration = file1.Moof.Traf.Tfhd.DefaultSampleDuration
+            sample.Duration = fileVar.Moof.Traf.Tfhd.DefaultSampleDuration
          }
          m.duration += uint64(sample.Duration)
          if sample.Size == 0 {
-            sample.Size = file1.Moof.Traf.Tfhd.DefaultSampleSize
+            sample.Size = fileVar.Moof.Traf.Tfhd.DefaultSampleSize
          }
          m.size += uint64(sample.Size)
       }
       log.Println("bandwidth", m.timescale*m.size*8/m.duration)
    }
-   if file1.Moof.Traf.Senc == nil {
+   if fileVar.Moof.Traf.Senc == nil {
       return data, nil
    }
-   for i, data := range file1.Mdat.Data(&file1.Moof.Traf) {
-      err = file1.Moof.Traf.Senc.Sample[i].Decrypt(data, key)
+   for i, data := range fileVar.Mdat.Data(&fileVar.Moof.Traf) {
+      err = fileVar.Moof.Traf.Senc.Sample[i].Decrypt(data, key)
       if err != nil {
          return nil, err
       }
    }
-   return file1.Append(nil)
+   return fileVar.Append(nil)
 }
 
 func (p *progress) next() {
@@ -262,11 +262,11 @@ func (c *Cdm) segment_template(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   file1, err := create(represent)
+   fileVar, err := create(represent)
    if err != nil {
       return err
    }
-   defer file1.Close()
+   defer fileVar.Close()
    if initial := represent.SegmentTemplate.Initialization; initial != "" {
       address, err := initial.Url(represent)
       if err != nil {
@@ -280,7 +280,7 @@ func (c *Cdm) segment_template(represent *dash.Representation) error {
       if err != nil {
          return err
       }
-      _, err = file1.Write(data1)
+      _, err = fileVar.Write(data1)
       if err != nil {
          return err
       }
@@ -322,7 +322,7 @@ func (c *Cdm) segment_template(represent *dash.Representation) error {
          if err != nil {
             return err
          }
-         _, err = file1.Write(data)
+         _, err = fileVar.Write(data)
          if err != nil {
             return err
          }
@@ -340,11 +340,11 @@ func (c *Cdm) segment_list(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   file1, err := create(represent)
+   fileVar, err := create(represent)
    if err != nil {
       return err
    }
-   defer file1.Close()
+   defer fileVar.Close()
    data, err := get_segment(
       represent.SegmentList.Initialization.SourceUrl[0], nil,
    )
@@ -355,7 +355,7 @@ func (c *Cdm) segment_list(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   _, err = file1.Write(data)
+   _, err = fileVar.Write(data)
    if err != nil {
       return err
    }
@@ -375,7 +375,7 @@ func (c *Cdm) segment_list(represent *dash.Representation) error {
       if err != nil {
          return err
       }
-      _, err = file1.Write(data)
+      _, err = fileVar.Write(data)
       if err != nil {
          return err
       }

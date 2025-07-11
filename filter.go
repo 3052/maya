@@ -112,12 +112,12 @@ func (f Filters) String() string {
 func (f *Filters) Set(data string) error {
    *f = nil
    for _, data := range strings.Split(data, ",") {
-      var filter1 Filter
-      err := filter1.Set(data)
+      var filterVar Filter
+      err := filterVar.Set(data)
       if err != nil {
          return err
       }
-      *f = append(*f, filter1)
+      *f = append(*f, filterVar)
    }
    return nil
 }
@@ -167,11 +167,11 @@ func (f Filters) Filter(resp *http.Response, module *Cdm) error {
 }
 
 func (f Filters) representation_ok(r *dash.Representation) bool {
-   for _, filter1 := range f {
-      if r.Bandwidth >= filter1.BitrateStart {
-         if filter1.bitrate_end_ok(r) {
-            if filter1.language_ok(r) {
-               if filter1.role_ok(r) {
+   for _, filterVar := range f {
+      if r.Bandwidth >= filterVar.BitrateStart {
+         if filterVar.bitrate_end_ok(r) {
+            if filterVar.language_ok(r) {
+               if filterVar.role_ok(r) {
                   return true
                }
             }
