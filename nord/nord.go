@@ -74,11 +74,11 @@ func (s *ServerLoads) Unmarshal(data []byte) error {
 
 func GetServerLoads(servers []Server) ServerLoads {
    loads := make(ServerLoads, 0, len(servers))
-   for _, server1 := range servers {
-      if server1.proxy_ssl() {
+   for _, serverVar := range servers {
+      if serverVar.proxy_ssl() {
          var load ServerLoad
-         load.Hostname = server1.Hostname
-         for _, location := range server1.Locations {
+         load.Hostname = serverVar.Hostname
+         for _, location := range serverVar.Locations {
             load.Country = location.Country.Code
             load.City = location.Country.City.DnsName
          }

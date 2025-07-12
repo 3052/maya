@@ -11,9 +11,9 @@ func TestProgress(t *testing.T) {
    log.SetFlags(log.Ltime)
    var (
       segment   [9]struct{}
-      progress1 progress
+      progressVar progress
    )
-   progress1.set(len(segment))
+   progressVar.set(len(segment))
    for range segment {
       func() {
          resp, err := http.Get("http://httpbingo.org/drip?delay=0&duration=1")
@@ -26,6 +26,6 @@ func TestProgress(t *testing.T) {
             t.Fatal(err)
          }
       }()
-      progress1.next()
+      progressVar.next()
    }
 }

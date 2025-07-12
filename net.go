@@ -158,11 +158,11 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
       return data, nil
    }
    // Moov.Pssh
-   for _, pssh1 := range moov.Pssh {
-      if pssh1.SystemId.String() == widevine_system_id {
-         m.pssh = pssh1.Data
+   for _, psshVar := range moov.Pssh {
+      if psshVar.SystemId.String() == widevine_system_id {
+         m.pssh = psshVar.Data
       }
-      copy(pssh1.BoxHeader.Type[:], "free") // Firefox
+      copy(psshVar.BoxHeader.Type[:], "free") // Firefox
    }
    // Moov.Trak
    m.timescale = uint64(moov.Trak.Mdia.Mdhd.Timescale)
@@ -290,11 +290,11 @@ func (c *Cdm) segment_template(represent *dash.Representation) error {
       return err
    }
    var segments []int
-   for represent1 := range represent.Representation() {
-      segments = slices.AppendSeq(segments, represent1.Segment())
+   for rep := range represent.Representation() {
+      segments = slices.AppendSeq(segments, rep.Segment())
    }
-   var progress1 progress
-   progress1.set(len(segments))
+   var progressVar progress
+   progressVar.set(len(segments))
    for chunk := range slices.Chunk(segments, Threads) {
       var (
          datas = make([][]byte, len(chunk))
@@ -308,7 +308,7 @@ func (c *Cdm) segment_template(represent *dash.Representation) error {
          go func() {
             datas[i], err = get_segment(address, nil)
             errs <- err
-            progress1.next()
+            progressVar.next()
          }()
       }
       for range chunk {
@@ -363,14 +363,14 @@ func (c *Cdm) segment_list(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   var progress1 progress
-   progress1.set(len(represent.SegmentList.SegmentUrl))
+   var progressVar progress
+   progressVar.set(len(represent.SegmentList.SegmentUrl))
    for _, segment := range represent.SegmentList.SegmentUrl {
       data, err := get_segment(segment.Media[0], nil)
       if err != nil {
          return err
       }
-      progress1.next()
+      progressVar.next()
       data, err = media.write_segment(data, key)
       if err != nil {
          return err
@@ -396,9 +396,9 @@ func (c *Cdm) get_key(media *media_file) ([]byte, error) {
       return nil, err
    }
    if media.pssh == nil {
-      var pssh1 widevine.Pssh
-      pssh1.KeyIds = [][]byte{media.key_id}
-      media.pssh = pssh1.Marshal()
+      var psshVar widevine.Pssh
+      psshVar.KeyIds = [][]byte{media.key_id}
+      media.pssh = psshVar.Marshal()
    }
    log.Println("PSSH", base64.StdEncoding.EncodeToString(media.pssh))
    var module widevine.Cdm
@@ -478,8 +478,8 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   var progress1 progress
-   progress1.set(len(file_file.Sidx.Reference))
+   var progressVar progress
+   progressVar.set(len(file_file.Sidx.Reference))
    var index index_range
    err = index.Set(represent.SegmentBase.IndexRange)
    if err != nil {
@@ -493,7 +493,7 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
       if err != nil {
          return err
       }
-      progress1.next()
+      progressVar.next()
       data, err = media.write_segment(data, key)
       if err != nil {
          return err
