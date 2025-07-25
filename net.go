@@ -19,6 +19,8 @@ import (
    "time"
 )
 
+var Threads = 1
+
 func create(represent *dash.Representation) (*os.File, error) {
    var name strings.Builder
    name.WriteString(represent.Id)
@@ -100,8 +102,6 @@ func (i *index_range) String() string {
 }
 
 ///
-
-var Threads = 1
 
 func os_create(name string) (*os.File, error) {
    log.Println("Create", name)
