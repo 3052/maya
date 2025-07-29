@@ -21,6 +21,11 @@ import (
 
 var Threads = 1
 
+func os_create(name string) (*os.File, error) {
+   log.Println("Create", name)
+   return os.Create(name)
+}
+
 func create(represent *dash.Representation) (*os.File, error) {
    var name strings.Builder
    name.WriteString(represent.Id)
@@ -102,11 +107,6 @@ func (i *index_range) String() string {
 }
 
 ///
-
-func os_create(name string) (*os.File, error) {
-   log.Println("Create", name)
-   return os.Create(name)
-}
 
 const (
    widevine_system_id = "edef8ba979d64acea3c827dcd51d21ed"
