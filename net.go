@@ -19,6 +19,11 @@ import (
    "time"
 )
 
+const (
+   widevine_system_id = "edef8ba979d64acea3c827dcd51d21ed"
+   widevine_urn       = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+)
+
 var Threads = 1
 
 func os_create(name string) (*os.File, error) {
@@ -107,11 +112,6 @@ func (i *index_range) String() string {
 }
 
 ///
-
-const (
-   widevine_system_id = "edef8ba979d64acea3c827dcd51d21ed"
-   widevine_urn       = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-)
 
 func (m *media_file) New(represent *dash.Representation) error {
    for _, content := range represent.ContentProtection {
