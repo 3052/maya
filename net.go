@@ -91,171 +91,6 @@ func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    return io.ReadAll(resp.Body)
 }
 
-type Cdm struct {
-   ClientId   string
-   PrivateKey string
-   License    func([]byte) ([]byte, error)
-}
-
-func (i *index_range) Set(data string) error {
-   _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
-   if err != nil {
-      return err
-   }
-   return nil
-}
-
-type index_range [2]uint64
-
-func (i *index_range) String() string {
-   return fmt.Sprintf("%v-%v", i[0], i[1])
-}
-
-///
-
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box pssh.Box
-            n, err := box.BoxHeader.Decode(data)
-            if err != nil {
-               return err
-            }
-            err = box.Read(data[n:])
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            break
-         }
-      }
-   }
-   return nil
-}
-
-type media_file struct {
-   key_id    []byte // tenc
-   pssh      []byte // pssh
-   timescale uint64 // mdhd
-   size      uint64 // trun
-   duration  uint64 // trun
-}
-
-func (m *media_file) initialization(data []byte) ([]byte, error) {
-   var fileVar file.File
-   err := fileVar.Read(data)
-   if err != nil {
-      return nil, err
-   }
-   // Moov
-   moov, ok := fileVar.GetMoov()
-   if !ok {
-      return data, nil
-   }
-   // Moov.Pssh
-   for _, psshVar := range moov.Pssh {
-      if psshVar.SystemId.String() == widevine_system_id {
-         m.pssh = psshVar.Data
-      }
-      copy(psshVar.BoxHeader.Type[:], "free") // Firefox
-   }
-   // Moov.Trak
-   m.timescale = uint64(moov.Trak.Mdia.Mdhd.Timescale)
-   // Sinf
-   sinf, ok := moov.Trak.Mdia.Minf.Stbl.Stsd.Sinf()
-   if !ok {
-      return data, nil
-   }
-   // Sinf.BoxHeader
-   copy(sinf.BoxHeader.Type[:], "free") // Firefox
-   // Sinf.Schi
-   m.key_id = sinf.Schi.Tenc.DefaultKid[:]
-   // SampleEntry
-   sample, ok := moov.Trak.Mdia.Minf.Stbl.Stsd.SampleEntry()
-   if !ok {
-      return data, nil
-   }
-   // SampleEntry.BoxHeader
-   sample.BoxHeader.Type = sinf.Frma.DataFormat // Firefox
-   return fileVar.Append(nil)
-}
-
-// segment can be VTT or anything
-func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
-   if key == nil {
-      return data, nil
-   }
-   var fileVar file.File
-   err := fileVar.Read(data)
-   if err != nil {
-      return nil, err
-   }
-   if m.duration/m.timescale < 10*60 {
-      for _, sample := range fileVar.Moof.Traf.Trun.Sample {
-         if sample.Duration == 0 {
-            sample.Duration = fileVar.Moof.Traf.Tfhd.DefaultSampleDuration
-         }
-         m.duration += uint64(sample.Duration)
-         if sample.Size == 0 {
-            sample.Size = fileVar.Moof.Traf.Tfhd.DefaultSampleSize
-         }
-         m.size += uint64(sample.Size)
-      }
-      log.Println("bandwidth", m.timescale*m.size*8/m.duration)
-   }
-   if fileVar.Moof.Traf.Senc == nil {
-      return data, nil
-   }
-   for i, data := range fileVar.Mdat.Data(&fileVar.Moof.Traf) {
-      err = fileVar.Moof.Traf.Senc.Sample[i].Decrypt(data, key)
-      if err != nil {
-         return nil, err
-      }
-   }
-   return fileVar.Append(nil)
-}
-
-func (p *progress) next() {
-   p.segmentA++
-   p.segmentB--
-   timeB := time.Now().Unix()
-   if timeB > p.timeB {
-      log.Println(
-         p.segmentB, "segment",
-         p.durationB().Truncate(time.Second),
-         "left",
-      )
-      p.timeB = timeB
-   }
-}
-
-func (p *progress) set(segmentB int) {
-   p.segmentB = segmentB
-   p.timeA = time.Now()
-   p.timeB = time.Now().Unix()
-}
-
-type progress struct {
-   segmentA int64
-   segmentB int
-   timeA    time.Time
-   timeB    int64
-}
-
-func (p *progress) durationA() time.Duration {
-   return time.Since(p.timeA)
-}
-
-// keep last two terms separate
-func (p *progress) durationB() time.Duration {
-   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
-}
-
 func (c *Cdm) segment_template(represent *dash.Representation) error {
    var media media_file
    err := media.New(represent)
@@ -504,4 +339,167 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
       }
    }
    return nil
+}
+
+type Cdm struct {
+   ClientId   string
+   PrivateKey string
+   License    func([]byte) ([]byte, error)
+}
+
+func (i *index_range) Set(data string) error {
+   _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
+   if err != nil {
+      return err
+   }
+   return nil
+}
+
+type index_range [2]uint64
+
+func (i *index_range) String() string {
+   return fmt.Sprintf("%v-%v", i[0], i[1])
+}
+
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box pssh.Box
+            n, err := box.BoxHeader.Decode(data)
+            if err != nil {
+               return err
+            }
+            err = box.Read(data[n:])
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            break
+         }
+      }
+   }
+   return nil
+}
+
+type media_file struct {
+   key_id    []byte // tenc
+   pssh      []byte // pssh
+   timescale uint64 // mdhd
+   size      uint64 // trun
+   duration  uint64 // trun
+}
+
+func (m *media_file) initialization(data []byte) ([]byte, error) {
+   var fileVar file.File
+   err := fileVar.Read(data)
+   if err != nil {
+      return nil, err
+   }
+   // Moov
+   moov, ok := fileVar.GetMoov()
+   if !ok {
+      return data, nil
+   }
+   // Moov.Pssh
+   for _, psshVar := range moov.Pssh {
+      if psshVar.SystemId.String() == widevine_system_id {
+         m.pssh = psshVar.Data
+      }
+      copy(psshVar.BoxHeader.Type[:], "free") // Firefox
+   }
+   // Moov.Trak
+   m.timescale = uint64(moov.Trak.Mdia.Mdhd.Timescale)
+   // Sinf
+   sinf, ok := moov.Trak.Mdia.Minf.Stbl.Stsd.Sinf()
+   if !ok {
+      return data, nil
+   }
+   // Sinf.BoxHeader
+   copy(sinf.BoxHeader.Type[:], "free") // Firefox
+   // Sinf.Schi
+   m.key_id = sinf.Schi.Tenc.DefaultKid[:]
+   // SampleEntry
+   sample, ok := moov.Trak.Mdia.Minf.Stbl.Stsd.SampleEntry()
+   if !ok {
+      return data, nil
+   }
+   // SampleEntry.BoxHeader
+   sample.BoxHeader.Type = sinf.Frma.DataFormat // Firefox
+   return fileVar.Append(nil)
+}
+
+// segment can be VTT or anything
+func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
+   if key == nil {
+      return data, nil
+   }
+   var fileVar file.File
+   err := fileVar.Read(data)
+   if err != nil {
+      return nil, err
+   }
+   if m.duration/m.timescale < 10*60 {
+      for _, sample := range fileVar.Moof.Traf.Trun.Sample {
+         if sample.Duration == 0 {
+            sample.Duration = fileVar.Moof.Traf.Tfhd.DefaultSampleDuration
+         }
+         m.duration += uint64(sample.Duration)
+         if sample.Size == 0 {
+            sample.Size = fileVar.Moof.Traf.Tfhd.DefaultSampleSize
+         }
+         m.size += uint64(sample.Size)
+      }
+      log.Println("bandwidth", m.timescale*m.size*8/m.duration)
+   }
+   if fileVar.Moof.Traf.Senc == nil {
+      return data, nil
+   }
+   for i, data := range fileVar.Mdat.Data(&fileVar.Moof.Traf) {
+      err = fileVar.Moof.Traf.Senc.Sample[i].Decrypt(data, key)
+      if err != nil {
+         return nil, err
+      }
+   }
+   return fileVar.Append(nil)
+}
+
+func (p *progress) next() {
+   p.segmentA++
+   p.segmentB--
+   timeB := time.Now().Unix()
+   if timeB > p.timeB {
+      log.Println(
+         p.segmentB, "segment",
+         p.durationB().Truncate(time.Second),
+         "left",
+      )
+      p.timeB = timeB
+   }
+}
+
+func (p *progress) set(segmentB int) {
+   p.segmentB = segmentB
+   p.timeA = time.Now()
+   p.timeB = time.Now().Unix()
+}
+
+type progress struct {
+   segmentA int64
+   segmentB int
+   timeA    time.Time
+   timeB    int64
+}
+
+func (p *progress) durationA() time.Duration {
+   return time.Since(p.timeA)
+}
+
+// keep last two terms separate
+func (p *progress) durationB() time.Duration {
+   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
 }
