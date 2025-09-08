@@ -7,13 +7,6 @@ import (
    "strings"
 )
 
-type ServerLoad struct {
-   Count    int
-   Country  string
-   City     string
-   Hostname string
-}
-
 type Server struct {
    Hostname  string
    Locations []struct {
@@ -29,6 +22,15 @@ type Server struct {
       Identifier string
    }
 }
+
+type ServerLoad struct {
+   Count    int
+   Country  string
+   City     string
+   Hostname string
+}
+
+///
 
 func Proxy(username, password, hostname string) string {
    var b strings.Builder
