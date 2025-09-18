@@ -10,6 +10,64 @@ import (
    "strings"
 )
 
+func (f Filters) Filter(resp *http.Response, module *Cdm) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+      if f.representation_ok(represent) {
+         switch {
+         case represent.SegmentBase != nil:
+            err = module.segment_base(represent)
+         case represent.SegmentList != nil:
+            err = module.segment_list(represent)
+         case represent.SegmentTemplate != nil:
+            err = module.segment_template(represent)
+         }
+         if err != nil {
+            return err
+         }
+      }
+   }
+   return nil
+}
+
+func (f Filters) representation_ok(r *dash.Representation) bool {
+   for _, filterVar := range f {
+      if r.Bandwidth >= filterVar.BitrateStart {
+         if filterVar.bitrate_end_ok(r) {
+            if filterVar.language_ok(r) {
+               if filterVar.role_ok(r) {
+                  return true
+               }
+            }
+         }
+      }
+   }
+   return false
+}
 const FilterUsage = `bs = bitrate start
 be = bitrate end
 l = language
@@ -120,63 +178,4 @@ func (f *Filters) Set(data string) error {
       *f = append(*f, filterVar)
    }
    return nil
-}
-
-func (f Filters) Filter(resp *http.Response, module *Cdm) error {
-   if resp.StatusCode != http.StatusOK {
-      var data strings.Builder
-      resp.Write(&data)
-      return errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return err
-   }
-   var mpd dash.Mpd
-   err = mpd.Unmarshal(data)
-   if err != nil {
-      return err
-   }
-   mpd.Set(resp.Request.URL)
-   represents := slices.SortedFunc(mpd.Representation(),
-      func(a, b *dash.Representation) int {
-         return a.Bandwidth - b.Bandwidth
-      },
-   )
-   for i, represent := range represents {
-      if i >= 1 {
-         fmt.Println()
-      }
-      fmt.Println(represent)
-      if f.representation_ok(represent) {
-         switch {
-         case represent.SegmentBase != nil:
-            err = module.segment_base(represent)
-         case represent.SegmentList != nil:
-            err = module.segment_list(represent)
-         case represent.SegmentTemplate != nil:
-            err = module.segment_template(represent)
-         }
-         if err != nil {
-            return err
-         }
-      }
-   }
-   return nil
-}
-
-func (f Filters) representation_ok(r *dash.Representation) bool {
-   for _, filterVar := range f {
-      if r.Bandwidth >= filterVar.BitrateStart {
-         if filterVar.bitrate_end_ok(r) {
-            if filterVar.language_ok(r) {
-               if filterVar.role_ok(r) {
-                  return true
-               }
-            }
-         }
-      }
-   }
-   return false
 }
