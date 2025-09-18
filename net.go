@@ -145,7 +145,9 @@ func (c *Cdm) playReady_key(media *media_file) ([]byte, error) {
    if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
       return nil, errors.New("key ID mismatch")
    }
-   return coord.Key(), nil
+   key := coord.Key()
+   log.Printf("key %x", key)
+   return key, nil
 }
 
 func (c *Cdm) widevine_key(media *media_file) ([]byte, error) {
