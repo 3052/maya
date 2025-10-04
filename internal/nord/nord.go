@@ -16,6 +16,18 @@ import (
    "time"
 )
 
+func do_write(name string) error {
+   servers, err := nord.GetServers(0)
+   if err != nil {
+      return err
+   }
+   data, err := nord.GetServerLoads(servers).Marshal()
+   if err != nil {
+      return err
+   }
+   return write_file(name, data)
+}
+
 func do_country(name, code string) error {
    data, err := read_file(name)
    if err != nil {
@@ -69,18 +81,6 @@ func main() {
    if err != nil {
       panic(err)
    }
-}
-
-func do_write(name string) error {
-   servers, err := nord.GetServers(0)
-   if err != nil {
-      return err
-   }
-   data, err := nord.GetServerLoads(servers).Marshal()
-   if err != nil {
-      return err
-   }
-   return write_file(name, data)
 }
 
 func write_file(name string, data []byte) error {
