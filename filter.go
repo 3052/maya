@@ -54,106 +54,6 @@ func (f Filters) Filter(resp *http.Response, module *Cdm) error {
    return nil
 }
 
-func (f Filters) representation_ok(r *dash.Representation) bool {
-   for _, filterVar := range f {
-      if r.Bandwidth >= filterVar.BitrateStart {
-         if filterVar.bitrate_end_ok(r) {
-            if filterVar.language_ok(r) {
-               if filterVar.role_ok(r) {
-                  return true
-               }
-            }
-         }
-      }
-   }
-   return false
-}
-const FilterUsage = `bs = bitrate start
-be = bitrate end
-l = language
-r = role`
-
-func (f *Filter) bitrate_end_ok(r *dash.Representation) bool {
-   if f.BitrateEnd == 0 {
-      return true
-   }
-   return r.Bandwidth <= f.BitrateEnd
-}
-
-func (f *Filter) role_ok(r *dash.Representation) bool {
-   switch f.Role {
-   case "", r.GetAdaptationSet().GetRole():
-      return true
-   }
-   return false
-}
-
-func (f *Filter) language_ok(r *dash.Representation) bool {
-   switch f.Language {
-   case "", r.GetAdaptationSet().Lang:
-      return true
-   }
-   return false
-}
-
-func (f *Filter) Set(data string) error {
-   cookies, err := http.ParseCookie(data)
-   if err != nil {
-      return err
-   }
-   for _, cookie := range cookies {
-      switch cookie.Name {
-      case "bs":
-         _, err = fmt.Sscan(cookie.Value, &f.BitrateStart)
-      case "be":
-         _, err = fmt.Sscan(cookie.Value, &f.BitrateEnd)
-      case "l":
-         f.Language = cookie.Value
-      case "r":
-         f.Role = cookie.Value
-      default:
-         err = errors.New(".Name")
-      }
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-type Filter struct {
-   BitrateStart int
-   BitrateEnd   int
-   Language     string
-   Role         string
-}
-
-func (f *Filter) String() string {
-   var b []byte
-   if f.BitrateStart >= 1 {
-      b = fmt.Append(b, "bs=", f.BitrateStart)
-   }
-   if f.BitrateEnd >= 1 {
-      if b != nil {
-         b = append(b, ';')
-      }
-      b = fmt.Append(b, "be=", f.BitrateEnd)
-   }
-   if f.Language != "" {
-      if b != nil {
-         b = append(b, ';')
-      }
-      b = fmt.Append(b, "l=", f.Language)
-   }
-   if f.Role != "" {
-      if b != nil {
-         b = append(b, ';')
-      }
-      b = fmt.Append(b, "r=", f.Role)
-   }
-   return string(b)
-}
-
 type Filters []Filter
 
 func (f Filters) String() string {
@@ -178,4 +78,130 @@ func (f *Filters) Set(data string) error {
       *f = append(*f, filterVar)
    }
    return nil
+}
+
+func (f *Filter) Set(data string) error {
+   cookies, err := http.ParseCookie(data)
+   if err != nil {
+      return err
+   }
+   for _, cookie := range cookies {
+      switch cookie.Name {
+      case "bs":
+         _, err = fmt.Sscan(cookie.Value, &f.BitrateStart)
+      case "be":
+         _, err = fmt.Sscan(cookie.Value, &f.BitrateEnd)
+      case "i":
+         f.Id = cookie.Value
+      case "l":
+         f.Language = cookie.Value
+      case "r":
+         f.Role = cookie.Value
+      default:
+         err = errors.New(".Name")
+      }
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+const FilterUsage = `be = bitrate end
+bs = bitrate start
+i = id
+l = language
+r = role`
+
+func (f *Filter) String() string {
+   var b []byte
+   if f.BitrateStart >= 1 {
+      b = fmt.Append(b, "bs=", f.BitrateStart)
+   }
+   if f.BitrateEnd >= 1 {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "be=", f.BitrateEnd)
+   }
+   if f.Id != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "i=", f.Id)
+   }
+   if f.Language != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "l=", f.Language)
+   }
+   if f.Role != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "r=", f.Role)
+   }
+   return string(b)
+}
+
+type Filter struct {
+   BitrateEnd   int
+   BitrateStart int
+   Id           string
+   Language     string
+   Role         string
+}
+
+func (f *Filter) bitrate_end_ok(rep *dash.Representation) bool {
+   if f.BitrateEnd == 0 {
+      return true
+   }
+   return rep.Bandwidth <= f.BitrateEnd
+}
+
+func (f *Filter) role_ok(rep *dash.Representation) bool {
+   switch f.Role {
+   case "", rep.GetAdaptationSet().GetRole():
+      return true
+   }
+   return false
+}
+
+func (f *Filter) language_ok(rep *dash.Representation) bool {
+   switch f.Language {
+   case "", rep.GetAdaptationSet().Lang:
+      return true
+   }
+   return false
+}
+
+func (f *Filter) id_ok(rep *dash.Representation) bool {
+   switch f.Id {
+   case "", rep.Id:
+      return true
+   }
+   return false
+}
+
+func (f Filters) representation_ok(rep *dash.Representation) bool {
+   for _, filterVar := range f {
+      if rep.Bandwidth < filterVar.BitrateStart {
+         continue
+      }
+      if !filterVar.bitrate_end_ok(rep) {
+         continue
+      }
+      if !filterVar.id_ok(rep) {
+         continue
+      }
+      if !filterVar.language_ok(rep) {
+         continue
+      }
+      if !filterVar.role_ok(rep) {
+         continue
+      }
+      return true
+   }
+   return false
 }

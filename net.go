@@ -2,10 +2,10 @@ package net
 
 import (
    "41.neocities.org/dash"
-   "41.neocities.org/playReady"
+   "41.neocities.org/drm/playReady"
+   "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia/file"
    "41.neocities.org/sofia/pssh"
-   "41.neocities.org/widevine"
    "bytes"
    "encoding/base64"
    "errors"
@@ -42,7 +42,7 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
    }
    defer os_file.Close()
    head := http.Header{}
-   head.Set("range", "bytes=" + represent.SegmentBase.Initialization.Range)
+   head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
    data, err := get_segment(represent.BaseUrl[0], head)
    if err != nil {
       return err
@@ -70,7 +70,7 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   head.Set("range", "bytes=" + represent.SegmentBase.IndexRange)
+   head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
    data, err = get_segment(represent.BaseUrl[0], head)
    if err != nil {
       return err
