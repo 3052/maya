@@ -17,7 +17,15 @@ import (
    "time"
 )
 
-func (f Filters) Filter(resp *http.Response, config *Configuration) error {
+type media_file struct {
+   key_id    []byte // tenc
+   pssh      []byte // pssh
+   timescale uint64 // mdhd
+   size      uint64 // trun
+   duration  uint64 // trun
+}
+
+func (f Filters) Filter(resp *http.Response, configVar *Config) error {
    if resp.StatusCode != http.StatusOK {
       var data strings.Builder
       resp.Write(&data)
@@ -47,11 +55,11 @@ func (f Filters) Filter(resp *http.Response, config *Configuration) error {
       if f.representation_ok(represent) {
          switch {
          case represent.SegmentBase != nil:
-            err = config.segment_base(represent)
+            err = configVar.segment_base(represent)
          case represent.SegmentList != nil:
-            err = config.segment_list(represent)
+            err = configVar.segment_list(represent)
          case represent.SegmentTemplate != nil:
-            err = config.segment_template(represent)
+            err = configVar.segment_template(represent)
          }
          if err != nil {
             return err
@@ -299,14 +307,6 @@ type index_range [2]uint64
 
 func (i *index_range) String() string {
    return fmt.Sprintf("%v-%v", i[0], i[1])
-}
-
-type media_file struct {
-   key_id    []byte // tenc
-   pssh      []byte // pssh
-   timescale uint64 // mdhd
-   size      uint64 // trun
-   duration  uint64 // trun
 }
 
 func (m *media_file) initialization(data []byte) ([]byte, error) {

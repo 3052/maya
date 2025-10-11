@@ -15,7 +15,17 @@ import (
    "slices"
 )
 
-func (c *Configuration) widevine_key(media *media_file) ([]byte, error) {
+type Config struct {
+   Send func([]byte) ([]byte, error)
+   // PlayReady
+   CertificateChain string
+   EncryptSignKey   string
+   // Widevine
+   ClientId   string
+   PrivateKey string
+}
+
+func (c *Config) widevine_key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
    }
@@ -68,7 +78,7 @@ func (c *Configuration) widevine_key(media *media_file) ([]byte, error) {
    return nil, errors.New("widevine_key")
 }
 
-func (c *Configuration) segment_template(represent *dash.Representation) error {
+func (c *Config) segment_template(represent *dash.Representation) error {
    var media media_file
    err := media.New(represent)
    if err != nil {
@@ -143,7 +153,7 @@ func (c *Configuration) segment_template(represent *dash.Representation) error {
    return nil
 }
 
-func (c *Configuration) segment_list(represent *dash.Representation) error {
+func (c *Config) segment_list(represent *dash.Representation) error {
    if Threads != 1 {
       return errors.New("Threads")
    }
@@ -195,7 +205,7 @@ func (c *Configuration) segment_list(represent *dash.Representation) error {
    return nil
 }
 
-func (c *Configuration) playReady_key(media *media_file) ([]byte, error) {
+func (c *Config) playReady_key(media *media_file) ([]byte, error) {
    data, err := os.ReadFile(c.CertificateChain)
    if err != nil {
       return nil, err
@@ -233,17 +243,16 @@ func (c *Configuration) playReady_key(media *media_file) ([]byte, error) {
    return key, nil
 }
 
-type Configuration struct {
-   Send func([]byte) ([]byte, error)
-   // PlayReady
-   CertificateChain string
-   EncryptSignKey   string
-   // Widevine
-   ClientId   string
-   PrivateKey string
+func (c *Config) key(media *media_file) ([]byte, error) {
+   if c.CertificateChain != "" {
+      if c.EncryptSignKey != "" {
+         return c.playReady_key(media)
+      }
+   }
+   return c.widevine_key(media)
 }
 
-func (c *Configuration) segment_base(represent *dash.Representation) error {
+func (c *Config) segment_base(represent *dash.Representation) error {
    if Threads != 1 {
       return errors.New("Threads")
    }
@@ -271,18 +280,7 @@ func (c *Configuration) segment_base(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   var widevine_key bool
-   if c.ClientId != "" {
-      if c.PrivateKey != "" {
-         widevine_key = true
-      }
-   }
-   var key []byte
-   if widevine_key {
-      key, err = c.widevine_key(&media)
-   } else {
-      key, err = c.playReady_key(&media)
-   }
+   key, err := c.key(&media)
    if err != nil {
       return err
    }
