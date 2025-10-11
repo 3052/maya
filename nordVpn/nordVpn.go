@@ -1,4 +1,4 @@
-package nord
+package nordVpn
 
 import (
    "encoding/json"

@@ -1,7 +1,7 @@
 package main
 
 import (
-   "41.neocities.org/net/nord"
+   "41.neocities.org/net/nordVpn"
    "errors"
    "flag"
    "fmt"
@@ -26,7 +26,7 @@ func do_country(name, code string) error {
    if err != nil {
       return err
    }
-   var loads nord.ServerLoads
+   var loads nordVpn.ServerLoads
    err = loads.Unmarshal(data)
    if err != nil {
       return err
@@ -51,15 +51,15 @@ func do_country(name, code string) error {
    if err != nil {
       return err
    }
-   fmt.Println(nord.Proxy(string(user), string(password), country))
+   fmt.Println(nordVpn.Proxy(string(user), string(password), country))
    return nil
 }
 func do_write(name string) error {
-   servers, err := nord.GetServers(0)
+   servers, err := nordVpn.GetServers(0)
    if err != nil {
       return err
    }
-   data, err := nord.GetServerLoads(servers).Marshal()
+   data, err := nordVpn.GetServerLoads(servers).Marshal()
    if err != nil {
       return err
    }
@@ -81,7 +81,7 @@ func main() {
    if err != nil {
       panic(err)
    }
-   name = filepath.ToSlash(name) + "/net/nord/ServerLoads"
+   name = filepath.ToSlash(name) + "/.cache/nordVpn/ServerLoads"
    switch {
    case *country_code != "":
       err = do_country(name, *country_code)

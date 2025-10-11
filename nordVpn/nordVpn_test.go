@@ -1,4 +1,4 @@
-package nord
+package nordVpn
 
 import (
    "fmt"
@@ -21,7 +21,7 @@ func TestCountry(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   data, err := os.ReadFile(home + "/platform/nord/ServerLoads")
+   data, err := os.ReadFile(home + "/.cache/nordVpn/ServerLoads")
    if err != nil {
       t.Fatal(err)
    }
@@ -50,7 +50,7 @@ func TestWrite(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   err = os.WriteFile(home+"/platform/nord/ServerLoads", data, os.ModePerm)
+   err = os.WriteFile(home+"/.cache/nordVpn/ServerLoads", data, os.ModePerm)
    if err != nil {
       t.Fatal(err)
    }

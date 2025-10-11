@@ -1,4 +1,4 @@
-# nord
+# nordVpn
 
 ~~~
 curl `
