@@ -15,152 +15,15 @@ import (
    "slices"
 )
 
-type Sender func([]byte) ([]byte, error)
-
-type WidevineConfig struct {
-   ClientId   string
-   PrivateKey string
-   Send Sender
-}
-
-type PlayReadyConfig struct {
-   CertificateChain string
-   Send Sender
-   EncryptSignKey string
-}
-
-func (w *WidevineConfig) playReady_key(media *media_file) ([]byte, error) {
-   home, err := os.UserHomeDir()
-   if err != nil {
-      return nil, err
-   }
-   data, err := os.ReadFile(home + "/.cache/certificate")
-   if err != nil {
-      return nil, err
-   }
-   var chain playReady.Chain
-   err = chain.Decode(data)
-   if err != nil {
-      return nil, err
-   }
-   data, err = os.ReadFile(home + "/.cache/signEncryptKey")
-   if err != nil {
-      return nil, err
-   }
-   signEncryptKey := new(big.Int).SetBytes(data)
-   log.Printf("key ID %x", media.key_id)
-   playReady.UuidOrGuid(media.key_id)
-   data, err = chain.RequestBody(media.key_id, signEncryptKey)
-   if err != nil {
-      return nil, err
-   }
-   data, err = w.Send(data)
-   if err != nil {
-      return nil, err
-   }
-   var license playReady.License
-   coord, err := license.Decrypt(data, signEncryptKey)
-   if err != nil {
-      return nil, err
-   }
-   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
-      return nil, errors.New("key ID mismatch")
-   }
-   key := coord.Key()
-   log.Printf("key %x", key)
-   return key, nil
-}
-
-func (w *WidevineConfig) segment_base(represent *dash.Representation) error {
-   if Threads != 1 {
-      return errors.New("Threads")
-   }
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   os_file, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer os_file.Close()
-   head := http.Header{}
-   head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
-   data, err := get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = os_file.Write(data)
-   if err != nil {
-      return err
-   }
-   var widevine_key bool
-   if w.ClientId != "" {
-      if w.PrivateKey != "" {
-         widevine_key = true
-      }
-   }
-   var key []byte
-   if widevine_key {
-      key, err = w.widevine_key(&media)
-   } else {
-      key, err = w.playReady_key(&media)
-   }
-   if err != nil {
-      return err
-   }
-   head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-   data, err = get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   var file_file file.File
-   err = file_file.Read(data)
-   if err != nil {
-      return err
-   }
-   var progressVar progress
-   progressVar.set(len(file_file.Sidx.Reference))
-   var index index_range
-   err = index.Set(represent.SegmentBase.IndexRange)
-   if err != nil {
-      return err
-   }
-   for _, reference := range file_file.Sidx.Reference {
-      index[0] = index[1] + 1
-      index[1] += uint64(reference.Size())
-      head.Set("range", "bytes="+index.String())
-      data, err = get_segment(represent.BaseUrl[0], head)
-      if err != nil {
-         return err
-      }
-      progressVar.next()
-      data, err = media.write_segment(data, key)
-      if err != nil {
-         return err
-      }
-      _, err = os_file.Write(data)
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-func (w *WidevineConfig) widevine_key(media *media_file) ([]byte, error) {
+func (c *Configuration) widevine_key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
    }
-   private_key, err := os.ReadFile(w.PrivateKey)
+   private_key, err := os.ReadFile(c.PrivateKey)
    if err != nil {
       return nil, err
    }
-   client_id, err := os.ReadFile(w.ClientId)
+   client_id, err := os.ReadFile(c.ClientId)
    if err != nil {
       return nil, err
    }
@@ -179,7 +42,7 @@ func (w *WidevineConfig) widevine_key(media *media_file) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   data, err = w.Send(data)
+   data, err = c.Send(data)
    if err != nil {
       return nil, err
    }
@@ -205,7 +68,7 @@ func (w *WidevineConfig) widevine_key(media *media_file) ([]byte, error) {
    return nil, errors.New("widevine_key")
 }
 
-func (w *WidevineConfig) segment_template(represent *dash.Representation) error {
+func (c *Configuration) segment_template(represent *dash.Representation) error {
    var media media_file
    err := media.New(represent)
    if err != nil {
@@ -234,7 +97,7 @@ func (w *WidevineConfig) segment_template(represent *dash.Representation) error 
          return err
       }
    }
-   key, err := w.widevine_key(&media)
+   key, err := c.widevine_key(&media)
    if err != nil {
       return err
    }
@@ -280,7 +143,7 @@ func (w *WidevineConfig) segment_template(represent *dash.Representation) error 
    return nil
 }
 
-func (w *WidevineConfig) segment_list(represent *dash.Representation) error {
+func (c *Configuration) segment_list(represent *dash.Representation) error {
    if Threads != 1 {
       return errors.New("Threads")
    }
@@ -308,7 +171,7 @@ func (w *WidevineConfig) segment_list(represent *dash.Representation) error {
    if err != nil {
       return err
    }
-   key, err := w.widevine_key(&media)
+   key, err := c.widevine_key(&media)
    if err != nil {
       return err
    }
@@ -325,6 +188,135 @@ func (w *WidevineConfig) segment_list(represent *dash.Representation) error {
          return err
       }
       _, err = fileVar.Write(data)
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+func (c *Configuration) playReady_key(media *media_file) ([]byte, error) {
+   data, err := os.ReadFile(c.CertificateChain)
+   if err != nil {
+      return nil, err
+   }
+   var chain playReady.Chain
+   err = chain.Decode(data)
+   if err != nil {
+      return nil, err
+   }
+   data, err = os.ReadFile(c.EncryptSignKey)
+   if err != nil {
+      return nil, err
+   }
+   encryptSignKey := new(big.Int).SetBytes(data)
+   log.Printf("key ID %x", media.key_id)
+   playReady.UuidOrGuid(media.key_id)
+   data, err = chain.RequestBody(media.key_id, encryptSignKey)
+   if err != nil {
+      return nil, err
+   }
+   data, err = c.Send(data)
+   if err != nil {
+      return nil, err
+   }
+   var license playReady.License
+   coord, err := license.Decrypt(data, encryptSignKey)
+   if err != nil {
+      return nil, err
+   }
+   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
+      return nil, errors.New("key ID mismatch")
+   }
+   key := coord.Key()
+   log.Printf("key %x", key)
+   return key, nil
+}
+
+type Configuration struct {
+   Send func([]byte) ([]byte, error)
+   // PlayReady
+   CertificateChain string
+   EncryptSignKey   string
+   // Widevine
+   ClientId   string
+   PrivateKey string
+}
+
+func (c *Configuration) segment_base(represent *dash.Representation) error {
+   if Threads != 1 {
+      return errors.New("Threads")
+   }
+   var media media_file
+   err := media.New(represent)
+   if err != nil {
+      return err
+   }
+   os_file, err := create(represent)
+   if err != nil {
+      return err
+   }
+   defer os_file.Close()
+   head := http.Header{}
+   head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
+   data, err := get_segment(represent.BaseUrl[0], head)
+   if err != nil {
+      return err
+   }
+   data, err = media.initialization(data)
+   if err != nil {
+      return err
+   }
+   _, err = os_file.Write(data)
+   if err != nil {
+      return err
+   }
+   var widevine_key bool
+   if c.ClientId != "" {
+      if c.PrivateKey != "" {
+         widevine_key = true
+      }
+   }
+   var key []byte
+   if widevine_key {
+      key, err = c.widevine_key(&media)
+   } else {
+      key, err = c.playReady_key(&media)
+   }
+   if err != nil {
+      return err
+   }
+   head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+   data, err = get_segment(represent.BaseUrl[0], head)
+   if err != nil {
+      return err
+   }
+   var file_file file.File
+   err = file_file.Read(data)
+   if err != nil {
+      return err
+   }
+   var progressVar progress
+   progressVar.set(len(file_file.Sidx.Reference))
+   var index index_range
+   err = index.Set(represent.SegmentBase.IndexRange)
+   if err != nil {
+      return err
+   }
+   for _, reference := range file_file.Sidx.Reference {
+      index[0] = index[1] + 1
+      index[1] += uint64(reference.Size())
+      head.Set("range", "bytes="+index.String())
+      data, err = get_segment(represent.BaseUrl[0], head)
+      if err != nil {
+         return err
+      }
+      progressVar.next()
+      data, err = media.write_segment(data, key)
+      if err != nil {
+         return err
+      }
+      _, err = os_file.Write(data)
       if err != nil {
          return err
       }

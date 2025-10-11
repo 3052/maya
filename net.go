@@ -17,7 +17,7 @@ import (
    "time"
 )
 
-func (f Filters) Filter(resp *http.Response, config *WidevineConfig) error {
+func (f Filters) Filter(resp *http.Response, config *Configuration) error {
    if resp.StatusCode != http.StatusOK {
       var data strings.Builder
       resp.Write(&data)
