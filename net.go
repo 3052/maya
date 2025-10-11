@@ -2,17 +2,13 @@ package net
 
 import (
    "41.neocities.org/dash"
-   "41.neocities.org/drm/playReady"
-   "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia/file"
    "41.neocities.org/sofia/pssh"
-   "bytes"
    "encoding/base64"
    "errors"
    "fmt"
    "io"
    "log"
-   "math/big"
    "net/http"
    "net/url"
    "os"
@@ -21,86 +17,96 @@ import (
    "time"
 )
 
-type Cdm struct {
-   ClientId   string
-   PrivateKey string
-   License    func([]byte) ([]byte, error)
+func (f Filters) Filter(resp *http.Response, config *WidevineConfig) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+      if f.representation_ok(represent) {
+         switch {
+         case represent.SegmentBase != nil:
+            err = config.segment_base(represent)
+         case represent.SegmentList != nil:
+            err = config.segment_list(represent)
+         case represent.SegmentTemplate != nil:
+            err = config.segment_template(represent)
+         }
+         if err != nil {
+            return err
+         }
+      }
+   }
+   return nil
 }
 
-func (c *Cdm) segment_base(represent *dash.Representation) error {
-   if Threads != 1 {
-      return errors.New("Threads")
-   }
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   os_file, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer os_file.Close()
-   head := http.Header{}
-   head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
-   data, err := get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = os_file.Write(data)
-   if err != nil {
-      return err
-   }
-   var widevine_key bool
-   if c.ClientId != "" {
-      if c.PrivateKey != "" {
-         widevine_key = true
+type Filters []Filter
+
+func (f Filters) String() string {
+   var b []byte
+   for i, value := range f {
+      if i >= 1 {
+         b = append(b, ',')
       }
+      b = fmt.Append(b, &value)
    }
-   var key []byte
-   if widevine_key {
-      key, err = c.widevine_key(&media)
-   } else {
-      key, err = c.playReady_key(&media)
-   }
-   if err != nil {
-      return err
-   }
-   head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-   data, err = get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   var file_file file.File
-   err = file_file.Read(data)
-   if err != nil {
-      return err
-   }
-   var progressVar progress
-   progressVar.set(len(file_file.Sidx.Reference))
-   var index index_range
-   err = index.Set(represent.SegmentBase.IndexRange)
-   if err != nil {
-      return err
-   }
-   for _, reference := range file_file.Sidx.Reference {
-      index[0] = index[1] + 1
-      index[1] += uint64(reference.Size())
-      head.Set("range", "bytes="+index.String())
-      data, err = get_segment(represent.BaseUrl[0], head)
+   return string(b)
+}
+
+func (f *Filters) Set(data string) error {
+   *f = nil
+   for _, data := range strings.Split(data, ",") {
+      var filterVar Filter
+      err := filterVar.Set(data)
       if err != nil {
          return err
       }
-      progressVar.next()
-      data, err = media.write_segment(data, key)
-      if err != nil {
-         return err
+      *f = append(*f, filterVar)
+   }
+   return nil
+}
+
+func (f *Filter) Set(data string) error {
+   cookies, err := http.ParseCookie(data)
+   if err != nil {
+      return err
+   }
+   for _, cookie := range cookies {
+      switch cookie.Name {
+      case "bs":
+         _, err = fmt.Sscan(cookie.Value, &f.BitrateStart)
+      case "be":
+         _, err = fmt.Sscan(cookie.Value, &f.BitrateEnd)
+      case "i":
+         f.Id = cookie.Value
+      case "l":
+         f.Language = cookie.Value
+      case "r":
+         f.Role = cookie.Value
+      default:
+         err = errors.New(".Name")
       }
-      _, err = os_file.Write(data)
       if err != nil {
          return err
       }
@@ -108,99 +114,103 @@ func (c *Cdm) segment_base(represent *dash.Representation) error {
    return nil
 }
 
-func (c *Cdm) playReady_key(media *media_file) ([]byte, error) {
-   home, err := os.UserHomeDir()
-   if err != nil {
-      return nil, err
+const FilterUsage = `be = bitrate end
+bs = bitrate start
+i = id
+l = language
+r = role`
+
+func (f *Filter) String() string {
+   var b []byte
+   if f.BitrateStart >= 1 {
+      b = fmt.Append(b, "bs=", f.BitrateStart)
    }
-   data, err := os.ReadFile(home + "/media/certificate")
-   if err != nil {
-      return nil, err
+   if f.BitrateEnd >= 1 {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "be=", f.BitrateEnd)
    }
-   var chain playReady.Chain
-   err = chain.Decode(data)
-   if err != nil {
-      return nil, err
+   if f.Id != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "i=", f.Id)
    }
-   data, err = os.ReadFile(home + "/media/signEncryptKey")
-   if err != nil {
-      return nil, err
+   if f.Language != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "l=", f.Language)
    }
-   signEncryptKey := new(big.Int).SetBytes(data)
-   log.Printf("key ID %x", media.key_id)
-   playReady.UuidOrGuid(media.key_id)
-   data, err = chain.RequestBody(media.key_id, signEncryptKey)
-   if err != nil {
-      return nil, err
+   if f.Role != "" {
+      if b != nil {
+         b = append(b, ';')
+      }
+      b = fmt.Append(b, "r=", f.Role)
    }
-   data, err = c.License(data)
-   if err != nil {
-      return nil, err
-   }
-   var license playReady.License
-   coord, err := license.Decrypt(data, signEncryptKey)
-   if err != nil {
-      return nil, err
-   }
-   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
-      return nil, errors.New("key ID mismatch")
-   }
-   key := coord.Key()
-   log.Printf("key %x", key)
-   return key, nil
+   return string(b)
 }
 
-func (c *Cdm) widevine_key(media *media_file) ([]byte, error) {
-   if media.key_id == nil {
-      return nil, nil
+type Filter struct {
+   BitrateEnd   int
+   BitrateStart int
+   Id           string
+   Language     string
+   Role         string
+}
+
+func (f *Filter) bitrate_end_ok(rep *dash.Representation) bool {
+   if f.BitrateEnd == 0 {
+      return true
    }
-   private_key, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
+   return rep.Bandwidth <= f.BitrateEnd
+}
+
+func (f *Filter) role_ok(rep *dash.Representation) bool {
+   switch f.Role {
+   case "", rep.GetAdaptationSet().GetRole():
+      return true
    }
-   client_id, err := os.ReadFile(c.ClientId)
-   if err != nil {
-      return nil, err
+   return false
+}
+
+func (f *Filter) language_ok(rep *dash.Representation) bool {
+   switch f.Language {
+   case "", rep.GetAdaptationSet().Lang:
+      return true
    }
-   if media.pssh == nil {
-      var psshVar widevine.Pssh
-      psshVar.KeyIds = [][]byte{media.key_id}
-      media.pssh = psshVar.Marshal()
+   return false
+}
+
+func (f *Filter) id_ok(rep *dash.Representation) bool {
+   switch f.Id {
+   case "", rep.Id:
+      return true
    }
-   log.Println("PSSH", base64.StdEncoding.EncodeToString(media.pssh))
-   var module widevine.Cdm
-   err = module.New(private_key, client_id, media.pssh)
-   if err != nil {
-      return nil, err
-   }
-   data, err := module.RequestBody()
-   if err != nil {
-      return nil, err
-   }
-   data, err = c.License(data)
-   if err != nil {
-      return nil, err
-   }
-   var body widevine.ResponseBody
-   err = body.Unmarshal(data)
-   if err != nil {
-      return nil, err
-   }
-   block, err := module.Block(body)
-   if err != nil {
-      return nil, err
-   }
-   for container := range body.Container() {
-      if bytes.Equal(container.Id(), media.key_id) {
-         key := container.Key(block)
-         log.Printf("key %x", key)
-         var zero [16]byte
-         if !bytes.Equal(key, zero[:]) {
-            return key, nil
-         }
+   return false
+}
+
+func (f Filters) representation_ok(rep *dash.Representation) bool {
+   for _, filterVar := range f {
+      if rep.Bandwidth < filterVar.BitrateStart {
+         continue
       }
+      if !filterVar.bitrate_end_ok(rep) {
+         continue
+      }
+      if !filterVar.id_ok(rep) {
+         continue
+      }
+      if !filterVar.language_ok(rep) {
+         continue
+      }
+      if !filterVar.role_ok(rep) {
+         continue
+      }
+      return true
    }
-   return nil, errors.New("widevine_key")
+   return false
 }
 
 func (m *media_file) New(represent *dash.Representation) error {
@@ -254,29 +264,6 @@ func create(represent *dash.Representation) (*os.File, error) {
    return os_create(name.String())
 }
 
-func Transport(proxy *url.URL) *http.Transport {
-   log.SetFlags(log.Ltime)
-   return &http.Transport{
-      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         if req.Header.Get("silent") == "" {
-            if req.Header.Get("proxy") != "" {
-               log.Println("proxy", req.Method, req.URL)
-            } else {
-               log.Println(req.Method, req.URL)
-            }
-         }
-         if req.Header.Get("proxy") != "" {
-            return proxy, nil
-         }
-         if proxy.Hostname() == "localhost" {
-            return proxy, nil
-         }
-         return nil, nil
-      },
-   }
-}
-
 func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    req := http.Request{Method: "GET", URL: u}
    if head != nil {
@@ -298,133 +285,6 @@ func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    }
    defer resp.Body.Close()
    return io.ReadAll(resp.Body)
-}
-
-func (c *Cdm) segment_template(represent *dash.Representation) error {
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   fileVar, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer fileVar.Close()
-   if initial := represent.SegmentTemplate.Initialization; initial != "" {
-      address, err := initial.Url(represent)
-      if err != nil {
-         return err
-      }
-      data1, err := get_segment(address, nil)
-      if err != nil {
-         return err
-      }
-      data1, err = media.initialization(data1)
-      if err != nil {
-         return err
-      }
-      _, err = fileVar.Write(data1)
-      if err != nil {
-         return err
-      }
-   }
-   key, err := c.widevine_key(&media)
-   if err != nil {
-      return err
-   }
-   var segments []int
-   for rep := range represent.Representation() {
-      segments = slices.AppendSeq(segments, rep.Segment())
-   }
-   var progressVar progress
-   progressVar.set(len(segments))
-   for chunk := range slices.Chunk(segments, Threads) {
-      var (
-         datas = make([][]byte, len(chunk))
-         errs  = make(chan error)
-      )
-      for i, segment := range chunk {
-         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
-         if err != nil {
-            return err
-         }
-         go func() {
-            datas[i], err = get_segment(address, nil)
-            errs <- err
-            progressVar.next()
-         }()
-      }
-      for range chunk {
-         err := <-errs
-         if err != nil {
-            return err
-         }
-      }
-      for _, data := range datas {
-         data, err = media.write_segment(data, key)
-         if err != nil {
-            return err
-         }
-         _, err = fileVar.Write(data)
-         if err != nil {
-            return err
-         }
-      }
-   }
-   return nil
-}
-
-func (c *Cdm) segment_list(represent *dash.Representation) error {
-   if Threads != 1 {
-      return errors.New("Threads")
-   }
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   fileVar, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer fileVar.Close()
-   data, err := get_segment(
-      represent.SegmentList.Initialization.SourceUrl[0], nil,
-   )
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = fileVar.Write(data)
-   if err != nil {
-      return err
-   }
-   key, err := c.widevine_key(&media)
-   if err != nil {
-      return err
-   }
-   var progressVar progress
-   progressVar.set(len(represent.SegmentList.SegmentUrl))
-   for _, segment := range represent.SegmentList.SegmentUrl {
-      data, err := get_segment(segment.Media[0], nil)
-      if err != nil {
-         return err
-      }
-      progressVar.next()
-      data, err = media.write_segment(data, key)
-      if err != nil {
-         return err
-      }
-      _, err = fileVar.Write(data)
-      if err != nil {
-         return err
-      }
-   }
-   return nil
 }
 
 func (i *index_range) Set(data string) error {
