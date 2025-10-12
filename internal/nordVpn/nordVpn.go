@@ -15,6 +15,35 @@ import (
    "time"
 )
 
+func main() {
+   http.DefaultTransport = &http.Transport{
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         log.Println(req.Method, req.URL)
+         return http.ProxyFromEnvironment(req)
+      },
+   }
+   log.SetFlags(log.Ltime)
+   write := flag.Bool("w", false, "write")
+   country_code := flag.String("c", "", "country code")
+   flag.Parse()
+   cache, err := os.UserCacheDir()
+   if err != nil {
+      panic(err)
+   }
+   cache = filepath.ToSlash(cache) + "/nordVpn/ServerLoads"
+   switch {
+   case *country_code != "":
+      err = do_country(cache, *country_code)
+   case *write:
+      err = do_write(cache)
+   default:
+      flag.Usage()
+   }
+   if err != nil {
+      panic(err)
+   }
+}
+
 func command(name string, arg ...string) ([]byte, error) {
    c := exec.Command(name, arg...)
    log.Println("Output", c.Args)
@@ -54,6 +83,7 @@ func do_country(name, code string) error {
    fmt.Println(nordVpn.Proxy(string(user), string(password), country))
    return nil
 }
+
 func do_write(name string) error {
    servers, err := nordVpn.GetServers(0)
    if err != nil {
@@ -64,35 +94,6 @@ func do_write(name string) error {
       return err
    }
    return write_file(name, data)
-}
-
-func main() {
-   http.DefaultTransport = &http.Transport{
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         log.Println(req.Method, req.URL)
-         return http.ProxyFromEnvironment(req)
-      },
-   }
-   log.SetFlags(log.Ltime)
-   write := flag.Bool("w", false, "write")
-   country_code := flag.String("c", "", "country code")
-   flag.Parse()
-   name, err := os.UserHomeDir()
-   if err != nil {
-      panic(err)
-   }
-   name = filepath.ToSlash(name) + "/.cache/nordVpn/ServerLoads"
-   switch {
-   case *country_code != "":
-      err = do_country(name, *country_code)
-   case *write:
-      err = do_write(name)
-   default:
-      flag.Usage()
-   }
-   if err != nil {
-      panic(err)
-   }
 }
 
 func write_file(name string, data []byte) error {

@@ -17,6 +17,20 @@ import (
    "time"
 )
 
+func create(represent *dash.Representation) (*os.File, error) {
+   var name strings.Builder
+   name.WriteString(represent.Id)
+   switch *represent.MimeType {
+   case "audio/mp4":
+      name.WriteString(".m4a")
+   case "text/vtt":
+      name.WriteString(".vtt")
+   case "video/mp4":
+      name.WriteString(".m4v")
+   }
+   return os_create(name.String())
+}
+
 type media_file struct {
    key_id    []byte // tenc
    pssh      []byte // pssh
@@ -256,20 +270,6 @@ var Threads = 1
 func os_create(name string) (*os.File, error) {
    log.Println("Create", name)
    return os.Create(name)
-}
-
-func create(represent *dash.Representation) (*os.File, error) {
-   var name strings.Builder
-   name.WriteString(represent.Id)
-   switch *represent.MimeType {
-   case "audio/mp4":
-      name.WriteString(".m4a")
-   case "image/jpeg":
-      name.WriteString(".jpg")
-   case "video/mp4":
-      name.WriteString(".m4v")
-   }
-   return os_create(name.String())
 }
 
 func get_segment(u *url.URL, head http.Header) ([]byte, error) {

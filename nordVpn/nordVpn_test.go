@@ -17,11 +17,11 @@ func TestServerLoad(t *testing.T) {
 }
 
 func TestCountry(t *testing.T) {
-   home, err := os.UserHomeDir()
+   cache, err := os.UserCacheDir()
    if err != nil {
       t.Fatal(err)
    }
-   data, err := os.ReadFile(home + "/.cache/nordVpn/ServerLoads")
+   data, err := os.ReadFile(cache + "/nordVpn/ServerLoads")
    if err != nil {
       t.Fatal(err)
    }
@@ -46,11 +46,11 @@ func TestWrite(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   home, err := os.UserHomeDir()
+   cache, err := os.UserCacheDir()
    if err != nil {
       t.Fatal(err)
    }
-   err = os.WriteFile(home+"/.cache/nordVpn/ServerLoads", data, os.ModePerm)
+   err = os.WriteFile(cache+"/nordVpn/ServerLoads", data, os.ModePerm)
    if err != nil {
       t.Fatal(err)
    }
