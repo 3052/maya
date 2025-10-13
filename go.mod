@@ -11,6 +11,6 @@ require (
 require (
 	41.neocities.org/protobuf v1.5.1 // indirect
 	github.com/arnaucube/cryptofun v0.0.0-20190603183703-df33a4bbd574 // indirect
-	github.com/emmansun/gmsm v0.34.0 // indirect
+	github.com/emmansun/gmsm v0.34.1 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
