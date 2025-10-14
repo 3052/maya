@@ -5,10 +5,64 @@ import (
    "errors"
    "fmt"
    "io"
+   "iter"
+   "math"
    "net/http"
-   "slices"
    "strings"
 )
+
+func find(
+   streams iter.Seq[*dash.Representation], target *Filter,
+) *dash.Representation {
+   const penalty_factor = 2
+   min_score := math.MaxInt
+   var best_stream *dash.Representation
+   for candidate := range streams {
+      if target.Codecs != "" {
+         if !strings.HasPrefix(*candidate.Codecs, target.Codecs) {
+            continue
+         }
+      }
+      if target.Height >= 1 {
+         if *candidate.Height != target.Height {
+            continue
+         }
+      }
+      if candidate.Id == target.Id {
+         return candidate
+      }
+      if target.Lang != "" {
+         if candidate.GetAdaptationSet().Lang != target.Lang {
+            continue
+         }
+      }
+      if target.Role != "" {
+         if candidate.GetAdaptationSet().GetRole() != target.Role {
+            continue
+         }
+      }
+      var score int
+      if candidate.Bandwidth >= target.Bandwidth {
+         score = candidate.Bandwidth - target.Bandwidth
+      } else {
+         score = (target.Bandwidth - candidate.Bandwidth) * penalty_factor
+      }
+      if score < min_score {
+         min_score = score
+         best_stream = candidate
+      }
+   }
+   return best_stream
+}
+
+type Filter struct {
+   Bandwidth int
+   Id        string
+   Height    int
+   Lang      string
+   Role      string
+   Codecs    string
+}
 
 func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    if resp.StatusCode != http.StatusOK {
@@ -27,39 +81,21 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
       return err
    }
    mpd.Set(resp.Request.URL)
-   represents := slices.SortedFunc(mpd.Representation(),
-      func(a, b *dash.Representation) int {
-         return a.Bandwidth - b.Bandwidth
-      },
-   )
-   for i, represent := range represents {
-      if i >= 1 {
-         fmt.Println()
+   for _, target := range f.Values {
+      represent := find(mpd.Representation(), &target)
+      switch {
+      case represent.SegmentBase != nil:
+         err = configVar.segment_base(represent)
+      case represent.SegmentList != nil:
+         err = configVar.segment_list(represent)
+      case represent.SegmentTemplate != nil:
+         err = configVar.segment_template(represent)
       }
-      fmt.Println(represent)
-      if f.representation_ok(represent) {
-         switch {
-         case represent.SegmentBase != nil:
-            err = configVar.segment_base(represent)
-         case represent.SegmentList != nil:
-            err = configVar.segment_list(represent)
-         case represent.SegmentTemplate != nil:
-            err = configVar.segment_template(represent)
-         }
-         if err != nil {
-            return err
-         }
+      if err != nil {
+         return err
       }
    }
    return nil
-}
-
-func (f *Filter) id_ok(rep *dash.Representation) bool {
-   switch f.Id {
-   case "", rep.Id:
-      return true
-   }
-   return false
 }
 
 func (f *Filters) String() string {
@@ -73,45 +109,9 @@ func (f *Filters) String() string {
    return string(out)
 }
 
-func (f *Filter) role_ok(rep *dash.Representation) bool {
-   switch f.Role {
-   case "", rep.GetAdaptationSet().GetRole():
-      return true
-   }
-   return false
-}
-
-func (f *Filter) lang_ok(rep *dash.Representation) bool {
-   switch f.Lang {
-   case "", rep.GetAdaptationSet().Lang:
-      return true
-   }
-   return false
-}
-
-func (f *Filter) height_ok(rep *dash.Representation) bool {
-   switch f.Height {
-   case 0, *rep.Height:
-      return true
-   }
-   return false
-}
-
 type Filters struct {
    Values []Filter
    set    bool
-}
-
-func (f *Filter) codecs_ok(rep *dash.Representation) bool {
-   if f.Codecs == "" {
-      return true
-   }
-   if rep.Codecs != nil {
-      if strings.HasPrefix(*rep.Codecs, f.Codecs) {
-         return true
-      }
-   }
-   return false
 }
 
 func (f *Filters) Set(input string) error {
@@ -128,26 +128,6 @@ func (f *Filters) Set(input string) error {
    return nil
 }
 
-///
-
-type Filter struct {
-   Codecs       string
-   Height       int
-   Id           string
-   Lang         string
-   MaxBandwidth int
-   MinBandwidth int
-   Role         string
-}
-
-const FilterUsage = `B = max bandwidth
-b = min bandwidth
-c = codecs
-h = height
-i = id
-l = lang
-r = role`
-
 func (f *Filter) Set(input string) error {
    for _, pair := range strings.Split(input, ",") {
       key, value, found := strings.Cut(pair, "=")
@@ -156,10 +136,8 @@ func (f *Filter) Set(input string) error {
       }
       var err error
       switch key {
-      case "B":
-         _, err = fmt.Sscan(value, &f.MaxBandwidth)
       case "b":
-         _, err = fmt.Sscan(value, &f.MinBandwidth)
+         _, err = fmt.Sscan(value, &f.Bandwidth)
       case "c":
          f.Codecs = value
       case "h":
@@ -180,44 +158,15 @@ func (f *Filter) Set(input string) error {
    return nil
 }
 
-func (f *Filter) max_bitrate_ok(rep *dash.Representation) bool {
-   if f.MaxBandwidth == 0 {
-      return true
-   }
-   return rep.Bandwidth <= f.MaxBandwidth
-}
-
-func (f *Filters) representation_ok(rep *dash.Representation) bool {
-   for _, value := range f.Values {
-      if !value.codecs_ok(rep) {
-         continue
-      }
-      if !value.height_ok(rep) {
-         continue
-      }
-      if !value.id_ok(rep) {
-         continue
-      }
-      if !value.lang_ok(rep) {
-         continue
-      }
-      if !value.max_bitrate_ok(rep) {
-         continue
-      }
-      if value.MinBandwidth > rep.Bandwidth {
-         continue
-      }
-      if !value.role_ok(rep) {
-         continue
-      }
-      return true
-   }
-   return false
-}
-
 func (f *Filter) String() string {
    var out []byte
+   if f.Bandwidth >= 1 {
+      out = fmt.Append(out, "b=", f.Bandwidth)
+   }
    if f.Codecs != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
       out = fmt.Append(out, "c=", f.Codecs)
    }
    if f.Height >= 1 {
@@ -238,18 +187,6 @@ func (f *Filter) String() string {
       }
       out = fmt.Append(out, "l=", f.Lang)
    }
-   if f.MaxBandwidth >= 1 {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "B=", f.MaxBandwidth)
-   }
-   if f.MinBandwidth >= 1 {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "b=", f.MinBandwidth)
-   }
    if f.Role != "" {
       if out != nil {
          out = append(out, ',')
@@ -258,3 +195,10 @@ func (f *Filter) String() string {
    }
    return string(out)
 }
+
+const FilterUsage = `b = bandwidth
+c = codecs
+h = height
+i = id
+l = lang
+r = role`
