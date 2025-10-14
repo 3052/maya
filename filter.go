@@ -10,100 +10,6 @@ import (
    "strings"
 )
 
-func (f *Filter) codecs_ok(rep *dash.Representation) bool {
-   if f.Codecs == "" {
-      return true
-   }
-   if rep.Codecs != nil {
-      if strings.HasPrefix(*rep.Codecs, f.Codecs) {
-         return true
-      }
-   }
-   return false
-}
-
-func (f *Filter) Set(input string) error {
-   for _, pair := range strings.Split(input, ",") {
-      key, value, found := strings.Cut(pair, "=")
-      if !found {
-         return errors.New("invalid pair format")
-      }
-      var err error
-      switch key {
-      case "B":
-         _, err = fmt.Sscan(value, &f.MaxBandwidth)
-      case "b":
-         _, err = fmt.Sscan(value, &f.MinBandwidth)
-      case "c":
-         f.Codecs = value
-      case "h":
-         _, err = fmt.Sscan(value, &f.Height)
-      case "i":
-         f.Id = value
-      case "l":
-         f.Lang = value
-      case "r":
-         f.Role = value
-      default:
-         err = errors.New("unknown key")
-      }
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-func (f *Filter) max_bitrate_ok(rep *dash.Representation) bool {
-   if f.MaxBandwidth == 0 {
-      return true
-   }
-   return rep.Bandwidth <= f.MaxBandwidth
-}
-
-func (f *Filter) role_ok(rep *dash.Representation) bool {
-   switch f.Role {
-   case "", rep.GetAdaptationSet().GetRole():
-      return true
-   }
-   return false
-}
-
-func (f *Filter) lang_ok(rep *dash.Representation) bool {
-   switch f.Lang {
-   case "", rep.GetAdaptationSet().Lang:
-      return true
-   }
-   return false
-}
-
-func (f *Filter) height_ok(rep *dash.Representation) bool {
-   switch f.Height {
-   case 0, *rep.Height:
-      return true
-   }
-   return false
-}
-
-type Filters struct {
-   Values []Filter
-   set    bool
-}
-
-func (f *Filters) Set(input string) error {
-   if !f.set {
-      f.Values = nil
-      f.set = true
-   }
-   var value Filter
-   err := value.Set(input)
-   if err != nil {
-      return err
-   }
-   f.Values = append(f.Values, value)
-   return nil
-}
-
 func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    if resp.StatusCode != http.StatusOK {
       var data strings.Builder
@@ -148,6 +54,82 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    return nil
 }
 
+func (f *Filter) id_ok(rep *dash.Representation) bool {
+   switch f.Id {
+   case "", rep.Id:
+      return true
+   }
+   return false
+}
+
+func (f *Filters) String() string {
+   var out []byte
+   for i, value := range f.Values {
+      if i >= 1 {
+         out = append(out, ' ')
+      }
+      out = fmt.Append(out, "-f ", &value)
+   }
+   return string(out)
+}
+
+func (f *Filter) role_ok(rep *dash.Representation) bool {
+   switch f.Role {
+   case "", rep.GetAdaptationSet().GetRole():
+      return true
+   }
+   return false
+}
+
+func (f *Filter) lang_ok(rep *dash.Representation) bool {
+   switch f.Lang {
+   case "", rep.GetAdaptationSet().Lang:
+      return true
+   }
+   return false
+}
+
+func (f *Filter) height_ok(rep *dash.Representation) bool {
+   switch f.Height {
+   case 0, *rep.Height:
+      return true
+   }
+   return false
+}
+
+type Filters struct {
+   Values []Filter
+   set    bool
+}
+
+func (f *Filter) codecs_ok(rep *dash.Representation) bool {
+   if f.Codecs == "" {
+      return true
+   }
+   if rep.Codecs != nil {
+      if strings.HasPrefix(*rep.Codecs, f.Codecs) {
+         return true
+      }
+   }
+   return false
+}
+
+func (f *Filters) Set(input string) error {
+   if !f.set {
+      f.Values = nil
+      f.set = true
+   }
+   var value Filter
+   err := value.Set(input)
+   if err != nil {
+      return err
+   }
+   f.Values = append(f.Values, value)
+   return nil
+}
+
+///
+
 type Filter struct {
    Codecs       string
    Height       int
@@ -166,12 +148,43 @@ i = id
 l = lang
 r = role`
 
-func (f *Filter) id_ok(rep *dash.Representation) bool {
-   switch f.Id {
-   case "", rep.Id:
+func (f *Filter) Set(input string) error {
+   for _, pair := range strings.Split(input, ",") {
+      key, value, found := strings.Cut(pair, "=")
+      if !found {
+         return errors.New("invalid pair format")
+      }
+      var err error
+      switch key {
+      case "B":
+         _, err = fmt.Sscan(value, &f.MaxBandwidth)
+      case "b":
+         _, err = fmt.Sscan(value, &f.MinBandwidth)
+      case "c":
+         f.Codecs = value
+      case "h":
+         _, err = fmt.Sscan(value, &f.Height)
+      case "i":
+         f.Id = value
+      case "l":
+         f.Lang = value
+      case "r":
+         f.Role = value
+      default:
+         err = errors.New("unknown key")
+      }
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+func (f *Filter) max_bitrate_ok(rep *dash.Representation) bool {
+   if f.MaxBandwidth == 0 {
       return true
    }
-   return false
+   return rep.Bandwidth <= f.MaxBandwidth
 }
 
 func (f *Filters) representation_ok(rep *dash.Representation) bool {
@@ -200,17 +213,6 @@ func (f *Filters) representation_ok(rep *dash.Representation) bool {
       return true
    }
    return false
-}
-
-func (f *Filters) String() string {
-   var out []byte
-   for i, value := range f.Values {
-      if i >= 1 {
-         out = append(out, ' ')
-      }
-      out = fmt.Append(out, "-f ", &value)
-   }
-   return string(out)
 }
 
 func (f *Filter) String() string {
