@@ -10,6 +10,18 @@ import (
    "strings"
 )
 
+func (f *Filter) codecs_ok(rep *dash.Representation) bool {
+   if f.Codecs == "" {
+      return true
+   }
+   if rep.Codecs != nil {
+      if strings.HasPrefix(*rep.Codecs, f.Codecs) {
+         return true
+      }
+   }
+   return false
+}
+
 func (f *Filter) Set(input string) error {
    for _, pair := range strings.Split(input, ",") {
       key, value, found := strings.Cut(pair, "=")
@@ -18,16 +30,18 @@ func (f *Filter) Set(input string) error {
       }
       var err error
       switch key {
-      case "bs":
-         _, err = fmt.Sscan(value, &f.BitrateStart)
-      case "be":
-         _, err = fmt.Sscan(value, &f.BitrateEnd)
+      case "B":
+         _, err = fmt.Sscan(value, &f.MaxBandwidth)
+      case "b":
+         _, err = fmt.Sscan(value, &f.MinBandwidth)
+      case "c":
+         f.Codecs = value
       case "h":
          _, err = fmt.Sscan(value, &f.Height)
       case "i":
          f.Id = value
       case "l":
-         f.Language = value
+         f.Lang = value
       case "r":
          f.Role = value
       default:
@@ -40,65 +54,11 @@ func (f *Filter) Set(input string) error {
    return nil
 }
 
-type Filter struct {
-   BitrateEnd   int
-   BitrateStart int
-   Height       int
-   Id           string
-   Language     string
-   Role         string
-}
-
-func (f *Filter) String() string {
-   var out []byte
-   if f.BitrateStart >= 1 {
-      out = fmt.Append(out, "bs=", f.BitrateStart)
-   }
-   if f.BitrateEnd >= 1 {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "be=", f.BitrateEnd)
-   }
-   if f.Height >= 1 {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "h=", f.Height)
-   }
-   if f.Id != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "i=", f.Id)
-   }
-   if f.Language != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "l=", f.Language)
-   }
-   if f.Role != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "r=", f.Role)
-   }
-   return string(out)
-}
-
-const FilterUsage = `be = bitrate end
-bs = bitrate start
-h = height
-i = id
-l = language
-r = role`
-
-func (f *Filter) bitrate_end_ok(rep *dash.Representation) bool {
-   if f.BitrateEnd == 0 {
+func (f *Filter) max_bitrate_ok(rep *dash.Representation) bool {
+   if f.MaxBandwidth == 0 {
       return true
    }
-   return rep.Bandwidth <= f.BitrateEnd
+   return rep.Bandwidth <= f.MaxBandwidth
 }
 
 func (f *Filter) role_ok(rep *dash.Representation) bool {
@@ -109,17 +69,9 @@ func (f *Filter) role_ok(rep *dash.Representation) bool {
    return false
 }
 
-func (f *Filter) language_ok(rep *dash.Representation) bool {
-   switch f.Language {
+func (f *Filter) lang_ok(rep *dash.Representation) bool {
+   switch f.Lang {
    case "", rep.GetAdaptationSet().Lang:
-      return true
-   }
-   return false
-}
-
-func (f *Filter) id_ok(rep *dash.Representation) bool {
-   switch f.Id {
-   case "", rep.Id:
       return true
    }
    return false
@@ -133,29 +85,23 @@ func (f *Filter) height_ok(rep *dash.Representation) bool {
    return false
 }
 
-func (f *Filters) representation_ok(rep *dash.Representation) bool {
-   for _, value := range f.Values {
-      if !value.bitrate_end_ok(rep) {
-         continue
-      }
-      if value.BitrateStart > rep.Bandwidth {
-         continue
-      }
-      if !value.height_ok(rep) {
-         continue
-      }
-      if !value.id_ok(rep) {
-         continue
-      }
-      if !value.language_ok(rep) {
-         continue
-      }
-      if !value.role_ok(rep) {
-         continue
-      }
-      return true
+type Filters struct {
+   Values []Filter
+   set    bool
+}
+
+func (f *Filters) Set(input string) error {
+   if !f.set {
+      f.Values = nil
+      f.set = true
    }
-   return false
+   var value Filter
+   err := value.Set(input)
+   if err != nil {
+      return err
+   }
+   f.Values = append(f.Values, value)
+   return nil
 }
 
 func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
@@ -202,9 +148,58 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    return nil
 }
 
-type Filters struct {
-   Values []Filter
-   set bool
+type Filter struct {
+   Codecs       string
+   Height       int
+   Id           string
+   Lang         string
+   MaxBandwidth int
+   MinBandwidth int
+   Role         string
+}
+
+const FilterUsage = `B = max bandwidth
+b = min bandwidth
+c = codecs
+h = height
+i = id
+l = lang
+r = role`
+
+func (f *Filter) id_ok(rep *dash.Representation) bool {
+   switch f.Id {
+   case "", rep.Id:
+      return true
+   }
+   return false
+}
+
+func (f *Filters) representation_ok(rep *dash.Representation) bool {
+   for _, value := range f.Values {
+      if !value.codecs_ok(rep) {
+         continue
+      }
+      if !value.height_ok(rep) {
+         continue
+      }
+      if !value.id_ok(rep) {
+         continue
+      }
+      if !value.lang_ok(rep) {
+         continue
+      }
+      if !value.max_bitrate_ok(rep) {
+         continue
+      }
+      if value.MinBandwidth > rep.Bandwidth {
+         continue
+      }
+      if !value.role_ok(rep) {
+         continue
+      }
+      return true
+   }
+   return false
 }
 
 func (f *Filters) String() string {
@@ -218,16 +213,46 @@ func (f *Filters) String() string {
    return string(out)
 }
 
-func (f *Filters) Set(input string) error {
-   if !f.set {
-      f.Values = nil
-      f.set = true
+func (f *Filter) String() string {
+   var out []byte
+   if f.Codecs != "" {
+      out = fmt.Append(out, "c=", f.Codecs)
    }
-   var value Filter
-   err := value.Set(input)
-   if err != nil {
-      return err
+   if f.Height >= 1 {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "h=", f.Height)
    }
-   f.Values = append(f.Values, value)
-   return nil
+   if f.Id != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "i=", f.Id)
+   }
+   if f.Lang != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "l=", f.Lang)
+   }
+   if f.MaxBandwidth >= 1 {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "B=", f.MaxBandwidth)
+   }
+   if f.MinBandwidth >= 1 {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "b=", f.MinBandwidth)
+   }
+   if f.Role != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "r=", f.Role)
+   }
+   return string(out)
 }
