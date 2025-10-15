@@ -5,11 +5,104 @@ import (
    "errors"
    "fmt"
    "io"
-   "iter"
    "math"
    "net/http"
+   "slices"
    "strings"
 )
+
+func (f *Filter) index(streams []*dash.Representation) int {
+   const penalty_factor = 2
+   min_score := math.MaxInt
+   best_stream := -1
+   for i, candidate := range streams {
+      if f.Codecs != "" {
+         if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
+            continue
+         }
+      }
+      if f.Height >= 1 {
+         if candidate.Height != nil {
+            if *candidate.Height != f.Height {
+               continue
+            }
+         }
+      }
+      if candidate.Id == f.Id {
+         return i
+      }
+      if f.Lang != "" {
+         if candidate.GetAdaptationSet().Lang != f.Lang {
+            continue
+         }
+      }
+      if f.Role != "" {
+         if candidate.GetAdaptationSet().GetRole() != f.Role {
+            continue
+         }
+      }
+      var score int
+      if candidate.Bandwidth >= f.Bandwidth {
+         score = candidate.Bandwidth - f.Bandwidth
+      } else {
+         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
+      }
+      if score < min_score {
+         min_score = score
+         best_stream = i
+      }
+   }
+   return best_stream
+}
+
+func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+   }
+   for _, target := range f.Values {
+      index := target.index(represents)
+      if index == -1 {
+         continue
+      }
+      represent := represents[index]
+      switch {
+      case represent.SegmentBase != nil:
+         err = configVar.segment_base(represent)
+      case represent.SegmentList != nil:
+         err = configVar.segment_list(represent)
+      case represent.SegmentTemplate != nil:
+         err = configVar.segment_template(represent)
+      }
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
 
 func (f *Filters) String() string {
    var out []byte
@@ -116,52 +209,6 @@ i = id
 l = lang
 r = role`
 
-func find(
-   streams iter.Seq[*dash.Representation], target *Filter,
-) *dash.Representation {
-   const penalty_factor = 2
-   min_score := math.MaxInt
-   var best_stream *dash.Representation
-   for candidate := range streams {
-      if target.Codecs != "" {
-         if !strings.HasPrefix(*candidate.Codecs, target.Codecs) {
-            continue
-         }
-      }
-      if target.Height >= 1 {
-         if candidate.Height != nil {
-            if *candidate.Height != target.Height {
-               continue
-            }
-         }
-      }
-      if candidate.Id == target.Id {
-         return candidate
-      }
-      if target.Lang != "" {
-         if candidate.GetAdaptationSet().Lang != target.Lang {
-            continue
-         }
-      }
-      if target.Role != "" {
-         if candidate.GetAdaptationSet().GetRole() != target.Role {
-            continue
-         }
-      }
-      var score int
-      if candidate.Bandwidth >= target.Bandwidth {
-         score = candidate.Bandwidth - target.Bandwidth
-      } else {
-         score = (target.Bandwidth - candidate.Bandwidth) * penalty_factor
-      }
-      if score < min_score {
-         min_score = score
-         best_stream = candidate
-      }
-   }
-   return best_stream
-}
-
 type Filter struct {
    Bandwidth int
    Id        string
@@ -169,38 +216,4 @@ type Filter struct {
    Lang      string
    Role      string
    Codecs    string
-}
-
-func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
-   if resp.StatusCode != http.StatusOK {
-      var data strings.Builder
-      resp.Write(&data)
-      return errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return err
-   }
-   var mpd dash.Mpd
-   err = mpd.Unmarshal(data)
-   if err != nil {
-      return err
-   }
-   mpd.Set(resp.Request.URL)
-   for _, target := range f.Values {
-      represent := find(mpd.Representation(), &target)
-      switch {
-      case represent.SegmentBase != nil:
-         err = configVar.segment_base(represent)
-      case represent.SegmentList != nil:
-         err = configVar.segment_list(represent)
-      case represent.SegmentTemplate != nil:
-         err = configVar.segment_template(represent)
-      }
-      if err != nil {
-         return err
-      }
-   }
-   return nil
 }

@@ -2,7 +2,6 @@ package net
 
 import (
    "41.neocities.org/dash"
-   "slices"
    "testing"
 )
 
@@ -10,7 +9,7 @@ func point[T any](data T) *T {
    return &data
 }
 
-func TestFind(t *testing.T) {
+func TestIndex(t *testing.T) {
    streams := []*dash.Representation{
       {Id: "v12", Bandwidth: 4618234, Codecs: point("hvc1.2.4.L120.90"), Height: point(1080)}, // Below target
       {Id: "v16", Bandwidth: 4965335, Codecs: point("hvc1.2.4.L120.90"), Height: point(1080)}, // Below target
@@ -20,10 +19,12 @@ func TestFind(t *testing.T) {
       {Id: "v8", Bandwidth: 8355097, Codecs: point("hvc1.2.4.L120.90"), Height: point(1080)},  // Above target
    }
    expectedID := "v8"
-   result := find(slices.Values(streams), &Filter{Bandwidth: 7_500_000})
-   if result == nil {
+   target := Filter{Bandwidth: 7_500_000}
+   index := target.index(streams)
+   if index == -1 {
       t.Fatal("FindGoodStream returned a nil result without an error.")
    }
+   result := streams[index]
    if result.Id != expectedID {
       t.Errorf("Incorrect stream selected. Expected Id '%s', but got '%s'", expectedID, result.Id)
    }
