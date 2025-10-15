@@ -30,8 +30,12 @@ func (f *Filter) index(streams []*dash.Representation) int {
             }
          }
       }
-      if candidate.Id == f.Id {
-         return i
+      if f.Id != "" {
+         if candidate.Id == f.Id {
+            return i
+         } else {
+            continue
+         }
       }
       if f.Lang != "" {
          if candidate.GetAdaptationSet().Lang != f.Lang {
@@ -106,22 +110,10 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    return nil
 }
 
-func (f *Filters) String() string {
-   var out []byte
-   for i, value := range f.Values {
-      if i >= 1 {
-         out = append(out, ' ')
-      }
-      out = fmt.Append(out, "-f ", &value)
-   }
-   return string(out)
-}
-
 type Filters struct {
    Values []Filter
    set    bool
 }
-
 func (f *Filters) Set(input string) error {
    if !f.set {
       f.Values = nil
@@ -134,6 +126,17 @@ func (f *Filters) Set(input string) error {
    }
    f.Values = append(f.Values, value)
    return nil
+}
+
+func (f *Filters) String() string {
+   var out []byte
+   for i, value := range f.Values {
+      if i >= 1 {
+         out = append(out, ' ')
+      }
+      out = fmt.Append(out, "-f ", &value)
+   }
+   return string(out)
 }
 
 func (f *Filter) Set(input string) error {
