@@ -11,6 +11,48 @@ import (
    "strings"
 )
 
+func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+   }
+   for _, target := range f.Values {
+      index := target.index(represents)
+      if index == -1 {
+         continue
+      }
+      represent := represents[index]
+      err = configVar.DownloadRepresentation(represent)
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
 func (f *Filter) index(streams []*dash.Representation) int {
    const penalty_factor = 2
    min_score := math.MaxInt
@@ -59,55 +101,6 @@ func (f *Filter) index(streams []*dash.Representation) int {
       }
    }
    return best_stream
-}
-
-func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
-   if resp.StatusCode != http.StatusOK {
-      var data strings.Builder
-      resp.Write(&data)
-      return errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return err
-   }
-   var mpd dash.Mpd
-   err = mpd.Unmarshal(data)
-   if err != nil {
-      return err
-   }
-   mpd.Set(resp.Request.URL)
-   represents := slices.SortedFunc(mpd.Representation(),
-      func(a, b *dash.Representation) int {
-         return a.Bandwidth - b.Bandwidth
-      },
-   )
-   for i, represent := range represents {
-      if i >= 1 {
-         fmt.Println()
-      }
-      fmt.Println(represent)
-   }
-   for _, target := range f.Values {
-      index := target.index(represents)
-      if index == -1 {
-         continue
-      }
-      represent := represents[index]
-      switch {
-      case represent.SegmentBase != nil:
-         err = configVar.segment_base(represent)
-      case represent.SegmentList != nil:
-         err = configVar.segment_list(represent)
-      case represent.SegmentTemplate != nil:
-         err = configVar.segment_template(represent)
-      }
-      if err != nil {
-         return err
-      }
-   }
-   return nil
 }
 
 type Filters struct {
@@ -223,4 +216,3 @@ type Filter struct {
    Role      string
    Codecs    string
 }
-
