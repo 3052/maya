@@ -21,13 +21,9 @@ import (
    "time"
 )
 
-func (c *Config) segment_list(represent *dash.Representation) error {
-   if Threads != 1 {
-      return errors.New("SegmentList Threads")
-   }
+func (c *Config) DownloadRepresentation(represent *dash.Representation) error {
    var media media_file
-   err := media.New(represent)
-   if err != nil {
+   if err := media.New(represent); err != nil {
       return err
    }
    fileVar, err := create(represent)
@@ -35,9 +31,122 @@ func (c *Config) segment_list(represent *dash.Representation) error {
       return err
    }
    defer fileVar.Close()
-   data, err := get_segment(
-      represent.SegmentList.Initialization.SourceUrl[0], nil,
+
+   if err := c.download_initialization(represent, &media, fileVar); err != nil {
+      return err
+   }
+
+   key, err := c.key(&media)
+   if err != nil {
+      return err
+   }
+
+   requests, err := c.get_media_requests(represent)
+   if err != nil {
+      return err
+   }
+
+   if len(requests) == 0 {
+      return nil
+   }
+
+   numWorkers := c.Threads
+   if numWorkers < 1 {
+      numWorkers = 1
+   }
+   jobs := make(chan job, len(requests))
+   results := make(chan result, len(requests))
+   doneChan := make(chan error, 1)
+
+   // Define the writer's logic in a clearly named variable.
+   writerFunc := func() error {
+      pending := make(map[int][]byte)
+      nextIndex := 0
+      var progressVar progress
+      progressVar.set(len(requests))
+
+      for i := 0; i < len(requests); i++ {
+         res := <-results
+         if res.err != nil {
+            return res.err
+         }
+
+         pending[res.index] = res.data
+         progressVar.next()
+
+         for data, ok := pending[nextIndex]; ok; data, ok = pending[nextIndex] {
+            processedData, err := media.write_segment(data, key)
+            if err != nil {
+               return err
+            }
+            if _, err = fileVar.Write(processedData); err != nil {
+               return err
+            }
+            delete(pending, nextIndex)
+            nextIndex++
+         }
+      }
+      return nil
+   }
+
+   // Launch the writer goroutine. Its purpose is now much clearer.
+   go func() {
+      doneChan <- writerFunc()
+   }()
+
+   // Start worker goroutines
+   for w := 0; w < numWorkers; w++ {
+      go func() {
+         for j := range jobs {
+            data, err := get_segment(j.request.url, j.request.header)
+            results <- result{index: j.index, data: data, err: err}
+         }
+      }()
+   }
+
+   // Send all jobs
+   for i, req := range requests {
+      jobs <- job{index: i, request: req}
+   }
+   close(jobs)
+
+   // Block and wait for the final status from the writer.
+   return <-doneChan
+}
+
+type media_request struct {
+   url    *url.URL
+   header http.Header
+}
+
+func (c *Config) download_initialization(
+   represent *dash.Representation, media *media_file, fileVar *os.File,
+) error {
+   var (
+      data []byte
+      err  error
    )
+   switch {
+   case represent.SegmentList != nil:
+      data, err = get_segment(represent.SegmentList.Initialization.SourceUrl[0], nil)
+
+   case represent.SegmentTemplate != nil && represent.SegmentTemplate.Initialization != "":
+      address, urlErr := represent.SegmentTemplate.Initialization.Url(represent)
+      if urlErr != nil {
+         return urlErr
+      }
+      data, err = get_segment(address, nil)
+
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
+      data, err = get_segment(represent.BaseUrl[0], head)
+
+   default:
+      // No initialization segment to download
+      return nil
+   }
+
    if err != nil {
       return err
    }
@@ -46,176 +155,59 @@ func (c *Config) segment_list(represent *dash.Representation) error {
       return err
    }
    _, err = fileVar.Write(data)
-   if err != nil {
-      return err
-   }
-   key, err := c.widevine_key(&media)
-   if err != nil {
-      return err
-   }
-   var progressVar progress
-   progressVar.set(len(represent.SegmentList.SegmentUrl))
-   for _, segment := range represent.SegmentList.SegmentUrl {
-      data, err := get_segment(segment.Media[0], nil)
-      if err != nil {
-         return err
-      }
-      progressVar.next()
-      data, err = media.write_segment(data, key)
-      if err != nil {
-         return err
-      }
-      _, err = fileVar.Write(data)
-      if err != nil {
-         return err
-      }
-   }
-   return nil
+   return err
 }
 
-func (c *Config) segment_template(represent *dash.Representation) error {
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   fileVar, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer fileVar.Close()
-   if initial := represent.SegmentTemplate.Initialization; initial != "" {
-      address, err := initial.Url(represent)
-      if err != nil {
-         return err
+func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
+   switch {
+   case represent.SegmentList != nil:
+      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
+      for i, segment := range represent.SegmentList.SegmentUrl {
+         requests[i] = media_request{url: segment.Media[0]}
       }
-      data1, err := get_segment(address, nil)
-      if err != nil {
-         return err
+      return requests, nil
+
+   case represent.SegmentTemplate != nil:
+      var segments []int
+      for rep := range represent.Representation() {
+         segments = slices.AppendSeq(segments, rep.Segment())
       }
-      data1, err = media.initialization(data1)
-      if err != nil {
-         return err
-      }
-      _, err = fileVar.Write(data1)
-      if err != nil {
-         return err
-      }
-   }
-   key, err := c.widevine_key(&media)
-   if err != nil {
-      return err
-   }
-   var segments []int
-   for rep := range represent.Representation() {
-      segments = slices.AppendSeq(segments, rep.Segment())
-   }
-   var progressVar progress
-   progressVar.set(len(segments))
-   for chunk := range slices.Chunk(segments, Threads) {
-      var (
-         datas = make([][]byte, len(chunk))
-         errs  = make(chan error)
-      )
-      for i, segment := range chunk {
+      requests := make([]media_request, len(segments))
+      for i, segment := range segments {
          address, err := represent.SegmentTemplate.Media.Url(represent, segment)
          if err != nil {
-            return err
+            return nil, err
          }
-         go func() {
-            datas[i], err = get_segment(address, nil)
-            errs <- err
-            progressVar.next()
-         }()
+         requests[i] = media_request{url: address}
       }
-      for range chunk {
-         err := <-errs
-         if err != nil {
-            return err
-         }
-      }
-      for _, data := range datas {
-         data, err = media.write_segment(data, key)
-         if err != nil {
-            return err
-         }
-         _, err = fileVar.Write(data)
-         if err != nil {
-            return err
-         }
-      }
-   }
-   return nil
-}
+      return requests, nil
 
-func (c *Config) segment_base(represent *dash.Representation) error {
-   if Threads != 1 {
-      return errors.New("SegmentBase Threads")
-   }
-   var media media_file
-   err := media.New(represent)
-   if err != nil {
-      return err
-   }
-   os_file, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer os_file.Close()
-   head := http.Header{}
-   head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
-   data, err := get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = os_file.Write(data)
-   if err != nil {
-      return err
-   }
-   key, err := c.key(&media)
-   if err != nil {
-      return err
-   }
-   head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-   data, err = get_segment(represent.BaseUrl[0], head)
-   if err != nil {
-      return err
-   }
-   var file_file file.File
-   err = file_file.Read(data)
-   if err != nil {
-      return err
-   }
-   var progressVar progress
-   progressVar.set(len(file_file.Sidx.Reference))
-   var index index_range
-   err = index.Set(represent.SegmentBase.IndexRange)
-   if err != nil {
-      return err
-   }
-   for _, reference := range file_file.Sidx.Reference {
-      index[0] = index[1] + 1
-      index[1] += uint64(reference.Size())
-      head.Set("range", "bytes="+index.String())
-      data, err = get_segment(represent.BaseUrl[0], head)
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+      data, err := get_segment(represent.BaseUrl[0], head)
       if err != nil {
-         return err
+         return nil, err
       }
-      progressVar.next()
-      data, err = media.write_segment(data, key)
-      if err != nil {
-         return err
+      var file_file file.File
+      if err = file_file.Read(data); err != nil {
+         return nil, err
       }
-      _, err = os_file.Write(data)
-      if err != nil {
-         return err
+      var index index_range
+      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
+         return nil, err
       }
+      requests := make([]media_request, len(file_file.Sidx.Reference))
+      for i, reference := range file_file.Sidx.Reference {
+         index[0] = index[1] + 1
+         index[1] += uint64(reference.Size())
+         range_head := http.Header{}
+         range_head.Set("range", "bytes="+index.String())
+         requests[i] = media_request{url: represent.BaseUrl[0], header: range_head}
+      }
+      return requests, nil
    }
-   return nil
+   return nil, errors.New("unsupported segment type")
 }
 
 func os_create(name string) (*os.File, error) {
@@ -401,20 +393,6 @@ func (i *index_range) String() string {
 
 type index_range [2]uint64
 
-func (p *progress) next() {
-   p.segmentA++
-   p.segmentB--
-   timeB := time.Now().Unix()
-   if timeB > p.timeB {
-      log.Println(
-         p.segmentB, "segment",
-         p.durationB().Truncate(time.Second),
-         "left",
-      )
-      p.timeB = timeB
-   }
-}
-
 func (p *progress) set(segmentB int) {
    p.segmentB = segmentB
    p.timeA = time.Now()
@@ -490,18 +468,6 @@ func (m *media_file) New(represent *dash.Representation) error {
    return nil
 }
 
-var Threads = 1
-
-type Config struct {
-   Send func([]byte) ([]byte, error)
-   // PlayReady
-   CertificateChain string
-   EncryptSignKey   string
-   // Widevine
-   ClientId   string
-   PrivateKey string
-}
-
 func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    req := http.Request{Method: "GET", URL: u}
    if head != nil {
@@ -531,4 +497,40 @@ type media_file struct {
    timescale uint64 // mdhd
    size      uint64 // trun
    duration  uint64 // trun
+}
+func (p *progress) next() {
+   p.segmentA++
+   p.segmentB--
+   timeB := time.Now().Unix()
+   if timeB > p.timeB {
+      log.Println(
+         p.segmentB, "segment",
+         p.durationB().Truncate(time.Second),
+         "left",
+      )
+      p.timeB = timeB
+   }
+}
+
+type Config struct {
+   Send func([]byte) ([]byte, error)
+   // Number of segments to download in parallel
+   Threads int
+   // PlayReady
+   CertificateChain string
+   EncryptSignKey   string
+   // Widevine
+   ClientId   string
+   PrivateKey string
+}
+
+type job struct {
+   index   int
+   request media_request
+}
+
+type result struct {
+   index int
+   data  []byte
+   err   error
 }
