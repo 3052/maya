@@ -475,7 +475,6 @@ func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    } else {
       req.Header = http.Header{}
    }
-   req.Header.Set("silent", "true")
    resp, err := http.DefaultClient.Do(&req)
    if err != nil {
       return nil, err
