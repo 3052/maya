@@ -4,8 +4,6 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
-   "41.neocities.org/sofia/file"
-   "41.neocities.org/sofia/pssh"
    "bytes"
    "encoding/base64"
    "errors"
