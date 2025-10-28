@@ -10,13 +10,35 @@ import (
    "slices"
 )
 
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            break
+         }
+      }
+   }
+   return nil
+}
+
+///
+
 // segment can be VTT or anything
 func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    if key == nil {
       return data, nil
    }
-   var fileVar file.File
-   err := fileVar.Read(data)
+   boxes, err := sofia.ParseFile(data)
    if err != nil {
       return nil, err
    }
@@ -134,29 +156,4 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
       return requests, nil
    }
    return nil, errors.New("unsupported segment type")
-}
-
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box pssh.Box
-            n, err := box.BoxHeader.Decode(data)
-            if err != nil {
-               return err
-            }
-            err = box.Read(data[n:])
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            break
-         }
-      }
-   }
-   return nil
 }
