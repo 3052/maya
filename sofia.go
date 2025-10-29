@@ -7,9 +7,66 @@ import (
    "encoding/base64"
    "encoding/hex"
    "errors"
+   "log"
    "net/http"
    "slices"
 )
+
+func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
+   switch {
+   case represent.SegmentList != nil:
+      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
+      for i, segment := range represent.SegmentList.SegmentUrl {
+         requests[i] = media_request{url: segment.Media[0]}
+      }
+      return requests, nil
+   case represent.SegmentTemplate != nil:
+      var segments []int
+      for rep := range represent.Representation() {
+         segments = slices.AppendSeq(segments, rep.Segment())
+      }
+      requests := make([]media_request, len(segments))
+      for i, segment := range segments {
+         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
+         if err != nil {
+            return nil, err
+         }
+         requests[i] = media_request{url: address}
+      }
+      return requests, nil
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+      data, err := get_segment(represent.BaseUrl[0], head)
+      if err != nil {
+         return nil, err
+      }
+      parsed, err := sofia.ParseFile(data)
+      if err != nil {
+         return nil, err
+      }
+      var index index_range
+      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
+         return nil, err
+      }
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return nil, errors.New("sidx box not found in file")
+      }
+      requests := make([]media_request, len(sidx.References))
+      for i, reference := range sidx.References {
+         index[0] = index[1] + 1
+         index[1] += uint64(reference.ReferencedSize)
+         range_head := http.Header{}
+         range_head.Set("range", "bytes="+index.String())
+         requests[i] = media_request{
+            url: represent.BaseUrl[0], header: range_head,
+         }
+      }
+      return requests, nil
+   }
+   return nil, errors.New("unsupported segment type")
+}
 
 // segment can be VTT or anything
 func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
@@ -20,30 +77,22 @@ func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   traf := sofia.FindFirstTraf(parsedSegment)
-   if traf == nil {
-      return nil, errors.New("could not find 'traf' box in segment file")
+   if m.duration/m.timescale < 10*60 {
+      traf, ok := sofia.FindFirstTraf(parsedSegment)
+      if !ok {
+         return nil, errors.New("could not find 'traf' box in segment file")
+      }
+      total_bytes, total_duration, err := traf.GetTotals()
+      if err != nil {
+         return nil, err
+      }
+      m.size += total_bytes
+      m.duration += total_duration
+      // Bandwidth in bps = (TotalBytes * 8 bits/byte) /
+      // (TotalDuration / Timescale in seconds)
+      // Simplified: (TotalBytes * 8 * Timescale) / TotalDuration
+      log.Println("bandwidth", m.size * 8 * m.timescale / m.duration)
    }
-   bandwidth, err := traf.GetBandwidth(m.timescale)
-   if err != nil {
-      return nil, err
-   }
-   if bandwidth == 0 {
-      return nil, errors.New("expected a non-zero bandwidth, but got 0")
-   }
-   //if m.duration/m.timescale < 10*60 {
-   //   for _, sample := range fileVar.Moof.Traf.Trun.Sample {
-   //      if sample.Duration == 0 {
-   //         sample.Duration = fileVar.Moof.Traf.Tfhd.DefaultSampleDuration
-   //      }
-   //      m.duration += uint64(sample.Duration)
-   //      if sample.Size == 0 {
-   //         sample.Size = fileVar.Moof.Traf.Tfhd.DefaultSampleSize
-   //      }
-   //      m.size += uint64(sample.Size)
-   //   }
-   //   log.Println("bandwidth", m.timescale*m.size*8/m.duration)
-   //}
    err = sofia.DecryptSegment(parsedSegment, key)
    if err != nil {
       return nil, err
@@ -60,8 +109,8 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   moov := sofia.FindMoov(parsedInit)
-   if moov == nil {
+   moov, ok := sofia.FindMoov(parsedInit)
+   if !ok {
       return nil, errors.New("could not find 'moov' box in init file")
    }
    trak := moov.GetTrak()
@@ -80,11 +129,9 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   widevine_box := sofia.FindPsshBySystemID(moov.GetAllPssh(), widevine_id)
-   if widevine_box == nil {
+   widevine_box, ok := sofia.FindPsshBySystemID(moov.GetAllPssh(), widevine_id)
+   if !ok {
       return nil, errors.New("did not find Widevine pssh box")
-   } else if len(widevine_box.Data) == 0 {
-      return nil, errors.New("widevine pssh box has an empty Data field")
    }
    m.pssh = widevine_box.Data
    m.key_id = moov.GetTrak().GetTenc().DefaultKID[:]
@@ -125,59 +172,3 @@ func (m *media_file) New(represent *dash.Representation) error {
 }
 
 var widevine_id, _ = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
-
-func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
-   switch {
-   case represent.SegmentList != nil:
-      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
-      for i, segment := range represent.SegmentList.SegmentUrl {
-         requests[i] = media_request{url: segment.Media[0]}
-      }
-      return requests, nil
-   case represent.SegmentTemplate != nil:
-      var segments []int
-      for rep := range represent.Representation() {
-         segments = slices.AppendSeq(segments, rep.Segment())
-      }
-      requests := make([]media_request, len(segments))
-      for i, segment := range segments {
-         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
-         if err != nil {
-            return nil, err
-         }
-         requests[i] = media_request{url: address}
-      }
-      return requests, nil
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-      data, err := get_segment(represent.BaseUrl[0], head)
-      if err != nil {
-         return nil, err
-      }
-      parsed, err := sofia.ParseFile(data)
-      if err != nil {
-         return nil, err
-      }
-      var index index_range
-      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
-         return nil, err
-      }
-      sidx := sofia.FindSidx(parsed)
-      if sidx == nil {
-         return nil, errors.New("sidx box not found in file")
-      }
-      requests := make([]media_request, len(sidx.References))
-      for i, reference := range sidx.References {
-         index[0] = index[1] + 1
-         index[1] += uint64(reference.ReferencedSize)
-         range_head := http.Header{}
-         range_head.Set("range", "bytes="+index.String())
-         requests[i] = media_request{
-            url: represent.BaseUrl[0], header: range_head,
-         }
-      }
-      return requests, nil
-   }
-   return nil, errors.New("unsupported segment type")
-}
