@@ -280,8 +280,6 @@ func (p *progress) durationA() time.Duration {
    return time.Since(p.timeA)
 }
 
-const widevine_system_id = "edef8ba979d64acea3c827dcd51d21ed"
-
 // keep last two terms separate
 func (p *progress) durationB() time.Duration {
    return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
@@ -338,13 +336,6 @@ func get_segment(u *url.URL, head http.Header) ([]byte, error) {
    return io.ReadAll(resp.Body)
 }
 
-type media_file struct {
-   key_id    []byte // tenc
-   pssh      []byte // pssh
-   timescale uint64 // mdhd
-   size      uint64 // trun
-   duration  uint64 // trun
-}
 func (p *progress) next() {
    p.segmentA++
    p.segmentB--
