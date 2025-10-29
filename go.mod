@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	41.neocities.org/dash v1.28.1
 	41.neocities.org/drm v1.6.7
-	41.neocities.org/sofia v1.8.7
+	41.neocities.org/sofia v1.9.5
 )
 
 require (
