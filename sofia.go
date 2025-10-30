@@ -13,7 +13,7 @@ import (
 )
 
 func (m *media_file) initialization(data []byte) ([]byte, error) {
-   parsedInit, err := sofia.ParseFile(data)
+   parsedInit, err := sofia.Parse(data)
    if err != nil {
       return nil, err
    }
@@ -21,11 +21,11 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if !ok {
       return nil, errors.New("could not find 'moov' box in init file")
    }
-   trak, ok := moov.GetTrak()
+   trak, ok := moov.Trak()
    if !ok {
       return nil, errors.New("could not find 'trak' in moov")
    }
-   mdhd, ok := trak.GetMdhd()
+   mdhd, ok := trak.Mdhd()
    if !ok {
       return nil, errors.New("could not find 'mdhd' in trak to get timescale")
    }
@@ -34,12 +34,11 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   widevine_box, ok := sofia.FindPsshBySystemID(moov.GetAllPssh(), widevine_id)
-   if !ok {
-      return nil, errors.New("did not find Widevine pssh box")
+   widevine_box, ok := moov.FindPssh(widevine_id)
+   if ok {
+      m.pssh = widevine_box.Data
    }
-   m.pssh = widevine_box.Data
-   m.key_id = trak.GetTenc().DefaultKID[:]
+   m.key_id = trak.Tenc().DefaultKID[:]
    var finalMP4Data bytes.Buffer
    for _, box := range parsedInit {
       finalMP4Data.Write(box.Encode())
@@ -107,7 +106,7 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
       if err != nil {
          return nil, err
       }
-      parsed, err := sofia.ParseFile(data)
+      parsed, err := sofia.Parse(data)
       if err != nil {
          return nil, err
       }
@@ -139,27 +138,29 @@ func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    if key == nil {
       return data, nil
    }
-   parsedSegment, err := sofia.ParseFile(data)
+   parsedSegment, err := sofia.Parse(data)
    if err != nil {
       return nil, err
    }
    if m.duration/m.timescale < 10*60 {
-      traf, ok := sofia.FindFirstTraf(parsedSegment)
-      if !ok {
-         return nil, errors.New("could not find 'traf' box in segment file")
+      for _, moof := range sofia.AllMoof(parsedSegment) {
+         traf, ok := moof.Traf()
+         if !ok {
+            return nil, errors.New("could not find 'traf' box in segment file")
+         }
+         total_bytes, total_duration, err := traf.Totals()
+         if err != nil {
+            return nil, err
+         }
+         m.size += total_bytes
+         m.duration += total_duration
       }
-      total_bytes, total_duration, err := traf.GetTotals()
-      if err != nil {
-         return nil, err
-      }
-      m.size += total_bytes
-      m.duration += total_duration
       // Bandwidth in bps = (TotalBytes * 8 bits/byte) /
       // (TotalDuration / Timescale in seconds)
       // Simplified: (TotalBytes * 8 * Timescale) / TotalDuration
       log.Println("bandwidth", m.size * 8 * m.timescale / m.duration)
    }
-   err = sofia.DecryptSegment(parsedSegment, key)
+   err = sofia.Decrypt(parsedSegment, key)
    if err != nil {
       return nil, err
    }
