@@ -11,30 +11,6 @@ import (
    "os"
 )
 
-// 1. MPD PSSH
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box sofia.PsshBox
-            err = box.Parse(data)
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-            break
-         }
-      }
-   }
-   return nil
-}
-
-// 2. MP4 PSSH
 func (m *media_file) initialization(data []byte) ([]byte, error) {
    parsedInit, err := sofia.Parse(data)
    if err != nil {
@@ -48,6 +24,14 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if !ok {
       return nil, errors.New("could not find 'trak' in moov")
    }
+   // THIS FIXES A/V SYNC WITH
+   // rakuten.tv
+   // BUT MIGHT BREAK THESE
+   // criterionchannel.com
+   // mubi.com
+   // paramountplus.com
+   // tubitv.com
+   trak.ReplaceEdts()
    mdhd, ok := trak.Mdhd()
    if !ok {
       return nil, errors.New("could not find 'mdhd' in trak to get timescale")
@@ -115,4 +99,27 @@ func (c *Config) widevine_key(media *media_file) ([]byte, error) {
       }
    }
    return nil, errors.New("widevine_key")
+}
+const widevine_urn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
 }

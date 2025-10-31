@@ -2,12 +2,14 @@ package nordVpn
 
 import (
    "encoding/json"
+   "log"
    "net/http"
+   "net/url"
    "strconv"
    "strings"
 )
 
-func Proxy(username, password, hostname string) string {
+func FormatProxy(username, password, hostname string) string {
    var b strings.Builder
    b.WriteString("https://")
    b.WriteString(username)
@@ -17,6 +19,11 @@ func Proxy(username, password, hostname string) string {
    b.WriteString(hostname)
    b.WriteString(":89")
    return b.String()
+}
+
+func GetProxy(req *http.Request) (*url.URL, error) {
+   log.Println(req.Method, req.URL)
+   return http.ProxyFromEnvironment(req)
 }
 
 type Server struct {
