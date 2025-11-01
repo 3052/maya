@@ -9,6 +9,13 @@ import (
    "strings"
 )
 
+var Transport = http.Transport{
+   Proxy: func(req *http.Request) (*url.URL, error) {
+      log.Println(req.Method, req.URL)
+      return http.ProxyFromEnvironment(req)
+   },
+}
+
 func FormatProxy(username, password, hostname string) string {
    var b strings.Builder
    b.WriteString("https://")
@@ -19,11 +26,6 @@ func FormatProxy(username, password, hostname string) string {
    b.WriteString(hostname)
    b.WriteString(":89")
    return b.String()
-}
-
-func GetProxy(req *http.Request) (*url.URL, error) {
-   log.Println(req.Method, req.URL)
-   return http.ProxyFromEnvironment(req)
 }
 
 type Server struct {

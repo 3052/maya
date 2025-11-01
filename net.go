@@ -22,401 +22,9 @@ import (
    "time"
 )
 
-func (m *media_file) initialization(data []byte) ([]byte, error) {
-   parsedInit, err := sofia.Parse(data)
-   if err != nil {
-      return nil, err
-   }
-   moov, ok := sofia.FindMoov(parsedInit)
-   if !ok {
-      return nil, errors.New("could not find 'moov' box in init file")
-   }
-   if m.pssh == nil {
-      widevine_box, ok := moov.FindPssh(widevine_id)
-      if ok {
-         m.pssh = widevine_box.Data
-         log.Println("MP4 PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-      }
-   }
-   trak, ok := moov.Trak()
-   if !ok {
-      return nil, errors.New("could not find 'trak' in moov")
-   }
-   // THIS FIXES A/V SYNC WITH
-   // rakuten.tv
-   // BUT MIGHT BREAK THESE
-   // criterionchannel.com
-   // mubi.com
-   // paramountplus.com
-   // tubitv.com
-   trak.ReplaceEdts()
-   mdia, ok := trak.Mdia()
-   if !ok {
-      return nil, errors.New(".Mdia()")
-   }
-   mdhd, ok := mdia.Mdhd()
-   if !ok {
-      return nil, errors.New(".Mdhd()")
-   }
-   m.timescale = uint64(mdhd.Timescale)
-   minf, ok := mdia.Minf()
-   if !ok {
-      return nil, errors.New("could not find 'minf' box")
-   }
-   stbl, ok := minf.Stbl()
-   if !ok {
-      return nil, errors.New("could not find 'stbl' box")
-   }
-   stsd, ok := stbl.Stsd()
-   if !ok {
-      return nil, errors.New("could not find 'stsd' box")
-   }
-   sinf, _, ok := stsd.Sinf()
-   if ok {
-      schi, ok := sinf.Schi()
-      if !ok {
-         return nil, errors.New("could not find 'schi' box")
-      }
-      tenc, ok := schi.Tenc()
-      if !ok {
-         return nil, errors.New("could not find 'tenc' box")
-      }
-      m.key_id = tenc.DefaultKID[:]
-   }
-   err = moov.Sanitize()
-   if err != nil {
-      return nil, err
-   }
-   var finalMP4Data bytes.Buffer
-   for _, box := range parsedInit {
-      finalMP4Data.Write(box.Encode())
-   }
-   return finalMP4Data.Bytes(), nil
-}
-
-func (c *Config) widevine_key(media *media_file) ([]byte, error) {
-   if media.key_id == nil {
-      return nil, nil
-   }
-   private_key, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
-   }
-   client_id, err := os.ReadFile(c.ClientId)
-   if err != nil {
-      return nil, err
-   }
-   var cdm widevine.Cdm
-   err = cdm.New(private_key, client_id, media.pssh)
-   if err != nil {
-      return nil, err
-   }
-   data, err := cdm.RequestBody()
-   if err != nil {
-      return nil, err
-   }
-   data, err = c.Send(data)
-   if err != nil {
-      return nil, err
-   }
-   var body widevine.ResponseBody
-   err = body.Unmarshal(data)
-   if err != nil {
-      return nil, err
-   }
-   block, err := cdm.Block(body)
-   if err != nil {
-      return nil, err
-   }
-   for container := range body.Container() {
-      if bytes.Equal(container.Id(), media.key_id) {
-         key := container.Key(block)
-         log.Printf("key %x", key)
-         var zero [16]byte
-         if !bytes.Equal(key, zero[:]) {
-            return key, nil
-         }
-      }
-   }
-   return nil, errors.New("widevine_key")
-}
-
-const widevine_urn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box sofia.PsshBox
-            err = box.Parse(data)
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-            break
-         }
-      }
-   }
-   return nil
-}
-
-func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
-   if resp.StatusCode != http.StatusOK {
-      var data strings.Builder
-      resp.Write(&data)
-      return errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return err
-   }
-   var mpd dash.Mpd
-   err = mpd.Unmarshal(data)
-   if err != nil {
-      return err
-   }
-   mpd.Set(resp.Request.URL)
-   represents := slices.SortedFunc(mpd.Representation(),
-      func(a, b *dash.Representation) int {
-         return a.Bandwidth - b.Bandwidth
-      },
-   )
-   for i, represent := range represents {
-      if i >= 1 {
-         fmt.Println()
-      }
-      fmt.Println(represent)
-   }
-   for _, target := range f.Values {
-      index := target.index(represents)
-      if index == -1 {
-         continue
-      }
-      represent := represents[index]
-      err = configVar.DownloadRepresentation(represent)
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-func (f *Filter) index(streams []*dash.Representation) int {
-   const penalty_factor = 2
-   min_score := math.MaxInt
-   best_stream := -1
-   for i, candidate := range streams {
-      if f.Codecs != "" {
-         if candidate.Codecs != nil {
-            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
-               continue
-            }
-         }
-      }
-      if f.Height >= 1 {
-         if candidate.Height != nil {
-            if *candidate.Height != f.Height {
-               continue
-            }
-         }
-      }
-      if f.Id != "" {
-         if candidate.Id == f.Id {
-            return i
-         } else {
-            continue
-         }
-      }
-      if f.Lang != "" {
-         if candidate.GetAdaptationSet().Lang != f.Lang {
-            continue
-         }
-      }
-      if f.Role != "" {
-         if candidate.GetAdaptationSet().GetRole() != f.Role {
-            continue
-         }
-      }
-      var score int
-      if candidate.Bandwidth >= f.Bandwidth {
-         score = candidate.Bandwidth - f.Bandwidth
-      } else {
-         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
-      }
-      if score < min_score {
-         min_score = score
-         best_stream = i
-      }
-   }
-   return best_stream
-}
-
-type Filters struct {
-   Values []Filter
-   set    bool
-}
-
-func (f *Filters) Set(input string) error {
-   if !f.set {
-      f.Values = nil
-      f.set = true
-   }
-   var value Filter
-   err := value.Set(input)
-   if err != nil {
-      return err
-   }
-   f.Values = append(f.Values, value)
-   return nil
-}
-
-func (f *Filters) String() string {
-   var out []byte
-   for i, value := range f.Values {
-      if i >= 1 {
-         out = append(out, ' ')
-      }
-      out = fmt.Append(out, "-f ", &value)
-   }
-   return string(out)
-}
-
-func (f *Filter) Set(input string) error {
-   for _, pair := range strings.Split(input, ",") {
-      key, value, found := strings.Cut(pair, "=")
-      if !found {
-         return errors.New("invalid pair format")
-      }
-      var err error
-      switch key {
-      case "b":
-         _, err = fmt.Sscan(value, &f.Bandwidth)
-      case "c":
-         f.Codecs = value
-      case "h":
-         _, err = fmt.Sscan(value, &f.Height)
-      case "i":
-         f.Id = value
-      case "l":
-         f.Lang = value
-      case "r":
-         f.Role = value
-      default:
-         err = errors.New("unknown key")
-      }
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-func (f *Filter) String() string {
-   var out []byte
-   if f.Bandwidth >= 1 {
-      out = fmt.Append(out, "b=", f.Bandwidth)
-   }
-   if f.Codecs != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "c=", f.Codecs)
-   }
-   if f.Height >= 1 {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "h=", f.Height)
-   }
-   if f.Id != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "i=", f.Id)
-   }
-   if f.Lang != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "l=", f.Lang)
-   }
-   if f.Role != "" {
-      if out != nil {
-         out = append(out, ',')
-      }
-      out = fmt.Append(out, "r=", f.Role)
-   }
-   return string(out)
-}
-
-const FilterUsage = `b = bandwidth
-c = codecs
-h = height
-i = id
-l = lang
-r = role`
-
-type Filter struct {
-   Bandwidth int
-   Id        string
-   Height    int
-   Lang      string
-   Role      string
-   Codecs    string
-}
-
-type media_file struct {
-   key_id    []byte // tenc
-   pssh      []byte // pssh
-   timescale uint64 // mdhd
-   size      uint64 // trun
-   duration  uint64 // trun
-}
-
-var widevine_id, _ = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
-
-// segment can be VTT or anything
-func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
-   if key == nil {
-      return data, nil
-   }
-   parsedSegment, err := sofia.Parse(data)
-   if err != nil {
-      return nil, err
-   }
-   if m.duration/m.timescale < 10*60 {
-      for _, moof := range sofia.AllMoof(parsedSegment) {
-         traf, ok := moof.Traf()
-         if !ok {
-            return nil, errors.New("could not find 'traf' box in segment file")
-         }
-         total_bytes, total_duration, err := traf.Totals()
-         if err != nil {
-            return nil, err
-         }
-         m.size += total_bytes
-         m.duration += total_duration
-      }
-      // Bandwidth in bps = (TotalBytes * 8 bits/byte) /
-      // (TotalDuration / Timescale in seconds)
-      // Simplified: (TotalBytes * 8 * Timescale) / TotalDuration
-      log.Println("bandwidth", m.size * 8 * m.timescale / m.duration)
-   }
-   err = sofia.Decrypt(parsedSegment, key)
-   if err != nil {
-      return nil, err
-   }
-   var finalMP4Data bytes.Buffer
-   for _, box := range parsedSegment {
-      finalMP4Data.Write(box.Encode())
-   }
-   return finalMP4Data.Bytes(), nil
+type media_request struct {
+   url    *url.URL
+   header http.Header
 }
 
 func (c *Config) DownloadRepresentation(represent *dash.Representation) error {
@@ -711,6 +319,403 @@ type result struct {
    data  []byte
    err   error
 }
+func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+   }
+   for _, target := range f.Values {
+      index := target.index(represents)
+      if index == -1 {
+         continue
+      }
+      represent := represents[index]
+      err = configVar.DownloadRepresentation(represent)
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+func (f *Filter) index(streams []*dash.Representation) int {
+   const penalty_factor = 2
+   min_score := math.MaxInt
+   best_stream := -1
+   for i, candidate := range streams {
+      if f.Codecs != "" {
+         if candidate.Codecs != nil {
+            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
+               continue
+            }
+         }
+      }
+      if f.Height >= 1 {
+         if candidate.Height != nil {
+            if *candidate.Height != f.Height {
+               continue
+            }
+         }
+      }
+      if f.Id != "" {
+         if candidate.Id == f.Id {
+            return i
+         } else {
+            continue
+         }
+      }
+      if f.Lang != "" {
+         if candidate.GetAdaptationSet().Lang != f.Lang {
+            continue
+         }
+      }
+      if f.Role != "" {
+         if candidate.GetAdaptationSet().GetRole() != f.Role {
+            continue
+         }
+      }
+      var score int
+      if candidate.Bandwidth >= f.Bandwidth {
+         score = candidate.Bandwidth - f.Bandwidth
+      } else {
+         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
+      }
+      if score < min_score {
+         min_score = score
+         best_stream = i
+      }
+   }
+   return best_stream
+}
+
+type Filters struct {
+   Values []Filter
+   set    bool
+}
+
+func (f *Filters) Set(input string) error {
+   if !f.set {
+      f.Values = nil
+      f.set = true
+   }
+   var value Filter
+   err := value.Set(input)
+   if err != nil {
+      return err
+   }
+   f.Values = append(f.Values, value)
+   return nil
+}
+
+func (f *Filters) String() string {
+   var out []byte
+   for i, value := range f.Values {
+      if i >= 1 {
+         out = append(out, ' ')
+      }
+      out = fmt.Append(out, "-f ", &value)
+   }
+   return string(out)
+}
+
+func (f *Filter) Set(input string) error {
+   for _, pair := range strings.Split(input, ",") {
+      key, value, found := strings.Cut(pair, "=")
+      if !found {
+         return errors.New("invalid pair format")
+      }
+      var err error
+      switch key {
+      case "b":
+         _, err = fmt.Sscan(value, &f.Bandwidth)
+      case "c":
+         f.Codecs = value
+      case "h":
+         _, err = fmt.Sscan(value, &f.Height)
+      case "i":
+         f.Id = value
+      case "l":
+         f.Lang = value
+      case "r":
+         f.Role = value
+      default:
+         err = errors.New("unknown key")
+      }
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+func (f *Filter) String() string {
+   var out []byte
+   if f.Bandwidth >= 1 {
+      out = fmt.Append(out, "b=", f.Bandwidth)
+   }
+   if f.Codecs != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "c=", f.Codecs)
+   }
+   if f.Height >= 1 {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "h=", f.Height)
+   }
+   if f.Id != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "i=", f.Id)
+   }
+   if f.Lang != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "l=", f.Lang)
+   }
+   if f.Role != "" {
+      if out != nil {
+         out = append(out, ',')
+      }
+      out = fmt.Append(out, "r=", f.Role)
+   }
+   return string(out)
+}
+
+const FilterUsage = `b = bandwidth
+c = codecs
+h = height
+i = id
+l = lang
+r = role`
+
+type Filter struct {
+   Bandwidth int
+   Id        string
+   Height    int
+   Lang      string
+   Role      string
+   Codecs    string
+}
+
+type media_file struct {
+   key_id    []byte // tenc
+   pssh      []byte // pssh
+   timescale uint64 // mdhd
+   size      uint64 // trun
+   duration  uint64 // trun
+}
+
+var widevine_id, _ = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
+
+func (c *Config) widevine_key(media *media_file) ([]byte, error) {
+   if media.key_id == nil {
+      return nil, nil
+   }
+   private_key, err := os.ReadFile(c.PrivateKey)
+   if err != nil {
+      return nil, err
+   }
+   client_id, err := os.ReadFile(c.ClientId)
+   if err != nil {
+      return nil, err
+   }
+   var cdm widevine.Cdm
+   err = cdm.New(private_key, client_id, media.pssh)
+   if err != nil {
+      return nil, err
+   }
+   data, err := cdm.RequestBody()
+   if err != nil {
+      return nil, err
+   }
+   data, err = c.Send(data)
+   if err != nil {
+      return nil, err
+   }
+   var body widevine.ResponseBody
+   err = body.Unmarshal(data)
+   if err != nil {
+      return nil, err
+   }
+   block, err := cdm.Block(body)
+   if err != nil {
+      return nil, err
+   }
+   for container := range body.Container() {
+      if bytes.Equal(container.Id(), media.key_id) {
+         key := container.Key(block)
+         log.Printf("key %x", key)
+         var zero [16]byte
+         if !bytes.Equal(key, zero[:]) {
+            return key, nil
+         }
+      }
+   }
+   return nil, errors.New("widevine_key")
+}
+
+const widevine_urn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+
+func (m *media_file) initialization(data []byte) ([]byte, error) {
+   parsedInit, err := sofia.Parse(data)
+   if err != nil {
+      return nil, err
+   }
+   moov, ok := sofia.FindMoov(parsedInit)
+   if !ok {
+      return nil, sofia.Missing("moov")
+   }
+   if m.pssh == nil {
+      widevine_box, ok := moov.FindPssh(widevine_id)
+      if ok {
+         m.pssh = widevine_box.Data
+         log.Println("MP4 PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+      }
+   }
+   trak, ok := moov.Trak()
+   if !ok {
+      return nil, sofia.Missing("trak")
+   }
+   // THIS FIXES A/V SYNC WITH
+   // rakuten.tv
+   // BUT MIGHT BREAK THESE
+   // criterionchannel.com
+   // mubi.com
+   // paramountplus.com
+   // tubitv.com
+   trak.ReplaceEdts()
+   mdia, ok := trak.Mdia()
+   if !ok {
+      return nil, sofia.Missing("mdia")
+   }
+   mdhd, ok := mdia.Mdhd()
+   if !ok {
+      return nil, sofia.Missing("mdhd")
+   }
+   m.timescale = uint64(mdhd.Timescale)
+   minf, ok := mdia.Minf()
+   if !ok {
+      return nil, sofia.Missing("minf")
+   }
+   stbl, ok := minf.Stbl()
+   if !ok {
+      return nil, sofia.Missing("stbl")
+   }
+   stsd, ok := stbl.Stsd()
+   if !ok {
+      return nil, sofia.Missing("stsd")
+   }
+   sinf, _, ok := stsd.Sinf()
+   if ok {
+      schi, ok := sinf.Schi()
+      if !ok {
+         return nil, sofia.Missing("schi")
+      }
+      tenc, ok := schi.Tenc()
+      if !ok {
+         return nil, sofia.Missing("tenc")
+      }
+      m.key_id = tenc.DefaultKID[:]
+   }
+   err = moov.Sanitize()
+   if err != nil {
+      return nil, err
+   }
+   var finalMP4Data bytes.Buffer
+   for _, box := range parsedInit {
+      finalMP4Data.Write(box.Encode())
+   }
+   return finalMP4Data.Bytes(), nil
+}
+
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
+}
+
+// segment can be VTT or anything
+func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
+   if key == nil {
+      return data, nil
+   }
+   parsedSegment, err := sofia.Parse(data)
+   if err != nil {
+      return nil, err
+   }
+   if m.duration/m.timescale < 10*60 {
+      for _, moof := range sofia.AllMoof(parsedSegment) {
+         traf, ok := moof.Traf()
+         if !ok {
+            return nil, sofia.Missing("traf")
+         }
+         total_bytes, total_duration, err := traf.Totals()
+         if err != nil {
+            return nil, err
+         }
+         m.size += total_bytes
+         m.duration += total_duration
+      }
+      // Bandwidth in bps = (TotalBytes * 8 bits/byte) /
+      // (TotalDuration / Timescale in seconds)
+      // Simplified: (TotalBytes * 8 * Timescale) / TotalDuration
+      log.Println("bandwidth", m.size * 8 * m.timescale / m.duration)
+   }
+   err = sofia.Decrypt(parsedSegment, key)
+   if err != nil {
+      return nil, err
+   }
+   var finalMP4Data bytes.Buffer
+   for _, box := range parsedSegment {
+      finalMP4Data.Write(box.Encode())
+   }
+   return finalMP4Data.Bytes(), nil
+}
+
 func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
    switch {
    case represent.SegmentTemplate != nil:
@@ -725,6 +730,12 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
             return nil, err
          }
          requests[i] = media_request{url: address}
+      }
+      return requests, nil
+   case represent.SegmentList != nil:
+      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
+      for i, segment := range represent.SegmentList.SegmentUrl {
+         requests[i] = media_request{url: segment.Media[0]}
       }
       return requests, nil
    case represent.SegmentBase != nil:
@@ -744,7 +755,7 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
       }
       sidx, ok := sofia.FindSidx(parsed)
       if !ok {
-         return nil, errors.New("sidx box not found in file")
+         return nil, sofia.Missing("sidx")
       }
       requests := make([]media_request, len(sidx.References))
       for i, reference := range sidx.References {
@@ -757,19 +768,8 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
          }
       }
       return requests, nil
-   case represent.SegmentList != nil:
-      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
-      for i, segment := range represent.SegmentList.SegmentUrl {
-         requests[i] = media_request{url: segment.Media[0]}
-      }
-      return requests, nil
    }
    return []media_request{
       {url: represent.BaseUrl[0]},
    }, nil
-}
-
-type media_request struct {
-   url    *url.URL
-   header http.Header
 }

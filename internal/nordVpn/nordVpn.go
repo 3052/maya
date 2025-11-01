@@ -15,8 +15,8 @@ import (
 )
 
 func main() {
+   http.DefaultTransport = &nordVpn.Transport
    log.SetFlags(log.Ltime)
-   http.DefaultTransport = &http.Transport{Proxy: nordVpn.GetProxy}
    write := flag.Bool("w", false, "write")
    country_code := flag.String("c", "", "country code")
    flag.Parse()
