@@ -31,6 +31,13 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    if !ok {
       return nil, errors.New("could not find 'moov' box in init file")
    }
+   if m.pssh == nil {
+      widevine_box, ok := moov.FindPssh(widevine_id)
+      if ok {
+         m.pssh = widevine_box.Data
+         log.Println("MP4 PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+      }
+   }
    trak, ok := moov.Trak()
    if !ok {
       return nil, errors.New("could not find 'trak' in moov")
@@ -43,25 +50,42 @@ func (m *media_file) initialization(data []byte) ([]byte, error) {
    // paramountplus.com
    // tubitv.com
    trak.ReplaceEdts()
-   mdhd, ok := trak.Mdhd()
+   mdia, ok := trak.Mdia()
    if !ok {
-      return nil, errors.New("could not find 'mdhd' in trak to get timescale")
+      return nil, errors.New(".Mdia()")
+   }
+   mdhd, ok := mdia.Mdhd()
+   if !ok {
+      return nil, errors.New(".Mdhd()")
    }
    m.timescale = uint64(mdhd.Timescale)
+   minf, ok := mdia.Minf()
+   if !ok {
+      return nil, errors.New("could not find 'minf' box")
+   }
+   stbl, ok := minf.Stbl()
+   if !ok {
+      return nil, errors.New("could not find 'stbl' box")
+   }
+   stsd, ok := stbl.Stsd()
+   if !ok {
+      return nil, errors.New("could not find 'stsd' box")
+   }
+   sinf, _, ok := stsd.Sinf()
+   if ok {
+      schi, ok := sinf.Schi()
+      if !ok {
+         return nil, errors.New("could not find 'schi' box")
+      }
+      tenc, ok := schi.Tenc()
+      if !ok {
+         return nil, errors.New("could not find 'tenc' box")
+      }
+      m.key_id = tenc.DefaultKID[:]
+   }
    err = moov.Sanitize()
    if err != nil {
       return nil, err
-   }
-   if m.pssh == nil {
-      widevine_box, ok := moov.FindPssh(widevine_id)
-      if ok {
-         m.pssh = widevine_box.Data
-         log.Println("MP4 PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-      }
-   }
-   tenc, ok := trak.Stsd().Tenc()
-   if ok {
-      m.key_id = tenc.DefaultKID[:]
    }
    var finalMP4Data bytes.Buffer
    for _, box := range parsedInit {
