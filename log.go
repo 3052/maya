@@ -21,41 +21,6 @@ import (
    "time"
 )
 
-// segment can be VTT or anything
-func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
-   if key == nil {
-      return data, nil
-   }
-   parsedSegment, err := sofia.Parse(data)
-   if err != nil {
-      return nil, err
-   }
-   for _, moof := range sofia.AllMoof(parsedSegment) {
-      traf, ok := moof.Traf()
-      if !ok {
-         return nil, sofia.Missing("traf")
-      }
-      total_bytes, total_duration, err := traf.Totals()
-      if err != nil {
-         return nil, err
-      }
-      m.size += total_bytes
-      m.duration += total_duration
-   }
-   err = sofia.Decrypt(parsedSegment, key)
-   if err != nil {
-      return nil, err
-   }
-   var finalMP4Data bytes.Buffer
-   for _, box := range parsedSegment {
-      finalMP4Data.Write(box.Encode())
-   }
-   return finalMP4Data.Bytes(), nil
-}
-
-// processAndWriteSegments handles the sequential writing of downloaded segments.
-// It runs in its own goroutine, processing results from the workers,
-// writing them to a file in the correct order, and logging progress.
 func (m *media_file) processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
@@ -97,10 +62,8 @@ func (m *media_file) processAndWriteSegments(
             if m.duration > 0 { // Avoid division by zero
                bandwidth = m.size * 8 * m.timescale / m.duration
             }
-
-            // Final format: "bandwidth" word removed
             log.Printf(
-               "processed %d | remaining %d | ETA %s | %d bps",
+               "done %d | left %d | ETA %s | %d bps",
                progressVar.segmentA,
                progressVar.segmentB,
                progressVar.durationB().Truncate(time.Second),
@@ -111,6 +74,11 @@ func (m *media_file) processAndWriteSegments(
       }
    }
    doneChan <- nil
+}
+
+// keep last two terms separate
+func (p *progress) durationB() time.Duration {
+   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
 }
 
 func (p *progress) next() {
@@ -181,11 +149,6 @@ func (c *Config) Download(represent *dash.Representation) error {
 
 func (p *progress) durationA() time.Duration {
    return time.Since(p.timeA)
-}
-
-// keep last two terms separate
-func (p *progress) durationB() time.Duration {
-   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
 }
 
 type media_file struct {
@@ -577,4 +540,35 @@ type Config struct {
    // Widevine
    ClientId   string
    PrivateKey string
+}
+// segment can be VTT or anything
+func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
+   if key == nil {
+      return data, nil
+   }
+   parsedSegment, err := sofia.Parse(data)
+   if err != nil {
+      return nil, err
+   }
+   for _, moof := range sofia.AllMoof(parsedSegment) {
+      traf, ok := moof.Traf()
+      if !ok {
+         return nil, sofia.Missing("traf")
+      }
+      total_bytes, total_duration, err := traf.Totals()
+      if err != nil {
+         return nil, err
+      }
+      m.size += total_bytes
+      m.duration += total_duration
+   }
+   err = sofia.Decrypt(parsedSegment, key)
+   if err != nil {
+      return nil, err
+   }
+   var finalMP4Data bytes.Buffer
+   for _, box := range parsedSegment {
+      finalMP4Data.Write(box.Encode())
+   }
+   return finalMP4Data.Bytes(), nil
 }
