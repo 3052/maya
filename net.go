@@ -216,4 +216,3 @@ type Filter struct {
    Role      string
    Codecs    string
 }
-

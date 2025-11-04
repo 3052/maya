@@ -81,6 +81,16 @@ func (p *progress) durationB() time.Duration {
    return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
 }
 
+func (p *progress) durationA() time.Duration {
+   return time.Since(p.timeA)
+}
+
+func (p *progress) set(segmentB int) {
+   p.segmentB = segmentB
+   p.timeA = time.Now()
+   p.timeB = time.Now().Unix()
+}
+
 func (p *progress) next() {
    p.segmentA++
    p.segmentB--
@@ -147,10 +157,6 @@ func (c *Config) Download(represent *dash.Representation) error {
    return <-doneChan
 }
 
-func (p *progress) durationA() time.Duration {
-   return time.Since(p.timeA)
-}
-
 type media_file struct {
    key_id    []byte // tenc
    pssh      []byte // pssh
@@ -165,6 +171,7 @@ type progress struct {
    timeA    time.Time
    timeB    int64
 }
+
 func (i *index_range) Set(data string) error {
    _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
    if err != nil {
@@ -178,12 +185,6 @@ func (i *index_range) String() string {
 }
 
 type index_range [2]uint64
-
-func (p *progress) set(segmentB int) {
-   p.segmentB = segmentB
-   p.timeA = time.Now()
-   p.timeB = time.Now().Unix()
-}
 
 func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
    switch {
@@ -541,6 +542,7 @@ type Config struct {
    ClientId   string
    PrivateKey string
 }
+
 // segment can be VTT or anything
 func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    if key == nil {
