@@ -21,228 +21,6 @@ import (
    "time"
 )
 
-func (m *media_file) processAndWriteSegments(
-   doneChan chan<- error,
-   results <-chan result,
-   totalSegments int,
-   key []byte,
-   fileVar *os.File,
-) {
-   pending := make(map[int][]byte)
-   nextIndex := 0
-   var progressVar progress
-   progressVar.set(totalSegments)
-
-   for i := 0; i < totalSegments; i++ {
-      res := <-results
-      if res.err != nil {
-         doneChan <- res.err
-         return
-      }
-
-      pending[res.index] = res.data
-
-      for data, ok := pending[nextIndex]; ok; data, ok = pending[nextIndex] {
-         processedData, err := m.write_segment(data, key)
-         if err != nil {
-            doneChan <- err
-            return
-         }
-         if _, err = fileVar.Write(processedData); err != nil {
-            doneChan <- err
-            return
-         }
-         delete(pending, nextIndex)
-         nextIndex++
-
-         progressVar.next()
-         timeB := time.Now().Unix()
-         if timeB > progressVar.timeB {
-            var bandwidth uint64
-            if m.duration > 0 { // Avoid division by zero
-               bandwidth = m.size * 8 * m.timescale / m.duration
-            }
-            log.Printf(
-               "done %d | left %d | ETA %s | %d bps",
-               progressVar.segmentA,
-               progressVar.segmentB,
-               progressVar.durationB().Truncate(time.Second),
-               bandwidth,
-            )
-            progressVar.timeB = timeB
-         }
-      }
-   }
-   doneChan <- nil
-}
-
-// keep last two terms separate
-func (p *progress) durationB() time.Duration {
-   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
-}
-
-func (p *progress) durationA() time.Duration {
-   return time.Since(p.timeA)
-}
-
-func (p *progress) set(segmentB int) {
-   p.segmentB = segmentB
-   p.timeA = time.Now()
-   p.timeB = time.Now().Unix()
-}
-
-func (p *progress) next() {
-   p.segmentA++
-   p.segmentB--
-}
-
-func (c *Config) Download(represent *dash.Representation) error {
-   var media media_file
-   if err := media.New(represent); err != nil {
-      return err
-   }
-   fileVar, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer fileVar.Close()
-
-   if err := c.download_initialization(represent, &media, fileVar); err != nil {
-      return err
-   }
-
-   key, err := c.key(&media)
-   if err != nil {
-      return err
-   }
-
-   requests, err := c.get_media_requests(represent)
-   if err != nil {
-      return err
-   }
-
-   if len(requests) == 0 {
-      return nil
-   }
-
-   numWorkers := c.Threads
-   if numWorkers < 1 {
-      numWorkers = 1
-   }
-   jobs := make(chan job, len(requests))
-   results := make(chan result, len(requests))
-   doneChan := make(chan error, 1)
-
-   // Launch the writer goroutine as a method on our media_file instance.
-   // This is much cleaner than the previous closure.
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, fileVar)
-
-   // Start worker goroutines
-   for w := 0; w < numWorkers; w++ {
-      go func() {
-         for j := range jobs {
-            data, err := get_segment(j.request.url, j.request.header)
-            results <- result{index: j.index, data: data, err: err}
-         }
-      }()
-   }
-
-   // Send all jobs
-   for i, req := range requests {
-      jobs <- job{index: i, request: req}
-   }
-   close(jobs)
-
-   // Block and wait for the final status from the writer.
-   return <-doneChan
-}
-
-type media_file struct {
-   key_id    []byte // tenc
-   pssh      []byte // pssh
-   timescale uint64 // mdhd
-   size      uint64 // trun
-   duration  uint64 // trun
-}
-
-type progress struct {
-   segmentA int64
-   segmentB int
-   timeA    time.Time
-   timeB    int64
-}
-
-func (i *index_range) Set(data string) error {
-   _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
-   if err != nil {
-      return err
-   }
-   return nil
-}
-
-func (i *index_range) String() string {
-   return fmt.Sprintf("%v-%v", i[0], i[1])
-}
-
-type index_range [2]uint64
-
-func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
-   switch {
-   case represent.SegmentTemplate != nil:
-      var segments []int
-      for rep := range represent.Representation() {
-         segments = slices.AppendSeq(segments, rep.Segment())
-      }
-      requests := make([]media_request, len(segments))
-      for i, segment := range segments {
-         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
-         if err != nil {
-            return nil, err
-         }
-         requests[i] = media_request{url: address}
-      }
-      return requests, nil
-   case represent.SegmentList != nil:
-      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
-      for i, segment := range represent.SegmentList.SegmentUrl {
-         requests[i] = media_request{url: segment.Media[0]}
-      }
-      return requests, nil
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-      data, err := get_segment(represent.BaseUrl[0], head)
-      if err != nil {
-         return nil, err
-      }
-      parsed, err := sofia.Parse(data)
-      if err != nil {
-         return nil, err
-      }
-      var index index_range
-      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
-         return nil, err
-      }
-      sidx, ok := sofia.FindSidx(parsed)
-      if !ok {
-         return nil, sofia.Missing("sidx")
-      }
-      requests := make([]media_request, len(sidx.References))
-      for i, reference := range sidx.References {
-         index[0] = index[1] + 1
-         index[1] += uint64(reference.ReferencedSize)
-         range_head := http.Header{}
-         range_head.Set("range", "bytes="+index.String())
-         requests[i] = media_request{
-            url: represent.BaseUrl[0], header: range_head,
-         }
-      }
-      return requests, nil
-   }
-   return []media_request{
-      {url: represent.BaseUrl[0]},
-   }, nil
-}
 func (c *Config) widevine_key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
@@ -573,4 +351,226 @@ func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
       finalMP4Data.Write(box.Encode())
    }
    return finalMP4Data.Bytes(), nil
+}
+func (m *media_file) processAndWriteSegments(
+   doneChan chan<- error,
+   results <-chan result,
+   totalSegments int,
+   key []byte,
+   fileVar *os.File,
+) {
+   pending := make(map[int][]byte)
+   nextIndex := 0
+   var progressVar progress
+   progressVar.set(totalSegments)
+
+   for i := 0; i < totalSegments; i++ {
+      res := <-results
+      if res.err != nil {
+         doneChan <- res.err
+         return
+      }
+
+      pending[res.index] = res.data
+
+      for data, ok := pending[nextIndex]; ok; data, ok = pending[nextIndex] {
+         processedData, err := m.write_segment(data, key)
+         if err != nil {
+            doneChan <- err
+            return
+         }
+         if _, err = fileVar.Write(processedData); err != nil {
+            doneChan <- err
+            return
+         }
+         delete(pending, nextIndex)
+         nextIndex++
+
+         progressVar.next()
+         timeB := time.Now().Unix()
+         if timeB > progressVar.timeB {
+            var bandwidth uint64
+            if m.duration > 0 { // Avoid division by zero
+               bandwidth = m.size * 8 * m.timescale / m.duration
+            }
+            log.Printf(
+               "done %d | left %d | ETA %s | %d bps",
+               progressVar.segmentA,
+               progressVar.segmentB,
+               progressVar.durationB().Truncate(time.Second),
+               bandwidth,
+            )
+            progressVar.timeB = timeB
+         }
+      }
+   }
+   doneChan <- nil
+}
+
+// keep last two terms separate
+func (p *progress) durationB() time.Duration {
+   return p.durationA() * time.Duration(p.segmentB) / time.Duration(p.segmentA)
+}
+
+func (p *progress) durationA() time.Duration {
+   return time.Since(p.timeA)
+}
+
+func (p *progress) set(segmentB int) {
+   p.segmentB = segmentB
+   p.timeA = time.Now()
+   p.timeB = time.Now().Unix()
+}
+
+func (p *progress) next() {
+   p.segmentA++
+   p.segmentB--
+}
+
+func (c *Config) Download(represent *dash.Representation) error {
+   var media media_file
+   if err := media.New(represent); err != nil {
+      return err
+   }
+   fileVar, err := create(represent)
+   if err != nil {
+      return err
+   }
+   defer fileVar.Close()
+
+   if err := c.download_initialization(represent, &media, fileVar); err != nil {
+      return err
+   }
+
+   key, err := c.key(&media)
+   if err != nil {
+      return err
+   }
+
+   requests, err := c.get_media_requests(represent)
+   if err != nil {
+      return err
+   }
+
+   if len(requests) == 0 {
+      return nil
+   }
+
+   numWorkers := c.Threads
+   if numWorkers < 1 {
+      numWorkers = 1
+   }
+   jobs := make(chan job, len(requests))
+   results := make(chan result, len(requests))
+   doneChan := make(chan error, 1)
+
+   // Launch the writer goroutine as a method on our media_file instance.
+   // This is much cleaner than the previous closure.
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, fileVar)
+
+   // Start worker goroutines
+   for w := 0; w < numWorkers; w++ {
+      go func() {
+         for j := range jobs {
+            data, err := get_segment(j.request.url, j.request.header)
+            results <- result{index: j.index, data: data, err: err}
+         }
+      }()
+   }
+
+   // Send all jobs
+   for i, req := range requests {
+      jobs <- job{index: i, request: req}
+   }
+   close(jobs)
+
+   // Block and wait for the final status from the writer.
+   return <-doneChan
+}
+
+type media_file struct {
+   key_id    []byte // tenc
+   pssh      []byte // pssh
+   timescale uint64 // mdhd
+   size      uint64 // trun
+   duration  uint64 // trun
+}
+
+type progress struct {
+   segmentA int64
+   segmentB int
+   timeA    time.Time
+   timeB    int64
+}
+
+func (i *index_range) Set(data string) error {
+   _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
+   if err != nil {
+      return err
+   }
+   return nil
+}
+
+func (i *index_range) String() string {
+   return fmt.Sprintf("%v-%v", i[0], i[1])
+}
+
+type index_range [2]uint64
+
+func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
+   switch {
+   case represent.SegmentTemplate != nil:
+      var segments []int
+      for rep := range represent.Representation() {
+         segments = slices.AppendSeq(segments, rep.Segment())
+      }
+      requests := make([]media_request, len(segments))
+      for i, segment := range segments {
+         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
+         if err != nil {
+            return nil, err
+         }
+         requests[i] = media_request{url: address}
+      }
+      return requests, nil
+   case represent.SegmentList != nil:
+      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
+      for i, segment := range represent.SegmentList.SegmentUrl {
+         requests[i] = media_request{url: segment.Media[0]}
+      }
+      return requests, nil
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+      data, err := get_segment(represent.BaseUrl[0], head)
+      if err != nil {
+         return nil, err
+      }
+      parsed, err := sofia.Parse(data)
+      if err != nil {
+         return nil, err
+      }
+      var index index_range
+      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
+         return nil, err
+      }
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return nil, sofia.Missing("sidx")
+      }
+      requests := make([]media_request, len(sidx.References))
+      for i, reference := range sidx.References {
+         index[0] = index[1] + 1
+         index[1] += uint64(reference.ReferencedSize)
+         range_head := http.Header{}
+         range_head.Set("range", "bytes="+index.String())
+         requests[i] = media_request{
+            url: represent.BaseUrl[0], header: range_head,
+         }
+      }
+      return requests, nil
+   }
+   return []media_request{
+      {url: represent.BaseUrl[0]},
+   }, nil
 }
