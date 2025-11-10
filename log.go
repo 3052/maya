@@ -57,7 +57,10 @@ func (c *Config) widevine_key(media *media_file) ([]byte, error) {
    }
    for container := range body.Container() {
       if bytes.Equal(container.Id(), media.key_id) {
-         key := container.Key(block)
+         key, err := container.Key(block)
+         if err != nil {
+            return nil, err
+         }
          log.Printf("key %x", key)
          var zero [16]byte
          if !bytes.Equal(key, zero[:]) {
