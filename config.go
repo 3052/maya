@@ -18,50 +18,46 @@ func (c *Config) widevine_key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
    }
-   private_key, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
-   }
    client_id, err := os.ReadFile(c.ClientId)
    if err != nil {
       return nil, err
    }
-   var cdm widevine.Cdm
-   err = cdm.New(private_key, client_id, media.pssh)
+   pem_bytes, err := os.ReadFile(c.PrivateKey)
    if err != nil {
       return nil, err
    }
-   data, err := cdm.RequestBody()
+   req_bytes, err := widevine.BuildLicenseRequest(client_id, media.pssh, 1)
    if err != nil {
       return nil, err
    }
-   data, err = c.Send(data)
+   private_key, err := widevine.ParsePrivateKey(pem_bytes)
    if err != nil {
       return nil, err
    }
-   var body widevine.ResponseBody
-   err = body.Unmarshal(data)
+   signed_bytes, err := widevine.BuildSignedMessage(req_bytes, private_key)
    if err != nil {
       return nil, err
    }
-   block, err := cdm.Block(body)
+   signed_bytes, err = c.Send(signed_bytes)
    if err != nil {
       return nil, err
    }
-   for container := range body.Container() {
-      if bytes.Equal(container.Id(), media.key_id) {
-         key, err := container.Key(block)
-         if err != nil {
-            return nil, err
-         }
-         log.Printf("key %x", key)
-         var zero [16]byte
-         if !bytes.Equal(key, zero[:]) {
-            return key, nil
-         }
-      }
+   keys, err := widevine.ParseLicenseResponse(
+      signed_bytes, req_bytes, private_key,
+   )
+   if err != nil {
+      return nil, err
    }
-   return nil, errors.New("widevine_key")
+   found_key, ok := widevine.GetKey(keys, media.key_id)
+   if !ok {
+      return nil, errors.New("GetKey: key not found in response")
+   }
+   var zero [16]byte
+   if bytes.Equal(found_key, zero[:]) {
+      return nil, errors.New("zero key")
+   }
+   log.Printf("key %x", found_key)
+   return found_key, nil
 }
 
 func (c *Config) playReady_key(media *media_file) ([]byte, error) {
