@@ -14,50 +14,16 @@ import (
    "slices"
 )
 
-func (c *Config) widevine_key(media *media_file) ([]byte, error) {
+func (c *Config) key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
    }
-   client_id, err := os.ReadFile(c.ClientId)
-   if err != nil {
-      return nil, err
+   if c.CertificateChain != "" {
+      if c.EncryptSignKey != "" {
+         return c.playReady_key(media)
+      }
    }
-   pem_bytes, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
-   }
-   req_bytes, err := widevine.BuildLicenseRequest(client_id, media.pssh, 1)
-   if err != nil {
-      return nil, err
-   }
-   private_key, err := widevine.ParsePrivateKey(pem_bytes)
-   if err != nil {
-      return nil, err
-   }
-   signed_bytes, err := widevine.BuildSignedMessage(req_bytes, private_key)
-   if err != nil {
-      return nil, err
-   }
-   signed_bytes, err = c.Send(signed_bytes)
-   if err != nil {
-      return nil, err
-   }
-   keys, err := widevine.ParseLicenseResponse(
-      signed_bytes, req_bytes, private_key,
-   )
-   if err != nil {
-      return nil, err
-   }
-   found_key, ok := widevine.GetKey(keys, media.key_id)
-   if !ok {
-      return nil, errors.New("GetKey: key not found in response")
-   }
-   var zero [16]byte
-   if bytes.Equal(found_key, zero[:]) {
-      return nil, errors.New("zero key")
-   }
-   log.Printf("key %x", found_key)
-   return found_key, nil
+   return c.widevine_key(media)
 }
 
 func (c *Config) playReady_key(media *media_file) ([]byte, error) {
@@ -98,13 +64,47 @@ func (c *Config) playReady_key(media *media_file) ([]byte, error) {
    return key, nil
 }
 
-func (c *Config) key(media *media_file) ([]byte, error) {
-   if c.CertificateChain != "" {
-      if c.EncryptSignKey != "" {
-         return c.playReady_key(media)
-      }
+func (c *Config) widevine_key(media *media_file) ([]byte, error) {
+   client_id, err := os.ReadFile(c.ClientId)
+   if err != nil {
+      return nil, err
    }
-   return c.widevine_key(media)
+   pem_bytes, err := os.ReadFile(c.PrivateKey)
+   if err != nil {
+      return nil, err
+   }
+   req_bytes, err := widevine.BuildLicenseRequest(client_id, media.pssh, 1)
+   if err != nil {
+      return nil, err
+   }
+   private_key, err := widevine.ParsePrivateKey(pem_bytes)
+   if err != nil {
+      return nil, err
+   }
+   signed_bytes, err := widevine.BuildSignedMessage(req_bytes, private_key)
+   if err != nil {
+      return nil, err
+   }
+   signed_bytes, err = c.Send(signed_bytes)
+   if err != nil {
+      return nil, err
+   }
+   keys, err := widevine.ParseLicenseResponse(
+      signed_bytes, req_bytes, private_key,
+   )
+   if err != nil {
+      return nil, err
+   }
+   found_key, ok := widevine.GetKey(keys, media.key_id)
+   if !ok {
+      return nil, errors.New("GetKey: key not found in response")
+   }
+   var zero [16]byte
+   if bytes.Equal(found_key, zero[:]) {
+      return nil, errors.New("zero key")
+   }
+   log.Printf("key %x", found_key)
+   return found_key, nil
 }
 
 func (c *Config) download_initialization(
