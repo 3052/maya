@@ -2,109 +2,109 @@ package net
 
 import (
    "41.neocities.org/dash"
-   "41.neocities.org/drm/playReady"
-   "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
-   "bytes"
+   "encoding/base64"
    "errors"
+   "fmt"
+   "io"
    "log"
-   "math/big"
+   "math"
    "net/http"
    "os"
    "slices"
+   "strings"
 )
 
-func (c *Config) key(media *media_file) ([]byte, error) {
-   if media.key_id == nil {
-      return nil, nil
+func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
    }
-   if c.CertificateChain != "" {
-      if c.EncryptSignKey != "" {
-         return c.playReady_key(media)
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   var mpd dash.Mpd
+   err = mpd.Unmarshal(data)
+   if err != nil {
+      return err
+   }
+   mpd.Set(resp.Request.URL)
+   represents := slices.SortedFunc(mpd.Representation(),
+      func(a, b *dash.Representation) int {
+         return a.Bandwidth - b.Bandwidth
+      },
+   )
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent)
+   }
+   for _, target := range f.Values {
+      index := target.index(represents)
+      if index == -1 {
+         continue
+      }
+      represent := represents[index]
+      err = configVar.Download(represent)
+      if err != nil {
+         return err
       }
    }
-   return c.widevine_key(media)
+   return nil
 }
 
-func (c *Config) playReady_key(media *media_file) ([]byte, error) {
-   data, err := os.ReadFile(c.CertificateChain)
-   if err != nil {
-      return nil, err
+func (f *Filter) index(streams []*dash.Representation) int {
+   const penalty_factor = 2
+   min_score := math.MaxInt
+   best_stream := -1
+   for i, candidate := range streams {
+      if f.Codecs != "" {
+         if candidate.Codecs != nil {
+            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
+               continue
+            }
+         }
+      }
+      if f.Height >= 1 {
+         if candidate.Height != nil {
+            if *candidate.Height != f.Height {
+               continue
+            }
+         }
+      }
+      if f.Id != "" {
+         if candidate.Id == f.Id {
+            return i
+         } else {
+            continue
+         }
+      }
+      if f.Lang != "" {
+         if candidate.GetAdaptationSet().Lang != f.Lang {
+            continue
+         }
+      }
+      if f.Role != "" {
+         if candidate.GetAdaptationSet().GetRole() != f.Role {
+            continue
+         }
+      }
+      var score int
+      if candidate.Bandwidth >= f.Bandwidth {
+         score = candidate.Bandwidth - f.Bandwidth
+      } else {
+         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
+      }
+      if score < min_score {
+         min_score = score
+         best_stream = i
+      }
    }
-   var chain playReady.Chain
-   err = chain.Decode(data)
-   if err != nil {
-      return nil, err
-   }
-   data, err = os.ReadFile(c.EncryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   encryptSignKey := new(big.Int).SetBytes(data)
-   log.Printf("key ID %x", media.key_id)
-   playReady.UuidOrGuid(media.key_id)
-   data, err = chain.RequestBody(media.key_id, encryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   data, err = c.Send(data)
-   if err != nil {
-      return nil, err
-   }
-   var license playReady.License
-   coord, err := license.Decrypt(data, encryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
-      return nil, errors.New("key ID mismatch")
-   }
-   key := coord.Key()
-   log.Printf("key %x", key)
-   return key, nil
-}
-
-func (c *Config) widevine_key(media *media_file) ([]byte, error) {
-   client_id, err := os.ReadFile(c.ClientId)
-   if err != nil {
-      return nil, err
-   }
-   pem_bytes, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
-   }
-   req_bytes, err := widevine.BuildLicenseRequest(client_id, media.pssh, 1)
-   if err != nil {
-      return nil, err
-   }
-   private_key, err := widevine.ParsePrivateKey(pem_bytes)
-   if err != nil {
-      return nil, err
-   }
-   signed_bytes, err := widevine.BuildSignedMessage(req_bytes, private_key)
-   if err != nil {
-      return nil, err
-   }
-   signed_bytes, err = c.Send(signed_bytes)
-   if err != nil {
-      return nil, err
-   }
-   keys, err := widevine.ParseLicenseResponse(
-      signed_bytes, req_bytes, private_key,
-   )
-   if err != nil {
-      return nil, err
-   }
-   found_key, ok := widevine.GetKey(keys, media.key_id)
-   if !ok {
-      return nil, errors.New("GetKey: key not found in response")
-   }
-   var zero [16]byte
-   if bytes.Equal(found_key, zero[:]) {
-      return nil, errors.New("zero key")
-   }
-   log.Printf("key %x", found_key)
-   return found_key, nil
+   return best_stream
 }
 
 func (c *Config) download_initialization(
@@ -144,18 +144,6 @@ func (c *Config) download_initialization(
    }
    _, err = fileVar.Write(data)
    return err
-}
-
-type Config struct {
-   Send func([]byte) ([]byte, error)
-   // Number of segments to download in parallel
-   Threads int
-   // PlayReady
-   CertificateChain string
-   EncryptSignKey   string
-   // Widevine
-   ClientId   string
-   PrivateKey string
 }
 
 func (c *Config) Download(represent *dash.Representation) error {
@@ -275,4 +263,40 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
    return []media_request{
       {url: represent.BaseUrl[0]},
    }, nil
+}
+
+func create(represent *dash.Representation) (*os.File, error) {
+   var name strings.Builder
+   name.WriteString(represent.Id)
+   switch *represent.MimeType {
+   case "audio/mp4":
+      name.WriteString(".m4a")
+   case "text/vtt":
+      name.WriteString(".vtt")
+   case "video/mp4":
+      name.WriteString(".m4v")
+   }
+   return os_create(name.String())
+}
+
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
 }
