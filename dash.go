@@ -49,12 +49,73 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
          continue
       }
       represent := represents[index]
-      err = configVar.Download(represent)
+      err = configVar.download(represent)
       if err != nil {
          return err
       }
    }
    return nil
+}
+
+func (c *Config) download(represent *dash.Representation) error {
+   var media media_file
+   if err := media.New(represent); err != nil {
+      return err
+   }
+   fileVar, err := create(represent)
+   if err != nil {
+      return err
+   }
+   defer fileVar.Close()
+
+   if err := c.download_initialization(represent, &media, fileVar); err != nil {
+      return err
+   }
+
+   key, err := c.key(&media)
+   if err != nil {
+      return err
+   }
+
+   requests, err := c.get_media_requests(represent)
+   if err != nil {
+      return err
+   }
+
+   if len(requests) == 0 {
+      return nil
+   }
+
+   numWorkers := c.Threads
+   if numWorkers < 1 {
+      numWorkers = 1
+   }
+   jobs := make(chan job, len(requests))
+   results := make(chan result, len(requests))
+   doneChan := make(chan error, 1)
+
+   // Launch the writer goroutine as a method on our media_file instance.
+   // This is much cleaner than the previous closure.
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, fileVar)
+
+   // Start worker goroutines
+   for w := 0; w < numWorkers; w++ {
+      go func() {
+         for j := range jobs {
+            data, err := get_segment(j.request.url, j.request.header)
+            results <- result{index: j.index, data: data, err: err}
+         }
+      }()
+   }
+
+   // Send all jobs
+   for i, req := range requests {
+      jobs <- job{index: i, request: req}
+   }
+   close(jobs)
+
+   // Block and wait for the final status from the writer.
+   return <-doneChan
 }
 
 func (f *Filter) index(streams []*dash.Representation) int {
@@ -144,67 +205,6 @@ func (c *Config) download_initialization(
    }
    _, err = fileVar.Write(data)
    return err
-}
-
-func (c *Config) Download(represent *dash.Representation) error {
-   var media media_file
-   if err := media.New(represent); err != nil {
-      return err
-   }
-   fileVar, err := create(represent)
-   if err != nil {
-      return err
-   }
-   defer fileVar.Close()
-
-   if err := c.download_initialization(represent, &media, fileVar); err != nil {
-      return err
-   }
-
-   key, err := c.key(&media)
-   if err != nil {
-      return err
-   }
-
-   requests, err := c.get_media_requests(represent)
-   if err != nil {
-      return err
-   }
-
-   if len(requests) == 0 {
-      return nil
-   }
-
-   numWorkers := c.Threads
-   if numWorkers < 1 {
-      numWorkers = 1
-   }
-   jobs := make(chan job, len(requests))
-   results := make(chan result, len(requests))
-   doneChan := make(chan error, 1)
-
-   // Launch the writer goroutine as a method on our media_file instance.
-   // This is much cleaner than the previous closure.
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, fileVar)
-
-   // Start worker goroutines
-   for w := 0; w < numWorkers; w++ {
-      go func() {
-         for j := range jobs {
-            data, err := get_segment(j.request.url, j.request.header)
-            results <- result{index: j.index, data: data, err: err}
-         }
-      }()
-   }
-
-   // Send all jobs
-   for i, req := range requests {
-      jobs <- job{index: i, request: req}
-   }
-   close(jobs)
-
-   // Block and wait for the final status from the writer.
-   return <-doneChan
 }
 
 func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
