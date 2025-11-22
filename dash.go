@@ -71,7 +71,119 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    return nil
 }
 
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
+}
+
+func (c *Config) download_initialization(
+   represent *dash.Representation, media *media_file, fileVar *os.File,
+) error {
+   var (
+      data []byte
+      err  error
+   )
+   switch {
+   case represent.SegmentList != nil:
+      data, err = get_segment(represent.SegmentList.Initialization.SourceUrl[0], nil)
+
+   case represent.SegmentTemplate != nil && represent.SegmentTemplate.Initialization != "":
+      address, urlErr := represent.SegmentTemplate.Initialization.Url(represent)
+      if urlErr != nil {
+         return urlErr
+      }
+      data, err = get_segment(address, nil)
+
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
+      data, err = get_segment(represent.BaseUrl[0], head)
+
+   default:
+      // No initialization segment to download
+      return nil
+   }
+
+   if err != nil {
+      return err
+   }
+   data, err = media.initialization(data)
+   if err != nil {
+      return err
+   }
+   _, err = fileVar.Write(data)
+   return err
+}
+
 ////////////////////////////////////////////////////////////////////////
+
+func (f *Filter) index(streams []*dash.Representation) int {
+   const penalty_factor = 2
+   min_score := math.MaxInt
+   best_stream := -1
+   for i, candidate := range streams {
+      if f.Codecs != "" {
+         if candidate.Codecs != nil {
+            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
+               continue
+            }
+         }
+      }
+      if f.Height >= 1 {
+         if candidate.Height != nil {
+            if *candidate.Height != f.Height {
+               continue
+            }
+         }
+      }
+      if f.Id != "" {
+         if candidate.Id == f.Id {
+            return i
+         } else {
+            continue
+         }
+      }
+      if f.Lang != "" {
+         if candidate.GetAdaptationSet().Lang != f.Lang {
+            continue
+         }
+      }
+      if f.Role != "" {
+         if candidate.GetAdaptationSet().GetRole() != f.Role {
+            continue
+         }
+      }
+      var score int
+      if candidate.Bandwidth >= f.Bandwidth {
+         score = candidate.Bandwidth - f.Bandwidth
+      } else {
+         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
+      }
+      if score < min_score {
+         min_score = score
+         best_stream = i
+      }
+   }
+   return best_stream
+}
+//49
 
 func (c *Config) download(represent *dash.Representation) error {
    var media media_file
@@ -133,95 +245,7 @@ func (c *Config) download(represent *dash.Representation) error {
    // Block and wait for the final status from the writer.
    return <-doneChan
 }
-
-func (f *Filter) index(streams []*dash.Representation) int {
-   const penalty_factor = 2
-   min_score := math.MaxInt
-   best_stream := -1
-   for i, candidate := range streams {
-      if f.Codecs != "" {
-         if candidate.Codecs != nil {
-            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
-               continue
-            }
-         }
-      }
-      if f.Height >= 1 {
-         if candidate.Height != nil {
-            if *candidate.Height != f.Height {
-               continue
-            }
-         }
-      }
-      if f.Id != "" {
-         if candidate.Id == f.Id {
-            return i
-         } else {
-            continue
-         }
-      }
-      if f.Lang != "" {
-         if candidate.GetAdaptationSet().Lang != f.Lang {
-            continue
-         }
-      }
-      if f.Role != "" {
-         if candidate.GetAdaptationSet().GetRole() != f.Role {
-            continue
-         }
-      }
-      var score int
-      if candidate.Bandwidth >= f.Bandwidth {
-         score = candidate.Bandwidth - f.Bandwidth
-      } else {
-         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
-      }
-      if score < min_score {
-         min_score = score
-         best_stream = i
-      }
-   }
-   return best_stream
-}
-
-func (c *Config) download_initialization(
-   represent *dash.Representation, media *media_file, fileVar *os.File,
-) error {
-   var (
-      data []byte
-      err  error
-   )
-   switch {
-   case represent.SegmentList != nil:
-      data, err = get_segment(represent.SegmentList.Initialization.SourceUrl[0], nil)
-
-   case represent.SegmentTemplate != nil && represent.SegmentTemplate.Initialization != "":
-      address, urlErr := represent.SegmentTemplate.Initialization.Url(represent)
-      if urlErr != nil {
-         return urlErr
-      }
-      data, err = get_segment(address, nil)
-
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
-      data, err = get_segment(represent.BaseUrl[0], head)
-
-   default:
-      // No initialization segment to download
-      return nil
-   }
-
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = fileVar.Write(data)
-   return err
-}
+//60
 
 func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
    switch {
@@ -280,25 +304,4 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
       {url: represent.BaseUrl[0]},
    }, nil
 }
-
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box sofia.PsshBox
-            err = box.Parse(data)
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-            break
-         }
-      }
-   }
-   return nil
-}
+//57
