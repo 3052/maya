@@ -15,6 +15,20 @@ import (
    "strings"
 )
 
+func create(represent *dash.Representation) (*os.File, error) {
+   var name strings.Builder
+   name.WriteString(represent.Id)
+   switch *represent.MimeType {
+   case "audio/mp4":
+      name.WriteString(".m4a")
+   case "text/vtt":
+      name.WriteString(".vtt")
+   case "video/mp4":
+      name.WriteString(".m4v")
+   }
+   return os_create(name.String())
+}
+
 func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    if resp.StatusCode != http.StatusOK {
       var data strings.Builder
@@ -56,6 +70,8 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    }
    return nil
 }
+
+////////////////////////////////////////////////////////////////////////
 
 func (c *Config) download(represent *dash.Representation) error {
    var media media_file
@@ -263,20 +279,6 @@ func (c *Config) get_media_requests(represent *dash.Representation) ([]media_req
    return []media_request{
       {url: represent.BaseUrl[0]},
    }, nil
-}
-
-func create(represent *dash.Representation) (*os.File, error) {
-   var name strings.Builder
-   name.WriteString(represent.Id)
-   switch *represent.MimeType {
-   case "audio/mp4":
-      name.WriteString(".m4a")
-   case "text/vtt":
-      name.WriteString(".vtt")
-   case "video/mp4":
-      name.WriteString(".m4v")
-   }
-   return os_create(name.String())
 }
 
 func (m *media_file) New(represent *dash.Representation) error {
