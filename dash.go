@@ -15,47 +15,47 @@ import (
    "strings"
 )
 
-func (f *Filter) index(streams []*dash.Representation) int {
+func (f *Filter) index(groups [][]*dash.Representation) int {
    const penalty_factor = 2
    min_score := math.MaxInt
    best_stream := -1
-   for i, candidate := range streams {
+   for i, group := range groups {
       if f.Codecs != "" {
-         if candidate.Codecs != nil {
-            if !strings.HasPrefix(*candidate.Codecs, f.Codecs) {
+         if group.Codecs != nil {
+            if !strings.HasPrefix(*group.Codecs, f.Codecs) {
                continue
             }
          }
       }
       if f.Height >= 1 {
-         if candidate.Height != nil {
-            if *candidate.Height != f.Height {
+         if group.Height != nil {
+            if *group.Height != f.Height {
                continue
             }
          }
       }
       if f.Id != "" {
-         if candidate.Id == f.Id {
+         if group.Id == f.Id {
             return i
          } else {
             continue
          }
       }
       if f.Lang != "" {
-         if candidate.GetAdaptationSet().Lang != f.Lang {
+         if group.GetAdaptationSet().Lang != f.Lang {
             continue
          }
       }
       if f.Role != "" {
-         if candidate.GetAdaptationSet().GetRole() != f.Role {
+         if group.GetAdaptationSet().GetRole() != f.Role {
             continue
          }
       }
       var score int
-      if candidate.Bandwidth >= f.Bandwidth {
-         score = candidate.Bandwidth - f.Bandwidth
+      if group.Bandwidth >= f.Bandwidth {
+         score = group.Bandwidth - f.Bandwidth
       } else {
-         score = (f.Bandwidth - candidate.Bandwidth) * penalty_factor
+         score = (f.Bandwidth - group.Bandwidth) * penalty_factor
       }
       if score < min_score {
          min_score = score
@@ -125,8 +125,9 @@ func (c *Config) download(represent *dash.Representation) error {
    // Block and wait for the final status from the writer.
    return <-doneChan
 }
-func (c *Config) get_media_requests(represents []*dash.Representation) ([]media_request, error) {
-   represent := represents[0]
+
+func (c *Config) get_media_requests(group []*dash.Representation) ([]media_request, error) {
+   represent := group[0]
    base_url, err := represent.ResolveBaseURL()
    if err != nil {
       return nil, err
@@ -135,7 +136,7 @@ func (c *Config) get_media_requests(represents []*dash.Representation) ([]media_
    switch {
    case template != nil:
       var requests []media_request
-      for _, represent := range represents {
+      for _, represent := range group {
          addresses, err := template.GetSegmentURLs(represent)
          if err != nil {
             return nil, err
@@ -203,26 +204,26 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
       return err
    }
    mpd.MPDURL = resp.Request.URL
-   var represents [][]*dash.Representation
-   for _, represent := range mpd.GetRepresentations() {
-      represents = append(represents, represent)
+   var groups [][]*dash.Representation
+   for _, group := range mpd.GetRepresentations() {
+      groups = append(groups, group)
    }
-   slices.SortFunc(represents, func(a, b []*dash.Representation) int {
+   slices.SortFunc(groups, func(a, b []*dash.Representation) int {
       return a[0].Bandwidth - b[0].Bandwidth
    })
-   for i, represent := range represents {
+   for i, group := range groups {
       if i >= 1 {
          fmt.Println()
       }
-      fmt.Println(represent[0])
+      fmt.Println(group[0])
    }
    for _, target := range f.Values {
-      index := target.index(represents)
+      index := target.index(groups)
       if index == -1 {
          continue
       }
-      represent := represents[index]
-      err = configVar.download(represent)
+      group := groups[index]
+      err = configVar.download(group)
       if err != nil {
          return err
       }
