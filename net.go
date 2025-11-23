@@ -154,6 +154,7 @@ type Filter struct {
    Role      string
    Codecs    string
 }
+
 func (c *Config) key(media *media_file) ([]byte, error) {
    if media.key_id == nil {
       return nil, nil
@@ -387,6 +388,7 @@ func (m *media_file) write_segment(data, key []byte) ([]byte, error) {
    }
    return finalMP4Data.Bytes(), nil
 }
+
 func (m *media_file) processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
