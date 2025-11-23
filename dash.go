@@ -15,185 +15,6 @@ import (
    "strings"
 )
 
-func (c *Config) get_media_requests(represents []*dash.Representation) ([]media_request, error) {
-   represent := represents[0]
-   base_url, err := represent.ResolveBaseURL()
-   if err != nil {
-      return nil, err
-   }
-   template := represent.GetSegmentTemplate()
-   switch {
-   case template != nil:
-      var requests []media_request
-      for _, represent := range represents {
-         addresses, err := template.GetSegmentURLs(represent)
-         if err != nil {
-            return nil, err
-         }
-         for _, address := range addresses {
-            requests = append(requests, media_request{url: address})
-         }
-      }
-      return requests, nil
-   case represent.SegmentList != nil:
-      var requests []media_request
-      for _, segment := range represent.SegmentList.SegmentURLs {
-         address, err := segment.ResolveMedia()
-         if err != nil {
-            return nil, err
-         }
-         requests = append(requests, media_request{url: address})
-      }
-      return requests, nil
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-      data, err := get_segment(base_url, head)
-      if err != nil {
-         return nil, err
-      }
-      parsed, err := sofia.Parse(data)
-      if err != nil {
-         return nil, err
-      }
-      var index index_range
-      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
-         return nil, err
-      }
-      sidx, ok := sofia.FindSidx(parsed)
-      if !ok {
-         return nil, sofia.Missing("sidx")
-      }
-      requests := make([]media_request, len(sidx.References))
-      for i, reference := range sidx.References {
-         index[0] = index[1] + 1
-         index[1] += uint64(reference.ReferencedSize)
-         range_head := http.Header{}
-         range_head.Set("range", "bytes="+index.String())
-         requests[i] = media_request{url: base_url, header: range_head}
-      }
-      return requests, nil
-   }
-   return []media_request{{url: base_url}}, nil
-}
-
-func create(represent *dash.Representation) (*os.File, error) {
-   var name strings.Builder
-   name.WriteString(represent.ID)
-   switch represent.GetMimeType() {
-   case "audio/mp4":
-      name.WriteString(".m4a")
-   case "text/vtt":
-      name.WriteString(".vtt")
-   case "video/mp4":
-      name.WriteString(".m4v")
-   }
-   return os_create(name.String())
-}
-
-func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
-   if resp.StatusCode != http.StatusOK {
-      var data strings.Builder
-      resp.Write(&data)
-      return errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return err
-   }
-   var mpd dash.MPD
-   err = mpd.Unmarshal(data)
-   if err != nil {
-      return err
-   }
-   mpd.Set(resp.Request.URL)
-   represents := slices.SortedFunc(mpd.Representation(),
-      func(a, b *dash.Representation) int {
-         return a.Bandwidth - b.Bandwidth
-      },
-   )
-   for i, represent := range represents {
-      if i >= 1 {
-         fmt.Println()
-      }
-      fmt.Println(represent)
-   }
-   for _, target := range f.Values {
-      index := target.index(represents)
-      if index == -1 {
-         continue
-      }
-      represent := represents[index]
-      err = configVar.download(represent)
-      if err != nil {
-         return err
-      }
-   }
-   return nil
-}
-
-func (m *media_file) New(represent *dash.Representation) error {
-   for _, content := range represent.ContentProtection {
-      if content.SchemeIdUri == widevine_urn {
-         if content.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(content.Pssh)
-            if err != nil {
-               return err
-            }
-            var box sofia.PsshBox
-            err = box.Parse(data)
-            if err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-            break
-         }
-      }
-   }
-   return nil
-}
-
-func (c *Config) download_initialization(
-   represent *dash.Representation, media *media_file, fileVar *os.File,
-) error {
-   var (
-      data []byte
-      err  error
-   )
-   switch {
-   case represent.SegmentList != nil:
-      data, err = get_segment(represent.SegmentList.Initialization.SourceUrl[0], nil)
-
-   case represent.SegmentTemplate != nil && represent.SegmentTemplate.Initialization != "":
-      address, urlErr := represent.SegmentTemplate.Initialization.Url(represent)
-      if urlErr != nil {
-         return urlErr
-      }
-      data, err = get_segment(address, nil)
-
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
-      data, err = get_segment(represent.BaseUrl[0], head)
-
-   default:
-      // No initialization segment to download
-      return nil
-   }
-
-   if err != nil {
-      return err
-   }
-   data, err = media.initialization(data)
-   if err != nil {
-      return err
-   }
-   _, err = fileVar.Write(data)
-   return err
-}
-
 func (f *Filter) index(streams []*dash.Representation) int {
    const penalty_factor = 2
    min_score := math.MaxInt
@@ -303,4 +124,183 @@ func (c *Config) download(represent *dash.Representation) error {
 
    // Block and wait for the final status from the writer.
    return <-doneChan
+}
+func (c *Config) get_media_requests(represents []*dash.Representation) ([]media_request, error) {
+   represent := represents[0]
+   base_url, err := represent.ResolveBaseURL()
+   if err != nil {
+      return nil, err
+   }
+   template := represent.GetSegmentTemplate()
+   switch {
+   case template != nil:
+      var requests []media_request
+      for _, represent := range represents {
+         addresses, err := template.GetSegmentURLs(represent)
+         if err != nil {
+            return nil, err
+         }
+         for _, address := range addresses {
+            requests = append(requests, media_request{url: address})
+         }
+      }
+      return requests, nil
+   case represent.SegmentList != nil:
+      var requests []media_request
+      for _, segment := range represent.SegmentList.SegmentURLs {
+         address, err := segment.ResolveMedia()
+         if err != nil {
+            return nil, err
+         }
+         requests = append(requests, media_request{url: address})
+      }
+      return requests, nil
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+      data, err := get_segment(base_url, head)
+      if err != nil {
+         return nil, err
+      }
+      parsed, err := sofia.Parse(data)
+      if err != nil {
+         return nil, err
+      }
+      var index index_range
+      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
+         return nil, err
+      }
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return nil, sofia.Missing("sidx")
+      }
+      requests := make([]media_request, len(sidx.References))
+      for i, reference := range sidx.References {
+         index[0] = index[1] + 1
+         index[1] += uint64(reference.ReferencedSize)
+         range_head := http.Header{}
+         range_head.Set("range", "bytes="+index.String())
+         requests[i] = media_request{url: base_url, header: range_head}
+      }
+      return requests, nil
+   }
+   return []media_request{{url: base_url}}, nil
+}
+
+func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
+   if resp.StatusCode != http.StatusOK {
+      var data strings.Builder
+      resp.Write(&data)
+      return errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+   mpd, err := dash.Parse(data)
+   if err != nil {
+      return err
+   }
+   mpd.MPDURL = resp.Request.URL
+   var represents [][]*dash.Representation
+   for _, represent := range mpd.GetRepresentations() {
+      represents = append(represents, represent)
+   }
+   slices.SortFunc(represents, func(a, b []*dash.Representation) int {
+      return a[0].Bandwidth - b[0].Bandwidth
+   })
+   for i, represent := range represents {
+      if i >= 1 {
+         fmt.Println()
+      }
+      fmt.Println(represent[0])
+   }
+   for _, target := range f.Values {
+      index := target.index(represents)
+      if index == -1 {
+         continue
+      }
+      represent := represents[index]
+      err = configVar.download(represent)
+      if err != nil {
+         return err
+      }
+   }
+   return nil
+}
+
+func (m *media_file) New(represent *dash.Representation) error {
+   for _, content := range represent.ContentProtection {
+      if content.SchemeIdUri == widevine_urn {
+         if content.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(content.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            err = box.Parse(data)
+            if err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
+}
+
+func (c *Config) download_initialization(
+   represent *dash.Representation, media *media_file, fileVar *os.File,
+) error {
+   var (
+      data []byte
+      err  error
+   )
+   switch {
+   case represent.SegmentList != nil:
+      data, err = get_segment(represent.SegmentList.Initialization.SourceUrl[0], nil)
+
+   case represent.SegmentTemplate != nil && represent.SegmentTemplate.Initialization != "":
+      address, urlErr := represent.SegmentTemplate.Initialization.Url(represent)
+      if urlErr != nil {
+         return urlErr
+      }
+      data, err = get_segment(address, nil)
+
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.Initialization.Range)
+      data, err = get_segment(represent.BaseUrl[0], head)
+
+   default:
+      // No initialization segment to download
+      return nil
+   }
+
+   if err != nil {
+      return err
+   }
+   data, err = media.initialization(data)
+   if err != nil {
+      return err
+   }
+   _, err = fileVar.Write(data)
+   return err
+}
+
+func create(represent *dash.Representation) (*os.File, error) {
+   var name strings.Builder
+   name.WriteString(represent.ID)
+   switch represent.GetMimeType() {
+   case "audio/mp4":
+      name.WriteString(".m4a")
+   case "text/vtt":
+      name.WriteString(".vtt")
+   case "video/mp4":
+      name.WriteString(".m4v")
+   }
+   return os_create(name.String())
 }

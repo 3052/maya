@@ -3,7 +3,7 @@ module 41.neocities.org/net
 go 1.24.0
 
 require (
-	41.neocities.org/dash v1.28.4
+	41.neocities.org/dash v1.28.7
 	41.neocities.org/drm v1.7.2
 	41.neocities.org/sofia v1.10.9
 )
