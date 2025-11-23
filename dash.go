@@ -15,10 +15,72 @@ import (
    "strings"
 )
 
+func (c *Config) get_media_requests(represents []*dash.Representation) ([]media_request, error) {
+   represent := represents[0]
+   base_url, err := represent.ResolveBaseURL()
+   if err != nil {
+      return nil, err
+   }
+   template := represent.GetSegmentTemplate()
+   switch {
+   case template != nil:
+      var requests []media_request
+      for _, represent := range represents {
+         addresses, err := template.GetSegmentURLs(represent)
+         if err != nil {
+            return nil, err
+         }
+         for _, address := range addresses {
+            requests = append(requests, media_request{url: address})
+         }
+      }
+      return requests, nil
+   case represent.SegmentList != nil:
+      var requests []media_request
+      for _, segment := range represent.SegmentList.SegmentURLs {
+         address, err := segment.ResolveMedia()
+         if err != nil {
+            return nil, err
+         }
+         requests = append(requests, media_request{url: address})
+      }
+      return requests, nil
+   case represent.SegmentBase != nil:
+      head := http.Header{}
+      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
+      data, err := get_segment(base_url, head)
+      if err != nil {
+         return nil, err
+      }
+      parsed, err := sofia.Parse(data)
+      if err != nil {
+         return nil, err
+      }
+      var index index_range
+      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
+         return nil, err
+      }
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return nil, sofia.Missing("sidx")
+      }
+      requests := make([]media_request, len(sidx.References))
+      for i, reference := range sidx.References {
+         index[0] = index[1] + 1
+         index[1] += uint64(reference.ReferencedSize)
+         range_head := http.Header{}
+         range_head.Set("range", "bytes="+index.String())
+         requests[i] = media_request{url: base_url, header: range_head}
+      }
+      return requests, nil
+   }
+   return []media_request{{url: base_url}}, nil
+}
+
 func create(represent *dash.Representation) (*os.File, error) {
    var name strings.Builder
-   name.WriteString(represent.Id)
-   switch *represent.MimeType {
+   name.WriteString(represent.ID)
+   switch represent.GetMimeType() {
    case "audio/mp4":
       name.WriteString(".m4a")
    case "text/vtt":
@@ -40,7 +102,7 @@ func (f *Filters) Filter(resp *http.Response, configVar *Config) error {
    if err != nil {
       return err
    }
-   var mpd dash.Mpd
+   var mpd dash.MPD
    err = mpd.Unmarshal(data)
    if err != nil {
       return err
@@ -132,8 +194,6 @@ func (c *Config) download_initialization(
    return err
 }
 
-////////////////////////////////////////////////////////////////////////
-
 func (f *Filter) index(streams []*dash.Representation) int {
    const penalty_factor = 2
    min_score := math.MaxInt
@@ -183,7 +243,6 @@ func (f *Filter) index(streams []*dash.Representation) int {
    }
    return best_stream
 }
-//49
 
 func (c *Config) download(represent *dash.Representation) error {
    var media media_file
@@ -245,63 +304,3 @@ func (c *Config) download(represent *dash.Representation) error {
    // Block and wait for the final status from the writer.
    return <-doneChan
 }
-//60
-
-func (c *Config) get_media_requests(represent *dash.Representation) ([]media_request, error) {
-   switch {
-   case represent.SegmentTemplate != nil:
-      var segments []int
-      for rep := range represent.Representation() {
-         segments = slices.AppendSeq(segments, rep.Segment())
-      }
-      requests := make([]media_request, len(segments))
-      for i, segment := range segments {
-         address, err := represent.SegmentTemplate.Media.Url(represent, segment)
-         if err != nil {
-            return nil, err
-         }
-         requests[i] = media_request{url: address}
-      }
-      return requests, nil
-   case represent.SegmentList != nil:
-      requests := make([]media_request, len(represent.SegmentList.SegmentUrl))
-      for i, segment := range represent.SegmentList.SegmentUrl {
-         requests[i] = media_request{url: segment.Media[0]}
-      }
-      return requests, nil
-   case represent.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("range", "bytes="+represent.SegmentBase.IndexRange)
-      data, err := get_segment(represent.BaseUrl[0], head)
-      if err != nil {
-         return nil, err
-      }
-      parsed, err := sofia.Parse(data)
-      if err != nil {
-         return nil, err
-      }
-      var index index_range
-      if err = index.Set(represent.SegmentBase.IndexRange); err != nil {
-         return nil, err
-      }
-      sidx, ok := sofia.FindSidx(parsed)
-      if !ok {
-         return nil, sofia.Missing("sidx")
-      }
-      requests := make([]media_request, len(sidx.References))
-      for i, reference := range sidx.References {
-         index[0] = index[1] + 1
-         index[1] += uint64(reference.ReferencedSize)
-         range_head := http.Header{}
-         range_head.Set("range", "bytes="+index.String())
-         requests[i] = media_request{
-            url: represent.BaseUrl[0], header: range_head,
-         }
-      }
-      return requests, nil
-   }
-   return []media_request{
-      {url: represent.BaseUrl[0]},
-   }, nil
-}
-//57

@@ -19,6 +19,28 @@ import (
    "time"
 )
 
+func get_segment(u *url.URL, head http.Header) ([]byte, error) {
+   req := http.Request{Method: "GET", URL: u}
+   if head != nil {
+      req.Header = head
+   } else {
+      req.Header = http.Header{}
+   }
+   resp, err := http.DefaultClient.Do(&req)
+   if err != nil {
+      return nil, err
+   }
+   switch resp.StatusCode {
+   case http.StatusOK, http.StatusPartialContent:
+   default:
+      var data strings.Builder
+      resp.Write(&data)
+      return nil, errors.New(data.String())
+   }
+   defer resp.Body.Close()
+   return io.ReadAll(resp.Body)
+}
+
 type Filters struct {
    Values []Filter
    set    bool
@@ -332,28 +354,6 @@ type result struct {
    index int
    data  []byte
    err   error
-}
-
-func get_segment(u *url.URL, head http.Header) ([]byte, error) {
-   req := http.Request{Method: "GET", URL: u}
-   if head != nil {
-      req.Header = head
-   } else {
-      req.Header = http.Header{}
-   }
-   resp, err := http.DefaultClient.Do(&req)
-   if err != nil {
-      return nil, err
-   }
-   switch resp.StatusCode {
-   case http.StatusOK, http.StatusPartialContent:
-   default:
-      var data strings.Builder
-      resp.Write(&data)
-      return nil, errors.New(data.String())
-   }
-   defer resp.Body.Close()
-   return io.ReadAll(resp.Body)
 }
 
 // segment can be VTT or anything
