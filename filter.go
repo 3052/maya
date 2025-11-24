@@ -1,6 +1,7 @@
 package net
 
 import (
+   "41.neocities.org/dash"
    "errors"
    "fmt"
    "io"
@@ -8,30 +9,7 @@ import (
    "net/http"
    "slices"
    "strings"
-
-   "41.neocities.org/dash"
 )
-
-const FilterUsage = `b = bandwidth
-c = codecs
-h = height
-i = id
-l = lang
-r = role`
-
-type Filters struct {
-   Values []Filter
-   set    bool
-}
-
-type Filter struct {
-   Bandwidth int
-   Height    int
-   Id        string
-   Lang      string
-   Role      string
-   Codecs    string
-}
 
 func (f *Filters) Filter(response *http.Response, configVar *Config) error {
    if response.StatusCode != http.StatusOK {
@@ -57,25 +35,25 @@ func (f *Filters) Filter(response *http.Response, configVar *Config) error {
       groups = append(groups, group)
    }
 
-   slices.SortFunc(groups, func(groupA, groupB []*dash.Representation) int {
-      return groupA[0].Bandwidth - groupB[0].Bandwidth
+   slices.SortFunc(groups, func(a, b []*dash.Representation) int {
+      return a[0].Bandwidth - b[0].Bandwidth
    })
 
-   for groupIndex, group := range groups {
-      if groupIndex >= 1 {
+   for index, group := range groups {
+      if index >= 1 {
          fmt.Println()
       }
       fmt.Println(group[0])
    }
 
    for _, target := range f.Values {
-      bestIndex := target.index(groups)
-      if bestIndex == -1 {
+      index := target.index(groups)
+      if index == -1 {
          continue
       }
 
-      group := groups[bestIndex]
-      if err := configVar.Download(group); err != nil {
+      group := groups[index]
+      if err := configVar.download(group); err != nil {
          return err
       }
    }
@@ -160,14 +138,14 @@ func (f *Filter) index(groups [][]*dash.Representation) int {
    minScore := math.MaxInt
    bestStream := -1
 
-   for groupIndex, group := range groups {
+   for index, group := range groups {
       match, score := f.matchAndScore(group)
       if match == -1 {
          continue
       }
       if score < minScore {
          minScore = score
-         bestStream = groupIndex
+         bestStream = index
       }
    }
    return bestStream
@@ -211,4 +189,25 @@ func (f *Filter) matchAndScore(group []*dash.Representation) (int, int) {
       score = (f.Bandwidth - rep.Bandwidth) * penaltyFactor
    }
    return 0, score
+}
+
+const FilterUsage = `b = bandwidth
+c = codecs
+h = height
+i = id
+l = lang
+r = role`
+
+type Filters struct {
+   Values []Filter
+   set    bool
+}
+
+type Filter struct {
+   Bandwidth int
+   Height    int
+   Id        string
+   Lang      string
+   Role      string
+   Codecs    string
 }
