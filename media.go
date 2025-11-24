@@ -1,43 +1,13 @@
 package net
 
 import (
+   "41.neocities.org/dash"
+   "41.neocities.org/sofia"
    "bytes"
    "encoding/base64"
    "log"
    "os"
-
-   "41.neocities.org/dash"
-   "41.neocities.org/sofia"
 )
-
-type MediaFile struct {
-   keyID     []byte
-   pssh      []byte
-   timescale uint64
-   size      uint64
-   duration  uint64
-}
-
-func (m *MediaFile) configureProtection(rep *dash.Representation) error {
-   for protect := range rep.GetContentProtection() {
-      if protect.SchemeIdUri == widevineURN {
-         if protect.Pssh != "" {
-            data, err := base64.StdEncoding.DecodeString(protect.Pssh)
-            if err != nil {
-               return err
-            }
-            var box sofia.PsshBox
-            if err := box.Parse(data); err != nil {
-               return err
-            }
-            m.pssh = box.Data
-            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
-            break
-         }
-      }
-   }
-   return nil
-}
 
 func (m *MediaFile) processInit(data []byte) ([]byte, error) {
    parsedInit, err := sofia.Parse(data)
@@ -71,20 +41,8 @@ func (m *MediaFile) processInit(data []byte) ([]byte, error) {
       return nil, sofia.Missing("mdhd")
    }
    m.timescale = uint64(mdhd.Timescale)
-
-   if minf, ok := mdia.Minf(); ok {
-      if stbl, ok := minf.Stbl(); ok {
-         if stsd, ok := stbl.Stsd(); ok {
-            if sinf, _, ok := stsd.Sinf(); ok {
-               if schi, ok := sinf.Schi(); ok {
-                  if tenc, ok := schi.Tenc(); ok {
-                     m.keyID = tenc.DefaultKID[:]
-                  }
-               }
-            }
-         }
-      }
-   }
+   
+   // FIXME NEED KEY ID
 
    if err := moov.Sanitize(); err != nil {
       return nil, err
@@ -173,4 +131,32 @@ func (m *MediaFile) processAndWriteSegments(
       }
    }
    doneChan <- nil
+}
+type MediaFile struct {
+   keyID     []byte
+   pssh      []byte
+   timescale uint64
+   size      uint64
+   duration  uint64
+}
+
+func (m *MediaFile) configureProtection(rep *dash.Representation) error {
+   for protect := range rep.GetContentProtection() {
+      if protect.SchemeIdUri == widevineURN {
+         if protect.Pssh != "" {
+            data, err := base64.StdEncoding.DecodeString(protect.Pssh)
+            if err != nil {
+               return err
+            }
+            var box sofia.PsshBox
+            if err := box.Parse(data); err != nil {
+               return err
+            }
+            m.pssh = box.Data
+            log.Println("MPD PSSH", base64.StdEncoding.EncodeToString(m.pssh))
+            break
+         }
+      }
+   }
+   return nil
 }

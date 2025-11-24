@@ -3,9 +3,9 @@ module 41.neocities.org/net
 go 1.24.0
 
 require (
-	41.neocities.org/dash v1.29.4
-	41.neocities.org/drm v1.7.2
-	41.neocities.org/sofia v1.10.9
+	41.neocities.org/dash v1.29.5
+	41.neocities.org/drm v1.7.5
+	41.neocities.org/sofia v1.11.0
 )
 
 require (
