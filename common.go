@@ -13,8 +13,6 @@ var (
    ErrKeyMismatch = errors.New("key ID mismatch")
 )
 
-const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-
 var widevineID, _ = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
 
 // indexRange handles the byte range parsing for SegmentBase
