@@ -17,7 +17,55 @@ import (
    "sync"
 )
 
-// download orchestrates the download of a specific representation group
+func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
+   client_id, err := os.ReadFile(c.ClientId)
+   if err != nil {
+      return nil, err
+   }
+   pemBytes, err := os.ReadFile(c.PrivateKey)
+   if err != nil {
+      return nil, err
+   }
+   var pssh widevine.PsshData
+   pssh.ContentID = media.content_id
+   pssh.KeyIDs = [][]byte{media.key_id}
+   req_bytes, err := pssh.BuildLicenseRequest(client_id)
+   if err != nil {
+      return nil, err
+   }
+   privateKey, err := widevine.ParsePrivateKey(pemBytes)
+   if err != nil {
+      return nil, err
+   }
+   signedBytes, err := widevine.BuildSignedMessage(req_bytes, privateKey)
+   if err != nil {
+      return nil, err
+   }
+
+   respBytes, err := c.Send(signedBytes)
+   if err != nil {
+      return nil, err
+   }
+
+   keys, err := widevine.ParseLicenseResponse(respBytes, req_bytes, privateKey)
+   if err != nil {
+      return nil, err
+   }
+
+   foundKey, ok := widevine.GetKey(keys, media.key_id)
+   if !ok {
+      return nil, fmt.Errorf("GetKey: key not found in response")
+   }
+
+   var zero [16]byte
+   if bytes.Equal(foundKey, zero[:]) {
+      return nil, fmt.Errorf("zero key received")
+   }
+
+   log.Printf("key %x", foundKey)
+   return foundKey, nil
+}
+
 func (c *Config) download(group []*dash.Representation) error {
    rep := group[0]
    var media MediaFile
@@ -86,54 +134,31 @@ func (c *Config) download(group []*dash.Representation) error {
 }
 
 func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *dash.Representation) error {
-   template := rep.GetSegmentTemplate()
-   var data []byte
+   var targetURL *url.URL
+   var head http.Header
    var err error
-   found := false
 
+   // 1. Resolve the Initialization URL and Headers based on the manifest type
    if rep.SegmentBase != nil {
-      head := http.Header{}
+      head = make(http.Header)
       head.Set("Range", "bytes="+rep.SegmentBase.Initialization.Range)
-
-      var baseURL *url.URL
-      baseURL, err = rep.ResolveBaseURL()
-      if err != nil {
-         return err
-      }
-      data, err = getSegment(baseURL, head)
-      found = true
+      targetURL, err = rep.ResolveBaseURL()
+   } else if tmpl := rep.GetSegmentTemplate(); tmpl != nil && tmpl.Initialization != "" {
+      targetURL, err = tmpl.ResolveInitialization(rep)
+   } else if rep.SegmentList != nil {
+      targetURL, err = rep.SegmentList.Initialization.ResolveSourceURL()
    }
 
-   if !found {
-      if template != nil {
-         if template.Initialization != "" {
-            var initURL *url.URL
-            initURL, err = template.ResolveInitialization(rep)
-            if err != nil {
-               return err
-            }
-            data, err = getSegment(initURL, nil)
-            found = true
-         }
-      }
+   // 2. Handle errors or early exit if no init segment exists
+   if err != nil {
+      return err
    }
-
-   if !found {
-      if rep.SegmentList != nil {
-         var sourceURL *url.URL
-         sourceURL, err = rep.SegmentList.Initialization.ResolveSourceURL()
-         if err != nil {
-            return err
-         }
-         data, err = getSegment(sourceURL, nil)
-         found = true
-      }
-   }
-
-   if !found {
+   if targetURL == nil {
       return nil
    }
 
+   // 3. Download, Process, and Write
+   data, err := getSegment(targetURL, head)
    if err != nil {
       return err
    }
@@ -148,7 +173,7 @@ func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *da
 }
 
 func (c *Config) fetchKey(media *MediaFile) ([]byte, error) {
-   if media.keyID == nil {
+   if media.key_id == nil {
       return nil, nil
    }
    if c.CertificateChain != "" {
@@ -175,10 +200,10 @@ func (c *Config) playReadyKey(media *MediaFile) ([]byte, error) {
    }
    encryptSignKey := new(big.Int).SetBytes(signKeyData)
 
-   log.Printf("key ID %x", media.keyID)
-   playReady.UuidOrGuid(media.keyID)
+   log.Printf("key ID %x", media.key_id)
+   playReady.UuidOrGuid(media.key_id)
 
-   body, err := chain.RequestBody(media.keyID, encryptSignKey)
+   body, err := chain.RequestBody(media.key_id, encryptSignKey)
    if err != nil {
       return nil, err
    }
@@ -194,7 +219,7 @@ func (c *Config) playReadyKey(media *MediaFile) ([]byte, error) {
       return nil, err
    }
 
-   if !bytes.Equal(license.ContentKey.KeyId[:], media.keyID) {
+   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
       return nil, ErrKeyMismatch
    }
 
@@ -202,6 +227,7 @@ func (c *Config) playReadyKey(media *MediaFile) ([]byte, error) {
    log.Printf("key %x", key)
    return key, nil
 }
+
 // Config holds downloader configuration
 type Config struct {
    Send             func([]byte) ([]byte, error)
@@ -210,52 +236,6 @@ type Config struct {
    EncryptSignKey   string
    ClientId         string
    PrivateKey       string
-}
-
-func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
-   clientID, err := os.ReadFile(c.ClientId)
-   if err != nil {
-      return nil, err
-   }
-   pemBytes, err := os.ReadFile(c.PrivateKey)
-   if err != nil {
-      return nil, err
-   }
-   reqBytes, err := widevine.BuildLicenseRequest(clientID, media.pssh)
-   if err != nil {
-      return nil, err
-   }
-   privateKey, err := widevine.ParsePrivateKey(pemBytes)
-   if err != nil {
-      return nil, err
-   }
-   signedBytes, err := widevine.BuildSignedMessage(reqBytes, privateKey)
-   if err != nil {
-      return nil, err
-   }
-
-   respBytes, err := c.Send(signedBytes)
-   if err != nil {
-      return nil, err
-   }
-
-   keys, err := widevine.ParseLicenseResponse(respBytes, reqBytes, privateKey)
-   if err != nil {
-      return nil, err
-   }
-
-   foundKey, ok := widevine.GetKey(keys, media.keyID)
-   if !ok {
-      return nil, fmt.Errorf("GetKey: key not found in response")
-   }
-
-   var zero [16]byte
-   if bytes.Equal(foundKey, zero[:]) {
-      return nil, fmt.Errorf("zero key received")
-   }
-
-   log.Printf("key %x", foundKey)
-   return foundKey, nil
 }
 
 func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
@@ -366,4 +346,3 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    log.Println("Create", name)
    return os.Create(name)
 }
-
