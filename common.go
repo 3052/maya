@@ -4,9 +4,26 @@ import (
    "encoding/hex"
    "errors"
    "fmt"
+   "log"
    "net/http"
    "net/url"
+   "path"
 )
+
+// github.com/golang/go/issues/25793
+func Transport(ext string) *http.Transport {
+   log.SetFlags(log.Ltime)
+   return &http.Transport{
+      Protocols: &http.Protocols{},
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         if path.Ext(req.URL.Path) == ext {
+            return nil, nil
+         }
+         log.Println(req.Method, req.URL)
+         return http.ProxyFromEnvironment(req)
+      },
+   }
+}
 
 var (
    ErrMissingTraf = errors.New("missing traf box")

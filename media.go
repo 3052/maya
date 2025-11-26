@@ -7,11 +7,17 @@ import (
    "bytes"
    "log"
    "os"
+   "strings"
+)
+
+const (
+   protectionURN = "urn:mpeg:dash:mp4protection:2011"
+   widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 )
 
 func (m *MediaFile) configureProtection(rep *dash.Representation) error {
    for _, protect := range rep.GetContentProtection() {
-      switch protect.SchemeIdUri {
+      switch strings.ToLower(protect.SchemeIdUri) {
       case protectionURN:
          // 1. get `default_KID` from MPD
          // https://ctv.ca MPD is missing PSSH
@@ -50,10 +56,6 @@ func (m *MediaFile) configureProtection(rep *dash.Representation) error {
    }
    return nil
 }
-
-const protectionURN = "urn:mpeg:dash:mp4protection:2011"
-
-const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 
 func (m *MediaFile) processSegment(data, key []byte) ([]byte, error) {
    if key == nil {
