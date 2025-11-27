@@ -25,6 +25,7 @@ func getMediaRequests(group []*dash.Representation) ([]mediaRequest, []byte, err
       if err != nil {
          return nil, nil, err
       }
+
       if template := rep.GetSegmentTemplate(); template != nil {
          addrs, err := template.GetSegmentURLs(rep)
          if err != nil {
@@ -186,11 +187,48 @@ func (c *Config) download(group []*dash.Representation) error {
    if err != nil {
       return err
    }
+
+   var mainSidx *sofia.SidxBox
+   var sidxStartOffset int64
+
    if sidxData != nil {
-      if _, err := file.Write(sidxData); err != nil {
+      parsed, err := sofia.Parse(sidxData)
+      if err != nil {
          return err
       }
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return sofia.Missing("sidx")
+      }
+      if _, err := file.Write(sidx.Encode()); err != nil {
+         return err
+      }
+   } else if len(requests) > 0 {
+      mainSidx = &sofia.SidxBox{
+         Header:      sofia.BoxHeader{Type: [4]byte{'s', 'i', 'd', 'x'}},
+         Version:     1, // 64-bit offsets
+         ReferenceID: 1,
+         Timescale:   uint32(media.timescale),
+      }
+      // Add placeholders to calculate size
+      for range requests {
+         if err := mainSidx.AddReference(0, 0); err != nil {
+            return err
+         }
+      }
+      placeholder := mainSidx.Encode()
+
+      sidxStartOffset, err = file.Seek(0, io.SeekCurrent)
+      if err != nil {
+         return err
+      }
+      if _, err := file.Write(placeholder); err != nil {
+         return err
+      }
+      // Reset references for actual population during writing
+      mainSidx.References = make([]sofia.SidxReference, 0, len(requests))
    }
+
    if len(requests) == 0 {
       return nil
    }
@@ -214,14 +252,28 @@ func (c *Config) download(group []*dash.Representation) error {
    }
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, file)
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, file, mainSidx)
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
    // Wait for writer to finish
-   return <-doneChan
+   if err := <-doneChan; err != nil {
+      return err
+   }
+
+   // Overwrite the placeholder sidx with real data
+   if mainSidx != nil {
+      if _, err := file.Seek(sidxStartOffset, io.SeekStart); err != nil {
+         return err
+      }
+      if _, err := file.Write(mainSidx.Encode()); err != nil {
+         return err
+      }
+   }
+
+   return nil
 }
 
 func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *dash.Representation) error {
