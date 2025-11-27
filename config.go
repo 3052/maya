@@ -17,65 +17,68 @@ import (
    "sync"
 )
 
-func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
+func getMediaRequests(group []*dash.Representation) ([]mediaRequest, []byte, error) {
    var requests []mediaRequest
+   var sidxData []byte
    for _, rep := range group {
       baseURL, err := rep.ResolveBaseURL()
       if err != nil {
-         return nil, err
+         return nil, nil, err
       }
-      template := rep.GetSegmentTemplate()
-      switch {
-      case template != nil:
+      if template := rep.GetSegmentTemplate(); template != nil {
          addrs, err := template.GetSegmentURLs(rep)
          if err != nil {
-            return nil, err
+            return nil, nil, err
          }
          for _, addr := range addrs {
             requests = append(requests, mediaRequest{url: addr})
          }
-      case rep.SegmentList != nil:
+      } else if rep.SegmentList != nil {
          for _, seg := range rep.SegmentList.SegmentURLs {
             addr, err := seg.ResolveMedia()
             if err != nil {
-               return nil, err
+               return nil, nil, err
             }
             requests = append(requests, mediaRequest{url: addr})
          }
-      case rep.SegmentBase != nil:
+      } else if rep.SegmentBase != nil {
+         if sidxData != nil {
+            continue
+         }
          head := http.Header{}
+         // sidx
          head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-         data, err := getSegment(baseURL, head)
+         sidxData, err = getSegment(baseURL, head)
          if err != nil {
-            return nil, err
+            return nil, nil, err
          }
-         parsed, err := sofia.Parse(data)
+         parsed, err := sofia.Parse(sidxData)
          if err != nil {
-            return nil, err
-         }
-         var idx indexRange
-         err = idx.Set(rep.SegmentBase.IndexRange)
-         if err != nil {
-            return nil, err
+            return nil, nil, err
          }
          sidx, ok := sofia.FindSidx(parsed)
          if !ok {
-            return nil, sofia.Missing("sidx")
+            return nil, nil, sofia.Missing("sidx")
+         }
+         // segments
+         var idx indexRange
+         err = idx.Set(rep.SegmentBase.IndexRange)
+         if err != nil {
+            return nil, nil, err
          }
          for _, ref := range sidx.References {
             idx[0] = idx[1] + 1
             idx[1] += uint64(ref.ReferencedSize)
-            rangeHead := http.Header{}
-            rangeHead.Set("Range", "bytes="+idx.String())
+            head.Set("Range", "bytes="+idx.String())
             requests = append(requests,
-               mediaRequest{url: baseURL, header: rangeHead},
+               mediaRequest{url: baseURL, header: head},
             )
          }
-      default:
+      } else {
          requests = append(requests, mediaRequest{url: baseURL})
       }
    }
-   return requests, nil
+   return requests, sidxData, nil
 }
 
 func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
@@ -86,13 +89,11 @@ func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
    if head != nil {
       req.Header = head
    }
-
    resp, err := http.DefaultClient.Do(req)
    if err != nil {
       return nil, err
    }
    defer resp.Body.Close()
-
    if resp.StatusCode != http.StatusOK {
       if resp.StatusCode != http.StatusPartialContent {
          var msg strings.Builder
@@ -117,6 +118,7 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    log.Println("Create", name)
    return os.Create(name)
 }
+
 func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
    client_id, err := os.ReadFile(c.ClientId)
    if err != nil {
@@ -141,27 +143,22 @@ func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-
    respBytes, err := c.Send(signedBytes)
    if err != nil {
       return nil, err
    }
-
    keys, err := widevine.ParseLicenseResponse(respBytes, req_bytes, privateKey)
    if err != nil {
       return nil, err
    }
-
    foundKey, ok := widevine.GetKey(keys, media.key_id)
    if !ok {
       return nil, fmt.Errorf("GetKey: key not found in response")
    }
-
    var zero [16]byte
    if bytes.Equal(foundKey, zero[:]) {
       return nil, fmt.Errorf("zero key received")
    }
-
    log.Printf("key %x", foundKey)
    return foundKey, nil
 }
@@ -169,44 +166,41 @@ func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
 func (c *Config) download(group []*dash.Representation) error {
    rep := group[0]
    var media MediaFile
-
    // Configure PSSH if available in MPD
    if err := media.configureProtection(rep); err != nil {
       return err
    }
-
    file, err := createOutputFile(rep)
    if err != nil {
       return err
    }
    defer file.Close()
-
    if err := c.downloadInitialization(file, &media, rep); err != nil {
       return err
    }
-
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
-
-   requests, err := getMediaRequests(group)
+   requests, sidxData, err := getMediaRequests(group)
    if err != nil {
       return err
+   }
+   if sidxData != nil {
+      if _, err := file.Write(sidxData); err != nil {
+         return err
+      }
    }
    if len(requests) == 0 {
       return nil
    }
-
    numWorkers := c.Threads
    if numWorkers < 1 {
       numWorkers = 1
    }
-
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
-
    // Start Workers
    wg.Add(numWorkers)
    for workerID := 0; workerID < numWorkers; workerID++ {
@@ -218,17 +212,14 @@ func (c *Config) download(group []*dash.Representation) error {
          }
       }()
    }
-
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), key, file)
-
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
-
    // Wait for writer to finish
    return <-doneChan
 }
@@ -237,7 +228,6 @@ func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *da
    var targetURL *url.URL
    var head http.Header
    var err error
-
    // 1. Resolve the Initialization URL and Headers based on the manifest type
    if rep.SegmentBase != nil {
       head = make(http.Header)
@@ -248,7 +238,6 @@ func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *da
    } else if rep.SegmentList != nil {
       targetURL, err = rep.SegmentList.Initialization.ResolveSourceURL()
    }
-
    // 2. Handle errors or early exit if no init segment exists
    if err != nil {
       return err
@@ -256,18 +245,15 @@ func (c *Config) downloadInitialization(file *os.File, media *MediaFile, rep *da
    if targetURL == nil {
       return nil
    }
-
    // 3. Download, Process, and Write
    data, err := getSegment(targetURL, head)
    if err != nil {
       return err
    }
-
    data, err = media.processInit(data)
    if err != nil {
       return err
    }
-
    _, err = file.Write(data)
    return err
 }
@@ -293,34 +279,28 @@ func (c *Config) playReadyKey(media *MediaFile) ([]byte, error) {
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-
    signKeyData, err := os.ReadFile(c.EncryptSignKey)
    if err != nil {
       return nil, err
    }
    encryptSignKey := new(big.Int).SetBytes(signKeyData)
-
    playReady.UuidOrGuid(media.key_id)
    body, err := chain.RequestBody(media.key_id, encryptSignKey)
    if err != nil {
       return nil, err
    }
-
    respData, err := c.Send(body)
    if err != nil {
       return nil, err
    }
-
    var license playReady.License
    coord, err := license.Decrypt(respData, encryptSignKey)
    if err != nil {
       return nil, err
    }
-
    if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
       return nil, ErrKeyMismatch
    }
-
    key := coord.Key()
    log.Printf("key %x", key)
    return key, nil
