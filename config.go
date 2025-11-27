@@ -17,6 +17,106 @@ import (
    "sync"
 )
 
+func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
+   var requests []mediaRequest
+   for _, rep := range group {
+      baseURL, err := rep.ResolveBaseURL()
+      if err != nil {
+         return nil, err
+      }
+      template := rep.GetSegmentTemplate()
+      switch {
+      case template != nil:
+         addrs, err := template.GetSegmentURLs(rep)
+         if err != nil {
+            return nil, err
+         }
+         for _, addr := range addrs {
+            requests = append(requests, mediaRequest{url: addr})
+         }
+      case rep.SegmentList != nil:
+         for _, seg := range rep.SegmentList.SegmentURLs {
+            addr, err := seg.ResolveMedia()
+            if err != nil {
+               return nil, err
+            }
+            requests = append(requests, mediaRequest{url: addr})
+         }
+      case rep.SegmentBase != nil:
+         head := http.Header{}
+         head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+         data, err := getSegment(baseURL, head)
+         if err != nil {
+            return nil, err
+         }
+         parsed, err := sofia.Parse(data)
+         if err != nil {
+            return nil, err
+         }
+         var idx indexRange
+         err = idx.Set(rep.SegmentBase.IndexRange)
+         if err != nil {
+            return nil, err
+         }
+         sidx, ok := sofia.FindSidx(parsed)
+         if !ok {
+            return nil, sofia.Missing("sidx")
+         }
+         for _, ref := range sidx.References {
+            idx[0] = idx[1] + 1
+            idx[1] += uint64(ref.ReferencedSize)
+            rangeHead := http.Header{}
+            rangeHead.Set("Range", "bytes="+idx.String())
+            requests = append(requests,
+               mediaRequest{url: baseURL, header: rangeHead},
+            )
+         }
+      default:
+         requests = append(requests, mediaRequest{url: baseURL})
+      }
+   }
+   return requests, nil
+}
+
+func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
+   req, err := http.NewRequest("GET", targetURL.String(), nil)
+   if err != nil {
+      return nil, err
+   }
+   if head != nil {
+      req.Header = head
+   }
+
+   resp, err := http.DefaultClient.Do(req)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+
+   if resp.StatusCode != http.StatusOK {
+      if resp.StatusCode != http.StatusPartialContent {
+         var msg strings.Builder
+         io.Copy(&msg, resp.Body)
+         return nil, fmt.Errorf("status %s: %s", resp.Status, msg.String())
+      }
+   }
+   return io.ReadAll(resp.Body)
+}
+
+func createOutputFile(rep *dash.Representation) (*os.File, error) {
+   extension := ".mp4"
+   switch rep.GetMimeType() {
+   case "audio/mp4":
+      extension = ".m4a"
+   case "text/vtt":
+      extension = ".vtt"
+   case "video/mp4":
+      extension = ".m4v"
+   }
+   name := rep.ID + extension
+   log.Println("Create", name)
+   return os.Create(name)
+}
 func (c *Config) widevineKey(media *MediaFile) ([]byte, error) {
    client_id, err := os.ReadFile(c.ClientId)
    if err != nil {
@@ -234,113 +334,4 @@ type Config struct {
    EncryptSignKey   string
    ClientId         string
    PrivateKey       string
-}
-
-func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
-   rep := group[0]
-   baseURL, err := rep.ResolveBaseURL()
-   if err != nil {
-      return nil, err
-   }
-
-   template := rep.GetSegmentTemplate()
-   switch {
-   case template != nil:
-      var requests []mediaRequest
-      for _, variant := range group {
-         addrs, err := template.GetSegmentURLs(variant)
-         if err != nil {
-            return nil, err
-         }
-         for _, addr := range addrs {
-            requests = append(requests, mediaRequest{url: addr})
-         }
-      }
-      return requests, nil
-
-   case rep.SegmentList != nil:
-      var requests []mediaRequest
-      for _, seg := range rep.SegmentList.SegmentURLs {
-         addr, err := seg.ResolveMedia()
-         if err != nil {
-            return nil, err
-         }
-         requests = append(requests, mediaRequest{url: addr})
-      }
-      return requests, nil
-
-   case rep.SegmentBase != nil:
-      head := http.Header{}
-      head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      data, err := getSegment(baseURL, head)
-      if err != nil {
-         return nil, err
-      }
-      parsed, err := sofia.Parse(data)
-      if err != nil {
-         return nil, err
-      }
-
-      var idx indexRange
-      if err = idx.Set(rep.SegmentBase.IndexRange); err != nil {
-         return nil, err
-      }
-
-      sidx, ok := sofia.FindSidx(parsed)
-      if !ok {
-         return nil, sofia.Missing("sidx")
-      }
-
-      requests := make([]mediaRequest, len(sidx.References))
-      for refIndex, ref := range sidx.References {
-         idx[0] = idx[1] + 1
-         idx[1] += uint64(ref.ReferencedSize)
-
-         rangeHead := http.Header{}
-         rangeHead.Set("Range", "bytes="+idx.String())
-         requests[refIndex] = mediaRequest{url: baseURL, header: rangeHead}
-      }
-      return requests, nil
-   }
-   return []mediaRequest{{url: baseURL}}, nil
-}
-
-func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
-   req, err := http.NewRequest("GET", targetURL.String(), nil)
-   if err != nil {
-      return nil, err
-   }
-   if head != nil {
-      req.Header = head
-   }
-
-   resp, err := http.DefaultClient.Do(req)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-
-   if resp.StatusCode != http.StatusOK {
-      if resp.StatusCode != http.StatusPartialContent {
-         var msg strings.Builder
-         io.Copy(&msg, resp.Body)
-         return nil, fmt.Errorf("status %s: %s", resp.Status, msg.String())
-      }
-   }
-   return io.ReadAll(resp.Body)
-}
-
-func createOutputFile(rep *dash.Representation) (*os.File, error) {
-   extension := ".mp4"
-   switch rep.GetMimeType() {
-   case "audio/mp4":
-      extension = ".m4a"
-   case "text/vtt":
-      extension = ".vtt"
-   case "video/mp4":
-      extension = ".m4v"
-   }
-   name := rep.ID + extension
-   log.Println("Create", name)
-   return os.Create(name)
 }
