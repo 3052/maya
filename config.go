@@ -23,13 +23,11 @@ func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
    var requests []mediaRequest
    // Local flag/cache to ensure we only process the sidx once per group if needed
    var sidxProcessed bool
-
    for _, rep := range group {
       baseURL, err := rep.ResolveBaseURL()
       if err != nil {
          return nil, err
       }
-
       if template := rep.GetSegmentTemplate(); template != nil {
          addrs, err := template.GetSegmentURLs(rep)
          if err != nil {
@@ -65,31 +63,24 @@ func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
          if !ok {
             return nil, sofia.Missing("sidx")
          }
-
          sidxProcessed = true
-
          // segments
          var idx indexRange
          err = idx.Set(rep.SegmentBase.IndexRange)
          if err != nil {
             return nil, err
          }
-
          // Anchor point is the byte immediately following the sidx box.
          // idx[1] is the end byte of the sidx box.
          currentOffset := idx[1] + 1
-
          for _, ref := range sidx.References {
             idx[0] = currentOffset
             idx[1] = currentOffset + uint64(ref.ReferencedSize) - 1
-
             h := make(http.Header)
             h.Set("Range", "bytes="+idx.String())
-
             requests = append(requests,
                mediaRequest{url: baseURL, header: h},
             )
-
             currentOffset += uint64(ref.ReferencedSize)
          }
       } else {
@@ -200,41 +191,10 @@ func (c *Config) download(group []*dash.Representation) error {
    if err != nil {
       return err
    }
-
    // getMediaRequests now only returns requests (and error)
    requests, err := getMediaRequests(group)
    if err != nil {
       return err
-   }
-
-   var mainSidx *sofia.SidxBox
-   var sidxStartOffset int64
-
-   // Always generate a new global sidx if we have content to download
-   if len(requests) > 0 {
-      mainSidx = &sofia.SidxBox{
-         Header:      sofia.BoxHeader{Type: [4]byte{'s', 'i', 'd', 'x'}},
-         Version:     1, // 64-bit offsets
-         ReferenceID: 1,
-         Timescale:   uint32(media.timescale),
-      }
-      // Add placeholders to calculate size
-      for range requests {
-         if err := mainSidx.AddReference(0, 0); err != nil {
-            return err
-         }
-      }
-      placeholder := mainSidx.Encode()
-
-      sidxStartOffset, err = file.Seek(0, io.SeekCurrent)
-      if err != nil {
-         return err
-      }
-      if _, err := file.Write(placeholder); err != nil {
-         return err
-      }
-      // Reset references for actual population during writing
-      mainSidx.References = make([]sofia.SidxReference, 0, len(requests))
    }
 
    if len(requests) == 0 {
@@ -260,7 +220,7 @@ func (c *Config) download(group []*dash.Representation) error {
    }
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, file, mainSidx)
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, file)
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
@@ -270,17 +230,6 @@ func (c *Config) download(group []*dash.Representation) error {
    if err := <-doneChan; err != nil {
       return err
    }
-
-   // Overwrite the placeholder sidx with real data
-   if mainSidx != nil {
-      if _, err := file.Seek(sidxStartOffset, io.SeekStart); err != nil {
-         return err
-      }
-      if _, err := file.Write(mainSidx.Encode()); err != nil {
-         return err
-      }
-   }
-
    return nil
 }
 

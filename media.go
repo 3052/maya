@@ -103,14 +103,12 @@ const (
    widevineURN   = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 )
 
-func (m *MediaFile) processSegment(data, key []byte, p *progress, sidx *sofia.SidxBox) ([]byte, error) {
+func (m *MediaFile) processSegment(data, key []byte, p *progress) ([]byte, error) {
    parsed, err := sofia.Parse(data)
    if err != nil {
       return nil, err
    }
-
    var sampleSize, duration uint64
-
    // 1. Calculate stats from Moof boxes
    for _, box := range parsed {
       if box.Moof != nil {
@@ -126,16 +124,13 @@ func (m *MediaFile) processSegment(data, key []byte, p *progress, sidx *sofia.Si
          duration += dur
       }
    }
-
    p.update(sampleSize, duration, m.timescale)
-
    // 2. Decrypt if needed
    if key != nil {
       if err := sofia.Decrypt(parsed, key); err != nil {
          return nil, err
       }
    }
-
    // 3. Always re-encode to ensure clean structure and remove redundant sidx
    var buf bytes.Buffer
    buf.Grow(len(data))
@@ -146,14 +141,6 @@ func (m *MediaFile) processSegment(data, key []byte, p *progress, sidx *sofia.Si
       buf.Write(box.Encode())
    }
    data = buf.Bytes()
-
-   // 4. Update the global sidx
-   if sidx != nil {
-      if err := sidx.AddReference(uint32(len(data)), uint32(duration)); err != nil {
-         return nil, err
-      }
-   }
-
    return data, nil
 }
 
@@ -163,12 +150,10 @@ func (m *MediaFile) processAndWriteSegments(
    totalSegments int,
    key []byte,
    file *os.File,
-   sidx *sofia.SidxBox,
 ) {
    pending := make(map[int][]byte)
    nextIndex := 0
    prog := newProgress(totalSegments)
-
    for i := 0; i < totalSegments; i++ {
       res := <-results
       if res.err != nil {
@@ -182,7 +167,7 @@ func (m *MediaFile) processAndWriteSegments(
          if !ok {
             break
          }
-         processedData, err := m.processSegment(data, key, prog, sidx)
+         processedData, err := m.processSegment(data, key, prog)
          if err != nil {
             doneChan <- err
             return
