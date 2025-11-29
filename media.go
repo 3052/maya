@@ -4,24 +4,37 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
-   "bytes"
    "crypto/aes"
    "log"
    "os"
    "strings"
 )
 
+func (m *MediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
+   var unfrag sofia.Unfragmenter
+   unfrag.Writer = file
+
+   if len(initData) > 0 {
+      // Initialize parses the init segment and sets unfrag.Moov
+      if err := unfrag.Initialize(initData); err != nil {
+         return nil, err
+      }
+      // Read/Update Moov (extract content ID/timescale, remove PSSH/EDTS)
+      if err := m.configureMoov(unfrag.Moov); err != nil {
+         return nil, err
+      }
+   }
+
+   return &unfrag, nil
+}
+
 func (m *MediaFile) processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
    totalSegments int,
    key []byte,
-   file *os.File,
-   initData []byte,
+   unfrag *sofia.Unfragmenter,
 ) {
-   var unfrag sofia.Unfragmenter
-   unfrag.Writer = file
-
    // Setup Decryption Block once if key is present
    if len(key) > 0 {
       block, err := aes.NewCipher(key)
@@ -37,35 +50,11 @@ func (m *MediaFile) processAndWriteSegments(
 
    // Setup Progress Tracking
    prog := newProgress(totalSegments)
+   // We need to accumulate stats per segment and update progress only when a segment is fully processed.
+   var segmentSize, segmentDuration uint32
    unfrag.OnSampleInfo = func(sample *sofia.UnfragSample) {
-      prog.update(uint64(sample.Size), uint64(sample.Duration), m.timescale)
-   }
-
-   // Handle Initialization
-   if len(initData) > 0 {
-      // The unfragmenter builds the file structure (mdat header, then payload, then moov).
-      // However, it does not write the `ftyp` box. We must extract and write `ftyp` manually
-      // from the initData before initializing the unfragmenter (which writes the mdat header).
-      boxes, err := sofia.Parse(initData)
-      if err != nil {
-         doneChan <- err
-         return
-      }
-      for _, box := range boxes {
-         if string(box.Raw[4:8]) == "ftyp" {
-            if _, err := file.Write(box.Raw); err != nil {
-               doneChan <- err
-               return
-            }
-            break
-         }
-      }
-
-      // Initialize unfragmenter (writes mdat header, parses moov from initData)
-      if err := unfrag.Initialize(initData); err != nil {
-         doneChan <- err
-         return
-      }
+      segmentSize += sample.Size
+      segmentDuration += sample.Duration
    }
 
    pending := make(map[int][]byte)
@@ -87,11 +76,18 @@ func (m *MediaFile) processAndWriteSegments(
             break
          }
 
-         // AddSegment decrypts samples and writes mdat payload to file
+         // Reset accumulators for the new segment
+         segmentSize = 0
+         segmentDuration = 0
+
+         // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
          if err := unfrag.AddSegment(data); err != nil {
             doneChan <- err
             return
          }
+
+         // Update progress once per segment
+         prog.update(segmentSize, segmentDuration, m.timescale)
 
          delete(pending, nextIndex)
          nextIndex++
@@ -108,7 +104,7 @@ func (m *MediaFile) processAndWriteSegments(
 }
 
 type MediaFile struct {
-   timescale  uint64
+   timescale  uint32
    key_id     []byte
    content_id []byte
 }
@@ -155,76 +151,37 @@ func (m *MediaFile) configureProtection(rep *dash.Representation) error {
    return nil
 }
 
-func (m *MediaFile) processInit(data []byte) ([]byte, error) {
-   parsedInit, err := sofia.Parse(data)
-   if err != nil {
-      return nil, err
-   }
-
-   // 1 pssh
-   moov, ok := sofia.FindMoov(parsedInit)
-   if !ok {
-      return nil, sofia.Missing("moov")
-   }
-
+func (m *MediaFile) configureMoov(moov *sofia.MoovBox) error {
+   // Handle Widevine PSSH
    if wvBox, ok := moov.FindPssh(widevineID); ok {
       var pssh_data widevine.PsshData
-      err = pssh_data.Unmarshal(wvBox.Data)
-      if err != nil {
-         return nil, err
+      if err := pssh_data.Unmarshal(wvBox.Data); err != nil {
+         return err
       }
       if pssh_data.ContentID != nil {
          m.content_id = pssh_data.ContentID
          log.Printf("MP4 content ID %x", m.content_id)
       }
    }
+
    moov.RemovePssh()
 
-   // 2 edts
-   trak, ok := moov.Trak()
-   if !ok {
-      return nil, sofia.Missing("trak")
-   }
+   // Unfragmenter.Initialize guarantees Trak exists
+   trak, _ := moov.Trak()
    trak.RemoveEdts()
 
-   // 3 mdhd
    mdia, ok := trak.Mdia()
    if !ok {
-      return nil, sofia.Missing("mdia")
+      return sofia.Missing("mdia")
    }
 
    mdhd, ok := mdia.Mdhd()
    if !ok {
-      return nil, sofia.Missing("mdhd")
+      return sofia.Missing("mdhd")
    }
-   m.timescale = uint64(mdhd.Timescale)
+   m.timescale = mdhd.Timescale
 
-   // 4 stsd
-   minf, ok := mdia.Minf()
-   if !ok {
-      return nil, sofia.Missing("minf")
-   }
-
-   stbl, ok := minf.Stbl()
-   if !ok {
-      return nil, sofia.Missing("stbl")
-   }
-
-   stsd, ok := stbl.Stsd()
-   if !ok {
-      return nil, sofia.Missing("stsd")
-   }
-
-   err = stsd.UnprotectAll()
-   if err != nil {
-      return nil, err
-   }
-
-   var buf bytes.Buffer
-   for _, box := range parsedInit {
-      buf.Write(box.Encode())
-   }
-   return buf.Bytes(), nil
+   return nil
 }
 
 const (
