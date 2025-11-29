@@ -7,20 +7,22 @@ import (
    "log"
    "net/http"
    "net/url"
-   "path"
+   "strings"
 )
 
 // github.com/golang/go/issues/25793
-func Transport(ext string) *http.Transport {
-   log.SetFlags(log.Ltime)
+func Transport(policy func(*http.Request) string) *http.Transport {
    return &http.Transport{
       Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
-         if path.Ext(req.URL.Path) == ext {
-            return nil, nil
+         flags := policy(req)
+         if strings.ContainsRune(flags, 'L') {
+            log.Println(req.Method, req.URL)
          }
-         log.Println(req.Method, req.URL)
-         return http.ProxyFromEnvironment(req)
+         if strings.ContainsRune(flags, 'P') {
+            return http.ProxyFromEnvironment(req)
+         }
+         return nil, nil
       },
    }
 }

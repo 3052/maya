@@ -213,13 +213,19 @@ func (c *Config) download(group []*dash.Representation) error {
    }
    defer file.Close()
 
-   // Download and process init segment, but don't write to file yet;
-   // processAndWriteSegments will handle writing ftyp and initializing unfragmenter.
+   // Download raw init segment
    initData, err := c.downloadInitialization(&media, rep)
    if err != nil {
       return err
    }
 
+   // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
+   unfrag, err := media.initializeWriter(file, initData)
+   if err != nil {
+      return err
+   }
+
+   // Fetch key using info extracted from MPD or Init Segment
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
@@ -257,7 +263,7 @@ func (c *Config) download(group []*dash.Representation) error {
 
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, file, initData)
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, unfrag)
 
    // Send Jobs
    for reqIndex, req := range requests {
@@ -273,8 +279,7 @@ func (c *Config) download(group []*dash.Representation) error {
    return nil
 }
 
-// downloadInitialization downloads and processes the initialization segment.
-// It returns the processed data (e.g. decrypted/cleaned) without writing to disk.
+// downloadInitialization downloads the initialization segment bytes.
 func (c *Config) downloadInitialization(media *MediaFile, rep *dash.Representation) ([]byte, error) {
    var targetURL *url.URL
    var head http.Header
@@ -299,18 +304,8 @@ func (c *Config) downloadInitialization(media *MediaFile, rep *dash.Representati
       return nil, nil
    }
 
-   // 3. Download and Process
-   data, err := getSegment(targetURL, head)
-   if err != nil {
-      return nil, err
-   }
-
-   data, err = media.processInit(data)
-   if err != nil {
-      return nil, err
-   }
-
-   return data, nil
+   // 3. Download
+   return getSegment(targetURL, head)
 }
 
 func (c *Config) fetchKey(media *MediaFile) ([]byte, error) {
