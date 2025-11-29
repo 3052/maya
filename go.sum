@@ -4,8 +4,8 @@
 41.neocities.org/drm v1.7.6/go.mod h1:lUIbu1Jy8VPsIbfAuUq3gJdBtFRcSu4RlpwP+GwFdk0=
 41.neocities.org/protobuf v1.5.9 h1:QOklHIA88nx2GRrgAsynaG+/0ta7f6k1asNdBueX+Xw=
 41.neocities.org/protobuf v1.5.9/go.mod h1:nhuoexeiRjXmAbWQN21+Ta6/wfKYeqLWA33H6jgLf0s=
-41.neocities.org/sofia v1.11.7 h1:arJEkgJo7aN55hApWDNM/2hF7H/2LwUsl6BXcmRgFCE=
-41.neocities.org/sofia v1.11.7/go.mod h1:sEkwYTmUFHqoL34OBDmyeQR7BrMNa8Z60PKYjOT5unQ=
+41.neocities.org/sofia v1.12.0 h1:ruri2FEEUwzmYXNsrL1wv6cJqh7hEuymQjaeEp6CtqU=
+41.neocities.org/sofia v1.12.0/go.mod h1:sEkwYTmUFHqoL34OBDmyeQR7BrMNa8Z60PKYjOT5unQ=
 github.com/arnaucube/cryptofun v0.0.0-20181124004321-9b11ae8280bd/go.mod h1:PZE8kKpHPD1UMrS3mTfAMmEEinGtijSwjxLRqRcD64A=
 github.com/arnaucube/cryptofun v0.0.0-20190603183703-df33a4bbd574 h1:CF7VgoeJTUsphBKztUXdS7OTfM+ifx32yzRWSlILGw8=
 github.com/arnaucube/cryptofun v0.0.0-20190603183703-df33a4bbd574/go.mod h1:/B6FaxAphhUEFigq7FAwZn2wWWDebPqc8IUUe3QPfW8=

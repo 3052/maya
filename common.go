@@ -12,7 +12,6 @@ import (
 
 // github.com/golang/go/issues/25793
 func Transport(ext string) *http.Transport {
-   log.SetFlags(log.Ltime)
    return &http.Transport{
       Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
