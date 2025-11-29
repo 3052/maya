@@ -7,17 +7,17 @@ import (
    "log"
    "net/http"
    "net/url"
-   "path"
 )
 
 // github.com/golang/go/issues/25793
-func Transport(ext string) *http.Transport {
-   log.SetFlags(log.Ltime)
+func Proxy(bypass func(*http.Request) bool) *http.Transport {
    return &http.Transport{
       Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
-         if path.Ext(req.URL.Path) == ext {
-            return nil, nil
+         if bypass != nil {
+            if bypass(req) {
+               return nil, nil
+            }
          }
          log.Println(req.Method, req.URL)
          return http.ProxyFromEnvironment(req)

@@ -6,10 +6,12 @@ import (
 )
 
 type progress struct {
-   total     int
-   processed int
-   start     time.Time
-   lastLog   time.Time
+   total         int
+   processed     int
+   start         time.Time
+   lastLog       time.Time
+   totalBytes    uint64
+   totalDuration uint64
 }
 
 func newProgress(total int) *progress {
@@ -20,10 +22,12 @@ func newProgress(total int) *progress {
    }
 }
 
-func (p *progress) update(sizeBytes, durationTicks, timescale uint64) {
+func (p *progress) update(sizeBytes, durationTicks, timescale uint32) {
    p.processed++
-   now := time.Now()
+   p.totalBytes += uint64(sizeBytes)
+   p.totalDuration += uint64(durationTicks)
 
+   now := time.Now()
    if now.Sub(p.lastLog) > time.Second {
       left := p.total - p.processed
       elapsed := now.Sub(p.start)
@@ -35,8 +39,8 @@ func (p *progress) update(sizeBytes, durationTicks, timescale uint64) {
       }
 
       var bandwidth uint64
-      if durationTicks > 0 {
-         bandwidth = sizeBytes * 8 * timescale / durationTicks
+      if p.totalDuration > 0 {
+         bandwidth = p.totalBytes * 8 * uint64(timescale) / p.totalDuration
       }
 
       log.Printf(
