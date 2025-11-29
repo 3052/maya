@@ -20,10 +20,9 @@ func newProgress(total int) *progress {
    }
 }
 
-func (p *progress) update(sizeBytes, durationTicks, timescale uint64) {
+func (p *progress) update(sizeBytes, durationTicks, timescale uint32) {
    p.processed++
    now := time.Now()
-
    if now.Sub(p.lastLog) > time.Second {
       left := p.total - p.processed
       elapsed := now.Sub(p.start)
@@ -36,7 +35,7 @@ func (p *progress) update(sizeBytes, durationTicks, timescale uint64) {
 
       var bandwidth uint64
       if durationTicks > 0 {
-         bandwidth = sizeBytes * 8 * timescale / durationTicks
+         bandwidth = uint64(sizeBytes) * 8 * uint64(timescale) / uint64(durationTicks)
       }
 
       log.Printf(
