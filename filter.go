@@ -2,11 +2,13 @@ package net
 
 import (
    "41.neocities.org/dash"
+   "41.neocities.org/sofia"
    "errors"
    "fmt"
    "io"
    "math"
    "net/http"
+   "net/url"
    "slices"
    "strings"
 )
@@ -43,7 +45,18 @@ func (f *Filters) Filter(response *http.Response, configVar *Config) error {
       if index >= 1 {
          fmt.Println()
       }
+      // Basic representation info
       fmt.Println(group[0])
+
+      // --- Start of Bitrate Calculation Logic ---
+      // 1. Pick the representation in the middle Period
+      middleRep := group[len(group)/2]
+
+      // 2. Calculate bitrate of the middle segment
+      if bitrate, err := getMiddleBitrate(middleRep); err == nil {
+         fmt.Printf("middle segment bitrate = %d\n", bitrate)
+      }
+      // --- End of Bitrate Calculation Logic ---
    }
 
    for _, target := range f.Values {
@@ -210,4 +223,135 @@ type Filter struct {
    Lang      string
    Role      string
    Codecs    string
+}
+
+// getMiddleBitrate calculates the bitrate of the middle segment for a specific Representation.
+func getMiddleBitrate(rep *dash.Representation) (int, error) {
+   baseURL, err := rep.ResolveBaseURL()
+   if err != nil {
+      return 0, err
+   }
+
+   // Strategy 1: SegmentBase (Single file with sidx)
+   // We must download the sidx to find the segment size and duration.
+   if rep.SegmentBase != nil {
+      head := http.Header{}
+      head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+
+      // reuse getSegment from config.go (same package)
+      sidxData, err := getSegment(baseURL, head)
+      if err != nil {
+         return 0, err
+      }
+
+      parsed, err := sofia.Parse(sidxData)
+      if err != nil {
+         return 0, err
+      }
+
+      sidx, ok := sofia.FindSidx(parsed)
+      if !ok {
+         return 0, sofia.Missing("sidx")
+      }
+
+      if len(sidx.References) == 0 {
+         return 0, errors.New("no references in sidx")
+      }
+
+      // Find Middle Segment
+      midIdx := len(sidx.References) / 2
+      ref := sidx.References[midIdx]
+
+      sizeBits := uint64(ref.ReferencedSize) * 8
+      // duration is in timescale units
+      durationSec := float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
+
+      if durationSec <= 0 {
+         return 0, errors.New("invalid duration")
+      }
+
+      return int(float64(sizeBits) / durationSec), nil
+   }
+
+   // Strategy 2: SegmentTemplate or SegmentList (Multiple files)
+   // We resolve the URL list, pick the middle one, use HEAD for size,
+   // and MPD info for duration.
+   var urls []*url.URL
+   var durationSec float64
+
+   if tmpl := rep.GetSegmentTemplate(); tmpl != nil {
+      u, err := tmpl.GetSegmentURLs(rep)
+      if err != nil {
+         return 0, err
+      }
+      urls = u
+
+      // Calculate Duration for the middle segment
+      midIdx := len(urls) / 2
+      timescale := float64(tmpl.GetTimescale())
+
+      if tmpl.SegmentTimeline != nil {
+         // Find duration 'd' for the segment at midIdx
+         currentIndex := 0
+         found := false
+         for _, s := range tmpl.SegmentTimeline.S {
+            count := 1
+            if s.R > 0 {
+               count += s.R
+            }
+            // If midIdx falls within this S element
+            if midIdx < currentIndex+count {
+               durationSec = float64(s.D) / timescale
+               found = true
+               break
+            }
+            currentIndex += count
+         }
+         if !found {
+            return 0, errors.New("could not find duration in timeline")
+         }
+      } else if tmpl.Duration > 0 {
+         durationSec = float64(tmpl.Duration) / timescale
+      } else {
+         return 0, errors.New("unknown segment duration")
+      }
+
+   } else if list := rep.SegmentList; list != nil {
+      for _, seg := range list.SegmentURLs {
+         u, err := seg.ResolveMedia()
+         if err != nil {
+            return 0, err
+         }
+         urls = append(urls, u)
+      }
+      if list.Duration == 0 {
+         return 0, errors.New("unknown segment duration")
+      }
+      durationSec = float64(list.Duration) / float64(list.GetTimescale())
+   }
+
+   if len(urls) == 0 {
+      return 0, nil
+   }
+
+   // Fetch Size of Middle Segment
+   midIdx := len(urls) / 2
+   targetURL := urls[midIdx]
+
+   resp, err := http.DefaultClient.Head(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   defer resp.Body.Close()
+
+   if resp.ContentLength <= 0 {
+      return 0, errors.New("content length missing")
+   }
+
+   sizeBits := uint64(resp.ContentLength) * 8
+   if durationSec <= 0 {
+      return 0, errors.New("invalid duration")
+   }
+
+   return int(float64(sizeBits) / durationSec), nil
 }
