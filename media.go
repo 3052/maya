@@ -13,7 +13,6 @@ import (
 func (m *MediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
    var unfrag sofia.Unfragmenter
    unfrag.Writer = file
-
    if len(initData) > 0 {
       // Initialize parses the init segment and sets unfrag.Moov
       if err := unfrag.Initialize(initData); err != nil {
@@ -24,7 +23,6 @@ func (m *MediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
          return nil, err
       }
    }
-
    return &unfrag, nil
 }
 
@@ -50,23 +48,15 @@ func (m *MediaFile) processAndWriteSegments(
 
    // Setup Progress Tracking
    prog := newProgress(totalSegments)
-   // We need to accumulate stats per segment and update progress only when a segment is fully processed.
-   var segmentSize, segmentDuration uint32
-   unfrag.OnSampleInfo = func(sample *sofia.UnfragSample) {
-      segmentSize += sample.Size
-      segmentDuration += sample.Duration
-   }
 
    pending := make(map[int][]byte)
    nextIndex := 0
-
    for i := 0; i < totalSegments; i++ {
       res := <-results
       if res.err != nil {
          doneChan <- res.err
          return
       }
-
       pending[res.index] = res.data
 
       // Write all available sequential segments
@@ -76,10 +66,6 @@ func (m *MediaFile) processAndWriteSegments(
             break
          }
 
-         // Reset accumulators for the new segment
-         segmentSize = 0
-         segmentDuration = 0
-
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
          if err := unfrag.AddSegment(data); err != nil {
             doneChan <- err
@@ -87,7 +73,7 @@ func (m *MediaFile) processAndWriteSegments(
          }
 
          // Update progress once per segment
-         prog.update(segmentSize, segmentDuration, m.timescale)
+         prog.update()
 
          delete(pending, nextIndex)
          nextIndex++
@@ -99,7 +85,6 @@ func (m *MediaFile) processAndWriteSegments(
       doneChan <- err
       return
    }
-
    doneChan <- nil
 }
 
@@ -163,7 +148,6 @@ func (m *MediaFile) configureMoov(moov *sofia.MoovBox) error {
          log.Printf("MP4 content ID %x", m.content_id)
       }
    }
-
    moov.RemovePssh()
 
    // Unfragmenter.Initialize guarantees Trak exists
@@ -174,13 +158,11 @@ func (m *MediaFile) configureMoov(moov *sofia.MoovBox) error {
    if !ok {
       return sofia.Missing("mdia")
    }
-
    mdhd, ok := mdia.Mdhd()
    if !ok {
       return sofia.Missing("mdhd")
    }
    m.timescale = mdhd.Timescale
-
    return nil
 }
 
