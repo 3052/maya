@@ -11,8 +11,8 @@ import (
 )
 
 // github.com/golang/go/issues/25793
-func Transport(policy func(*http.Request) string) *http.Transport {
-   return &http.Transport{
+func Transport(policy func(*http.Request) string) {
+   http.DefaultTransport = &http.Transport{
       Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
          flags := policy(req)
