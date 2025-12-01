@@ -8,7 +8,9 @@ import (
    "testing"
 )
 
-func TestConfig_PrintRepresentations(t *testing.T) {
+const test_mpd = "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd"
+
+func TestRepresentations(t *testing.T) {
    log.SetFlags(log.Ltime)
    Transport(func(req *http.Request) string {
       if path.Ext(req.URL.Path) == ".mp4" {
@@ -17,23 +19,16 @@ func TestConfig_PrintRepresentations(t *testing.T) {
       return "L"
    })
    // Real MPD URL provided by user
-   mpdURL := "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd"
-   // 1. Configure the Test
-   // RepresentationId is empty by default, so Filter will skip download.
-   config := &Config{}
-   // 2. Fetch the MPD
-   resp, err := http.Get(mpdURL)
+   resp, err := http.Get(test_mpd)
    if err != nil {
       t.Fatalf("Failed to fetch MPD: %v", err)
    }
    defer resp.Body.Close()
-   data, err := io.ReadAll(resp.Body)
+   mpdBody, err := io.ReadAll(resp.Body)
    if err != nil {
       t.Fatal(err)
    }
-   err = config.Representations(
-      string(data), resp.Request.URL.String(),
-   )
+   err = Representations(mpdBody, resp.Request.URL)
    if err != nil {
       t.Fatal(err)
    }
