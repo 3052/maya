@@ -11,14 +11,39 @@ import (
    "slices"
 )
 
-// PrintRepresentations parses the MPD, calculates the true bitrate for the middle
-// representation of each group, and prints them in sorted order.
-func (c *Config) PrintRepresentations(data []byte, mpdURL *url.URL) error {
-   mpd, err := dash.Parse(data)
+// Download parses the MPD from a byte slice and downloads the specified representation.
+func (c *Config) Download(mpdBody, mpdUrl, representationId string) error {
+   mpd, err := dash.Parse([]byte(mpdBody))
    if err != nil {
       return err
    }
-   mpd.MPDURL = mpdURL
+   mpd.MPDURL, err = url.Parse(mpdUrl)
+   if err != nil {
+      return err
+   }
+
+   for _, group := range mpd.GetRepresentations() {
+      // All representations in a group share the same ID.
+      // We check the first one, ensuring the group is not empty.
+      if len(group) > 0 && group[0].ID == representationId {
+         return c.downloadGroup(group)
+      }
+   }
+
+   return fmt.Errorf("representation '%s' not found", representationId)
+}
+
+// PrintRepresentations parses the MPD, calculates the true bitrate for the middle
+// representation of each group, and prints them in sorted order.
+func (c *Config) Representations(mpdBody, mpdUrl string) error {
+   mpd, err := dash.Parse([]byte(mpdBody))
+   if err != nil {
+      return err
+   }
+   mpd.MPDURL, err = url.Parse(mpdUrl)
+   if err != nil {
+      return err
+   }
 
    // 1. Build a slice of middle representations, updating their bitrates as we go.
    var middleReps []*dash.Representation
@@ -45,25 +70,6 @@ func (c *Config) PrintRepresentations(data []byte, mpdURL *url.URL) error {
       fmt.Println(rep)
    }
    return nil
-}
-
-// Download parses the MPD from a byte slice and downloads the specified representation.
-func (c *Config) Download(data []byte, mpdURL *url.URL, representationId string) error {
-   mpd, err := dash.Parse(data)
-   if err != nil {
-      return err
-   }
-   mpd.MPDURL = mpdURL
-
-   for _, group := range mpd.GetRepresentations() {
-      // All representations in a group share the same ID.
-      // We check the first one, ensuring the group is not empty.
-      if len(group) > 0 && group[0].ID == representationId {
-         return c.downloadGroup(group)
-      }
-   }
-
-   return fmt.Errorf("representation '%s' not found", representationId)
 }
 
 // getMiddleBitrate calculates the bitrate of the middle segment and updates the Representation.

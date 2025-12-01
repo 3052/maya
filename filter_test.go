@@ -31,8 +31,9 @@ func TestConfig_PrintRepresentations(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   // 3. Run PrintRepresentations
-   err = config.PrintRepresentations(data, resp.Request.URL)
+   err = config.Representations(
+      string(data), resp.Request.URL.String(),
+   )
    if err != nil {
       t.Fatal(err)
    }
