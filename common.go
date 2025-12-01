@@ -11,8 +11,8 @@ import (
 )
 
 // github.com/golang/go/issues/25793
-func Transport(policy func(*http.Request) string) *http.Transport {
-   return &http.Transport{
+func Transport(policy func(*http.Request) string) {
+   http.DefaultTransport = &http.Transport{
       Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
          flags := policy(req)
@@ -28,8 +28,7 @@ func Transport(policy func(*http.Request) string) *http.Transport {
 }
 
 var (
-   ErrMissingTraf = errors.New("missing traf box")
-   ErrKeyMismatch = errors.New("key ID mismatch")
+   errKeyMismatch = errors.New("key ID mismatch")
 )
 
 var widevineID, _ = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")

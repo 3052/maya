@@ -10,7 +10,7 @@ import (
    "strings"
 )
 
-func (m *MediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
+func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
    var unfrag sofia.Unfragmenter
    unfrag.Writer = file
    if len(initData) > 0 {
@@ -26,7 +26,7 @@ func (m *MediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
    return &unfrag, nil
 }
 
-func (m *MediaFile) processAndWriteSegments(
+func (m *mediaFile) processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
    totalSegments int,
@@ -45,10 +45,8 @@ func (m *MediaFile) processAndWriteSegments(
          sofia.DecryptSample(sample, info, block)
       }
    }
-
    // Setup Progress Tracking
    prog := newProgress(totalSegments)
-
    pending := make(map[int][]byte)
    nextIndex := 0
    for i := 0; i < totalSegments; i++ {
@@ -58,28 +56,23 @@ func (m *MediaFile) processAndWriteSegments(
          return
       }
       pending[res.index] = res.data
-
       // Write all available sequential segments
       for {
          data, ok := pending[nextIndex]
          if !ok {
             break
          }
-
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
          if err := unfrag.AddSegment(data); err != nil {
             doneChan <- err
             return
          }
-
          // Update progress once per segment
          prog.update()
-
          delete(pending, nextIndex)
          nextIndex++
       }
    }
-
    // Finish writes the final moov box and updates mdat size
    if err := unfrag.Finish(); err != nil {
       doneChan <- err
@@ -88,13 +81,13 @@ func (m *MediaFile) processAndWriteSegments(
    doneChan <- nil
 }
 
-type MediaFile struct {
+type mediaFile struct {
    timescale  uint32
    key_id     []byte
    content_id []byte
 }
 
-func (m *MediaFile) configureProtection(rep *dash.Representation) error {
+func (m *mediaFile) configureProtection(rep *dash.Representation) error {
    for _, protect := range rep.GetContentProtection() {
       switch strings.ToLower(protect.SchemeIdUri) {
       case protectionURN:
@@ -136,7 +129,7 @@ func (m *MediaFile) configureProtection(rep *dash.Representation) error {
    return nil
 }
 
-func (m *MediaFile) configureMoov(moov *sofia.MoovBox) error {
+func (m *mediaFile) configureMoov(moov *sofia.MoovBox) error {
    // Handle Widevine PSSH
    if wvBox, ok := moov.FindPssh(widevineID); ok {
       var pssh_data widevine.PsshData
@@ -149,11 +142,9 @@ func (m *MediaFile) configureMoov(moov *sofia.MoovBox) error {
       }
    }
    moov.RemovePssh()
-
    // Unfragmenter.Initialize guarantees Trak exists
    trak, _ := moov.Trak()
    trak.RemoveEdts()
-
    mdia, ok := trak.Mdia()
    if !ok {
       return sofia.Missing("mdia")
