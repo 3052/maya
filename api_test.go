@@ -18,10 +18,6 @@ func TestConfig_PrintRepresentations(t *testing.T) {
    })
    // Real MPD URL provided by user
    mpdURL := "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd"
-   // 1. Configure the Test
-   // RepresentationId is empty by default, so Filter will skip download.
-   config := &Config{}
-   // 2. Fetch the MPD
    resp, err := http.Get(mpdURL)
    if err != nil {
       t.Fatalf("Failed to fetch MPD: %v", err)
@@ -31,7 +27,7 @@ func TestConfig_PrintRepresentations(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   err = config.Representations(
+   err = Representations(
       string(data), resp.Request.URL.String(),
    )
    if err != nil {
