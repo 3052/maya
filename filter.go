@@ -5,72 +5,65 @@ import (
    "41.neocities.org/sofia"
    "errors"
    "fmt"
-   "io"
+   "log"
    "net/http"
    "net/url"
    "slices"
-   "strings"
 )
 
-// Filter parses the MPD, prints available representations (calculating bitrates for the middle segment),
-// and optionally downloads the representation matching the RepresentationId in Config.
-func (c *Config) Filter(response *http.Response) error {
-   if response.StatusCode != http.StatusOK {
-      var data strings.Builder
-      response.Write(&data)
-      return errors.New(data.String())
-   }
-   defer response.Body.Close()
-
-   data, err := io.ReadAll(response.Body)
-   if err != nil {
-      return err
-   }
-
+// PrintRepresentations parses the MPD, calculates the true bitrate for the middle
+// representation of each group, and prints them in sorted order.
+func (c *Config) PrintRepresentations(data []byte, mpdURL *url.URL) error {
    mpd, err := dash.Parse(data)
    if err != nil {
       return err
    }
-   mpd.MPDURL = response.Request.URL
+   mpd.MPDURL = mpdURL
 
-   var groups [][]*dash.Representation
+   // 1. Build a slice of middle representations, updating their bitrates as we go.
+   var middleReps []*dash.Representation
    for _, group := range mpd.GetRepresentations() {
-      groups = append(groups, group)
-   }
-
-   slices.SortFunc(groups, func(a, b []*dash.Representation) int {
-      return a[0].Bandwidth - b[0].Bandwidth
-   })
-
-   // 1. Update Phase: Calculate bitrate for the middle representation of each group
-   for _, group := range groups {
-      middleRep := group[len(group)/2]
-      if err := getMiddleBitrate(middleRep); err != nil {
-         return err
+      if len(group) > 0 {
+         middleRep := group[len(group)/2]
+         if err := getMiddleBitrate(middleRep); err != nil {
+            return err
+         }
+         middleReps = append(middleReps, middleRep)
       }
    }
 
-   // 2. Print Phase: Display the representations
-   for index, group := range groups {
+   // 2. Sort Phase: Sort the representations based on their new, accurate bitrates.
+   slices.SortFunc(middleReps, func(a, b *dash.Representation) int {
+      return a.Bandwidth - b.Bandwidth
+   })
+
+   // 3. Print Phase: Display the sorted representations.
+   for index, rep := range middleReps {
       if index >= 1 {
          fmt.Println()
       }
-      middleRep := group[len(group)/2]
-      fmt.Println(middleRep)
+      fmt.Println(rep)
    }
+   return nil
+}
 
-   if c.RepresentationId == "" {
-      return nil
+// Download parses the MPD from a byte slice and downloads the specified representation.
+func (c *Config) Download(data []byte, mpdURL *url.URL, representationId string) error {
+   mpd, err := dash.Parse(data)
+   if err != nil {
+      return err
    }
+   mpd.MPDURL = mpdURL
 
-   for _, group := range groups {
-      // All representations in a group share the same ID
-      if group[0].ID == c.RepresentationId {
-         return c.download(group)
+   for _, group := range mpd.GetRepresentations() {
+      // All representations in a group share the same ID.
+      // We check the first one, ensuring the group is not empty.
+      if len(group) > 0 && group[0].ID == representationId {
+         return c.downloadGroup(group)
       }
    }
 
-   return fmt.Errorf("representation '%s' not found", c.RepresentationId)
+   return fmt.Errorf("representation '%s' not found", representationId)
 }
 
 // getMiddleBitrate calculates the bitrate of the middle segment and updates the Representation.
@@ -79,64 +72,53 @@ func getMiddleBitrate(rep *dash.Representation) error {
    if err != nil {
       return err
    }
+   log.Println("update", rep.ID)
 
    // Strategy 1: SegmentBase (Single file with sidx)
    if rep.SegmentBase != nil {
       head := http.Header{}
       head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-
       // reuse getSegment from config.go (same package)
       sidxData, err := getSegment(baseURL, head)
       if err != nil {
          return err
       }
-
       parsed, err := sofia.Parse(sidxData)
       if err != nil {
          return err
       }
-
       sidx, ok := sofia.FindSidx(parsed)
       if !ok {
          return sofia.Missing("sidx")
       }
-
       if len(sidx.References) == 0 {
          return errors.New("no references in sidx")
       }
-
       // Find Middle Segment
       midIdx := len(sidx.References) / 2
       ref := sidx.References[midIdx]
-
       sizeBits := uint64(ref.ReferencedSize) * 8
       // duration is in timescale units
       durationSec := float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
-
       if durationSec <= 0 {
          return errors.New("invalid duration")
       }
-
       // Update Representation
       rep.Bandwidth = int(float64(sizeBits) / durationSec)
       return nil
    }
-
    // Strategy 2: SegmentTemplate or SegmentList (Multiple files)
    var urls []*url.URL
    var durationSec float64
-
    if tmpl := rep.GetSegmentTemplate(); tmpl != nil {
       u, err := tmpl.GetSegmentURLs(rep)
       if err != nil {
          return err
       }
       urls = u
-
       // Calculate Duration for the middle segment
       midIdx := len(urls) / 2
       timescale := float64(tmpl.GetTimescale())
-
       if tmpl.SegmentTimeline != nil {
          currentIndex := 0
          found := false
@@ -160,7 +142,6 @@ func getMiddleBitrate(rep *dash.Representation) error {
       } else {
          return errors.New("unknown segment duration")
       }
-
    } else if list := rep.SegmentList; list != nil {
       for _, seg := range list.SegmentURLs {
          u, err := seg.ResolveMedia()
@@ -174,31 +155,25 @@ func getMiddleBitrate(rep *dash.Representation) error {
       }
       durationSec = float64(list.Duration) / float64(list.GetTimescale())
    }
-
    if len(urls) == 0 {
       rep.Bandwidth = 0
       return nil
    }
-
    // Fetch Size of Middle Segment
    midIdx := len(urls) / 2
    targetURL := urls[midIdx]
-
    resp, err := http.DefaultClient.Head(targetURL.String())
    if err != nil {
       return err
    }
    defer resp.Body.Close()
-
    if resp.ContentLength <= 0 {
       return errors.New("content length missing")
    }
-
    sizeBits := uint64(resp.ContentLength) * 8
    if durationSec <= 0 {
       return errors.New("invalid duration")
    }
-
    // Update Representation
    rep.Bandwidth = int(float64(sizeBits) / durationSec)
    return nil
