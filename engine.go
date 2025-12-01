@@ -7,8 +7,76 @@ import (
    "crypto/aes"
    "log"
    "os"
-   "strings"
+   "sync"
 )
+
+func (c *Config) downloadGroup(group []*dash.Representation) error {
+   rep := group[0]
+   var media mediaFile
+   // Configure PSSH if available in MPD
+   if err := media.configureProtection(rep); err != nil {
+      return err
+   }
+   file, err := createOutputFile(rep)
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+   // Download raw init segment
+   initData, err := c.downloadInitialization(&media, rep)
+   if err != nil {
+      return err
+   }
+   // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
+   unfrag, err := media.initializeWriter(file, initData)
+   if err != nil {
+      return err
+   }
+   // Fetch key using info extracted from MPD or Init Segment
+   key, err := c.fetchKey(&media)
+   if err != nil {
+      return err
+   }
+   // getMediaRequests now only returns requests (and error)
+   requests, err := getMediaRequests(group)
+   if err != nil {
+      return err
+   }
+   if len(requests) == 0 {
+      return nil
+   }
+   numWorkers := c.Threads
+   if numWorkers < 1 {
+      numWorkers = 1
+   }
+   jobs := make(chan job, len(requests))
+   results := make(chan result, len(requests))
+   var wg sync.WaitGroup
+   // Start Workers
+   wg.Add(numWorkers)
+   for workerID := 0; workerID < numWorkers; workerID++ {
+      go func() {
+         defer wg.Done()
+         for downloadJob := range jobs {
+            data, err := getSegment(downloadJob.request.url, downloadJob.request.header)
+            results <- result{index: downloadJob.index, data: data, err: err}
+         }
+      }()
+   }
+   // Start Writer (processes results)
+   doneChan := make(chan error, 1)
+   go media.processAndWriteSegments(doneChan, results, len(requests), key, unfrag)
+   // Send Jobs
+   for reqIndex, req := range requests {
+      jobs <- job{index: reqIndex, request: req}
+   }
+   close(jobs)
+   // Wait for writer to finish
+   if err := <-doneChan; err != nil {
+      return err
+   }
+   return nil
+}
 
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
    var unfrag sofia.Unfragmenter
@@ -81,54 +149,6 @@ func (m *mediaFile) processAndWriteSegments(
    doneChan <- nil
 }
 
-type mediaFile struct {
-   timescale  uint32
-   key_id     []byte
-   content_id []byte
-}
-
-func (m *mediaFile) configureProtection(rep *dash.Representation) error {
-   for _, protect := range rep.GetContentProtection() {
-      switch strings.ToLower(protect.SchemeIdUri) {
-      case protectionURN:
-         // 1. get `default_KID` from MPD
-         // https://ctv.ca MPD is missing PSSH
-         data, err := protect.GetDefaultKID()
-         if err != nil {
-            return err
-         }
-         if data != nil {
-            m.key_id = data
-            log.Printf("key ID %x", m.key_id)
-         }
-      case widevineURN:
-         // 2. check if MPD has PSSH, check if PSSH has content ID
-         // https://hulu.com poisons the PSSH so we only want content ID
-         data, err := protect.GetPSSH()
-         if err != nil {
-            return err
-         }
-         if data != nil {
-            var pssh_box sofia.PsshBox
-            err = pssh_box.Parse(data)
-            if err != nil {
-               return err
-            }
-            var pssh_data widevine.PsshData
-            err = pssh_data.Unmarshal(pssh_box.Data)
-            if err != nil {
-               return err
-            }
-            if pssh_data.ContentID != nil {
-               m.content_id = pssh_data.ContentID
-               log.Printf("DASH content ID %x", m.content_id)
-            }
-         }
-      }
-   }
-   return nil
-}
-
 func (m *mediaFile) configureMoov(moov *sofia.MoovBox) error {
    // Handle Widevine PSSH
    if wvBox, ok := moov.FindPssh(widevineID); ok {
@@ -157,7 +177,17 @@ func (m *mediaFile) configureMoov(moov *sofia.MoovBox) error {
    return nil
 }
 
-const (
-   protectionURN = "urn:mpeg:dash:mp4protection:2011"
-   widevineURN   = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-)
+func createOutputFile(rep *dash.Representation) (*os.File, error) {
+   extension := ".mp4"
+   switch rep.GetMimeType() {
+   case "audio/mp4":
+      extension = ".m4a"
+   case "text/vtt":
+      extension = ".vtt"
+   case "video/mp4":
+      extension = ".m4v"
+   }
+   name := rep.ID + extension
+   log.Println("Create", name)
+   return os.Create(name)
+}
