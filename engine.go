@@ -13,45 +13,55 @@ import (
 func (c *Config) downloadGroup(group []*dash.Representation) error {
    rep := group[0]
    var media mediaFile
+
    // Configure PSSH if available in MPD
    if err := media.configureProtection(rep); err != nil {
       return err
    }
+
    file, err := createOutputFile(rep)
    if err != nil {
       return err
    }
    defer file.Close()
+
    // Download raw init segment
    initData, err := c.downloadInitialization(&media, rep)
    if err != nil {
       return err
    }
+
    // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
    unfrag, err := media.initializeWriter(file, initData)
    if err != nil {
       return err
    }
+
    // Fetch key using info extracted from MPD or Init Segment
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
+
    // getMediaRequests now only returns requests (and error)
    requests, err := getMediaRequests(group)
    if err != nil {
       return err
    }
+
    if len(requests) == 0 {
       return nil
    }
+
    numWorkers := c.Threads
    if numWorkers < 1 {
       numWorkers = 1
    }
+
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
+
    // Start Workers
    wg.Add(numWorkers)
    for workerID := 0; workerID < numWorkers; workerID++ {
@@ -63,34 +73,55 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
          }
       }()
    }
+
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), key, unfrag)
+
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
+
    // Wait for writer to finish
    if err := <-doneChan; err != nil {
       return err
    }
+
    return nil
 }
 
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
    var unfrag sofia.Unfragmenter
    unfrag.Writer = file
+
    if len(initData) > 0 {
       // Initialize parses the init segment and sets unfrag.Moov
       if err := unfrag.Initialize(initData); err != nil {
          return nil, err
       }
-      // Read/Update Moov (extract content ID/timescale, remove PSSH/EDTS)
-      if err := m.configureMoov(unfrag.Moov); err != nil {
-         return nil, err
+
+      // Combined Logic from configureMoov:
+      // Handle Widevine PSSH
+      if wvBox, ok := unfrag.Moov.FindPssh(widevineID); ok {
+         var pssh_data widevine.PsshData
+         if err := pssh_data.Unmarshal(wvBox.Data); err != nil {
+            return nil, err
+         }
+         if pssh_data.ContentID != nil {
+            m.content_id = pssh_data.ContentID
+            log.Printf("MP4 content ID %x", m.content_id)
+         }
       }
+
+      // Cleanup atoms
+      unfrag.Moov.RemovePssh()
+      // Unfragmenter.Initialize guarantees Trak exists
+      trak, _ := unfrag.Moov.Trak()
+      trak.RemoveEdts()
    }
+
    return &unfrag, nil
 }
 
@@ -113,68 +144,48 @@ func (m *mediaFile) processAndWriteSegments(
          sofia.DecryptSample(sample, info, block)
       }
    }
+
    // Setup Progress Tracking
    prog := newProgress(totalSegments)
    pending := make(map[int][]byte)
    nextIndex := 0
+
    for i := 0; i < totalSegments; i++ {
       res := <-results
       if res.err != nil {
          doneChan <- res.err
          return
       }
+
       pending[res.index] = res.data
+
       // Write all available sequential segments
       for {
          data, ok := pending[nextIndex]
          if !ok {
             break
          }
+
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
          if err := unfrag.AddSegment(data); err != nil {
             doneChan <- err
             return
          }
+
          // Update progress once per segment
          prog.update()
          delete(pending, nextIndex)
          nextIndex++
       }
    }
+
    // Finish writes the final moov box and updates mdat size
    if err := unfrag.Finish(); err != nil {
       doneChan <- err
       return
    }
-   doneChan <- nil
-}
 
-func (m *mediaFile) configureMoov(moov *sofia.MoovBox) error {
-   // Handle Widevine PSSH
-   if wvBox, ok := moov.FindPssh(widevineID); ok {
-      var pssh_data widevine.PsshData
-      if err := pssh_data.Unmarshal(wvBox.Data); err != nil {
-         return err
-      }
-      if pssh_data.ContentID != nil {
-         m.content_id = pssh_data.ContentID
-         log.Printf("MP4 content ID %x", m.content_id)
-      }
-   }
-   moov.RemovePssh()
-   // Unfragmenter.Initialize guarantees Trak exists
-   trak, _ := moov.Trak()
-   trak.RemoveEdts()
-   mdia, ok := trak.Mdia()
-   if !ok {
-      return sofia.Missing("mdia")
-   }
-   mdhd, ok := mdia.Mdhd()
-   if !ok {
-      return sofia.Missing("mdhd")
-   }
-   m.timescale = mdhd.Timescale
-   return nil
+   doneChan <- nil
 }
 
 func createOutputFile(rep *dash.Representation) (*os.File, error) {

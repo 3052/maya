@@ -26,7 +26,6 @@ var (
 )
 
 type mediaFile struct {
-   timescale  uint32
    key_id     []byte
    content_id []byte
 }
