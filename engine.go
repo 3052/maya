@@ -117,9 +117,6 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
 
       // Cleanup atoms
       unfrag.Moov.RemovePssh()
-      // Unfragmenter.Initialize guarantees Trak exists
-      trak, _ := unfrag.Moov.Trak()
-      trak.RemoveEdts()
    }
 
    return &unfrag, nil

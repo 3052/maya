@@ -9,7 +9,7 @@ import (
 
 // Representations parses the MPD, calculates the true bitrate for the middle
 // representation of each group, and prints them in sorted order.
-func Representations(mpdBody []byte, mpd *url.URL) error {
+func Representations(mpd *url.URL, mpdBody []byte) error {
    manifest, err := dash.Parse(mpdBody)
    if err != nil {
       return err
@@ -44,7 +44,7 @@ func Representations(mpdBody []byte, mpd *url.URL) error {
 }
 
 // Download parses the MPD from a byte slice and downloads the specified representation.
-func (c *Config) Download(mpdBody []byte, mpd *url.URL, representationId string) error {
+func (c *Config) Download(mpd *url.URL, mpdBody []byte, representationId string) error {
    manifest, err := dash.Parse(mpdBody)
    if err != nil {
       return err

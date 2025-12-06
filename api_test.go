@@ -28,7 +28,7 @@ func TestRepresentations(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   err = Representations(mpdBody, resp.Request.URL)
+   err = Representations(resp.Request.URL, mpdBody)
    if err != nil {
       t.Fatal(err)
    }
