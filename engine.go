@@ -48,7 +48,6 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    if err != nil {
       return err
    }
-
    if len(requests) == 0 {
       return nil
    }
@@ -65,18 +64,18 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    // Start Workers
    wg.Add(numWorkers)
    for workerID := 0; workerID < numWorkers; workerID++ {
-      go func() {
+      go func(id int) {
          defer wg.Done()
          for downloadJob := range jobs {
             data, err := getSegment(downloadJob.request.url, downloadJob.request.header)
-            results <- result{index: downloadJob.index, data: data, err: err}
+            results <- result{index: downloadJob.index, workerID: id, data: data, err: err}
          }
-      }()
+      }(workerID)
    }
 
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), key, unfrag)
+   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, unfrag)
 
    // Send Jobs
    for reqIndex, req := range requests {
@@ -88,7 +87,6 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    if err := <-doneChan; err != nil {
       return err
    }
-
    return nil
 }
 
@@ -114,7 +112,6 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
             log.Printf("MP4 content ID %x", m.content_id)
          }
       }
-
       // Cleanup atoms
       unfrag.Moov.RemovePssh()
    }
@@ -126,6 +123,7 @@ func (m *mediaFile) processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
    totalSegments int,
+   numWorkers int,
    key []byte,
    unfrag *sofia.Unfragmenter,
 ) {
@@ -143,8 +141,10 @@ func (m *mediaFile) processAndWriteSegments(
    }
 
    // Setup Progress Tracking
-   prog := newProgress(totalSegments)
-   pending := make(map[int][]byte)
+   prog := newProgress(totalSegments, numWorkers)
+
+   // Store full result to keep track of workerID
+   pending := make(map[int]result)
    nextIndex := 0
 
    for i := 0; i < totalSegments; i++ {
@@ -154,23 +154,24 @@ func (m *mediaFile) processAndWriteSegments(
          return
       }
 
-      pending[res.index] = res.data
+      pending[res.index] = res
 
       // Write all available sequential segments
       for {
-         data, ok := pending[nextIndex]
+         item, ok := pending[nextIndex]
          if !ok {
             break
          }
 
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
-         if err := unfrag.AddSegment(data); err != nil {
+         if err := unfrag.AddSegment(item.data); err != nil {
             doneChan <- err
             return
          }
 
-         // Update progress once per segment
-         prog.update()
+         // Update progress using the worker ID that downloaded this segment
+         prog.update(item.workerID)
+
          delete(pending, nextIndex)
          nextIndex++
       }
@@ -181,7 +182,6 @@ func (m *mediaFile) processAndWriteSegments(
       doneChan <- err
       return
    }
-
    doneChan <- nil
 }
 
