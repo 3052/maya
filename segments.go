@@ -12,6 +12,34 @@ import (
    "strings"
 )
 
+func getContentLength(targetURL *url.URL) (int64, error) {
+   // 1. Try HEAD
+   resp, err := http.Head(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   if err := resp.Body.Close(); err != nil {
+      return 0, err
+   }
+   if resp.StatusCode != http.StatusOK {
+      return 0, errors.New(resp.Status)
+   }
+   if resp.ContentLength > 0 {
+      return resp.ContentLength, nil
+   }
+   // 2. Fallback to GET
+   resp, err = http.Get(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   defer resp.Body.Close()
+   if resp.ContentLength > 0 {
+      return resp.ContentLength, nil
+   }
+   // 3. Read body manually if Content-Length header is missing
+   return io.Copy(io.Discard, resp.Body)
+}
+
 // getMiddleBitrate calculates the bitrate of the middle segment and updates
 // the Representation
 func getMiddleBitrate(rep *dash.Representation) error {
@@ -262,35 +290,6 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
    }
 
    return []segment{{url: baseURL, duration: duration}}, nil
-}
-
-func getContentLength(targetURL *url.URL) (int64, error) {
-   // 1. Try HEAD
-   resp, err := http.Head(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   length := resp.ContentLength
-   if err := resp.Body.Close(); err != nil {
-      return 0, err
-   }
-   if length > 0 {
-      return length, nil
-   }
-
-   // 2. Fallback to GET
-   resp, err = http.Get(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   defer resp.Body.Close()
-
-   if resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-
-   // 3. Read body manually if Content-Length header is missing
-   return io.Copy(io.Discard, resp.Body)
 }
 
 // getMediaRequests returns the requests using the unified segment generation logic.
