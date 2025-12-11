@@ -40,6 +40,7 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
       }
       fmt.Println(rep)
    }
+
    return nil
 }
 
@@ -70,4 +71,5 @@ type Config struct {
    EncryptSignKey   string
    ClientId         string
    PrivateKey       string
+   DecryptionKey    string
 }

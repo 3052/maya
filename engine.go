@@ -2,7 +2,6 @@ package net
 
 import (
    "41.neocities.org/dash"
-   "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
    "crypto/aes"
    "log"
@@ -48,6 +47,7 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    if err != nil {
       return err
    }
+
    if len(requests) == 0 {
       return nil
    }
@@ -93,7 +93,6 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
    var unfrag sofia.Unfragmenter
    unfrag.Writer = file
-
    if len(initData) > 0 {
       // Initialize parses the init segment and sets unfrag.Moov
       if err := unfrag.Initialize(initData); err != nil {
@@ -101,21 +100,19 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
       }
 
       // Combined Logic from configureMoov:
-      // Handle Widevine PSSH
-      if wvBox, ok := unfrag.Moov.FindPssh(widevineID); ok {
-         var pssh_data widevine.PsshData
-         if err := pssh_data.Unmarshal(wvBox.Data); err != nil {
-            return nil, err
-         }
-         if pssh_data.ContentID != nil {
-            m.content_id = pssh_data.ContentID
-            log.Printf("MP4 content ID %x", m.content_id)
+      // Handle Widevine PSSH logic
+      // Optimization: Only search atoms and parse if we don't already have the ContentID
+      if m.content_id == nil {
+         if wvBox, ok := unfrag.Moov.FindPssh(widevineID); ok {
+            if err := m.ingestWidevinePSSH(wvBox.Data); err != nil {
+               return nil, err
+            }
          }
       }
+
       // Cleanup atoms
       unfrag.Moov.RemovePssh()
    }
-
    return &unfrag, nil
 }
 
@@ -134,6 +131,7 @@ func (m *mediaFile) processAndWriteSegments(
          doneChan <- err
          return
       }
+
       // Decrypt samples in place using the block
       unfrag.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
          sofia.DecryptSample(sample, info, block)
@@ -153,7 +151,6 @@ func (m *mediaFile) processAndWriteSegments(
          doneChan <- res.err
          return
       }
-
       pending[res.index] = res
 
       // Write all available sequential segments
@@ -162,16 +159,13 @@ func (m *mediaFile) processAndWriteSegments(
          if !ok {
             break
          }
-
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
          if err := unfrag.AddSegment(item.data); err != nil {
             doneChan <- err
             return
          }
-
          // Update progress using the worker ID that downloaded this segment
          prog.update(item.workerID)
-
          delete(pending, nextIndex)
          nextIndex++
       }
@@ -182,6 +176,7 @@ func (m *mediaFile) processAndWriteSegments(
       doneChan <- err
       return
    }
+
    doneChan <- nil
 }
 
