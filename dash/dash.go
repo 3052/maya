@@ -3,30 +3,16 @@ package main
 import (
    "41.neocities.org/net"
    "encoding/json"
+   "errors"
    "flag"
    "io"
    "log"
    "net/http"
    "net/url"
    "os"
+   "path"
    "path/filepath"
 )
-
-func main() {
-   log.SetFlags(log.Ltime)
-   net.Transport(func(req *http.Request) string {
-      return "L"
-   })
-   err := new(command).run()
-   if err != nil {
-      log.Fatal(err)
-   }
-}
-
-type mpd struct {
-   Body []byte
-   Url  *url.URL
-}
 
 func (c *command) run() error {
    cache, err := os.UserCacheDir()
@@ -39,6 +25,7 @@ func (c *command) run() error {
    flag.StringVar(&c.address, "a", "", "address")
    flag.StringVar(&c.config.DecryptionKey, "k", "", "key")
    flag.StringVar(&c.representation, "r", "", "Representation ID")
+   flag.IntVar(&c.config.Threads, "t", 2, "threads")
    flag.Parse()
 
    if c.address != "" {
@@ -57,6 +44,9 @@ func (c *command) do_address() error {
       return err
    }
    defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return errors.New(resp.Status)
+   }
    var cache mpd
    cache.Body, err = io.ReadAll(resp.Body)
    if err != nil {
@@ -76,9 +66,9 @@ func (c *command) do_address() error {
 }
 
 type command struct {
-   name           string
-   config         net.Config
    address        string
+   config         net.Config
+   name           string
    representation string
 }
 
@@ -93,4 +83,22 @@ func (c *command) do_representation() error {
       return err
    }
    return c.config.Download(cache.Url, cache.Body, c.representation)
+}
+func main() {
+   log.SetFlags(log.Ltime)
+   net.Transport(func(req *http.Request) string {
+      if path.Ext(req.URL.Path) == ".mp4" {
+         return ""
+      }
+      return "LP"
+   })
+   err := new(command).run()
+   if err != nil {
+      log.Fatal(err)
+   }
+}
+
+type mpd struct {
+   Body []byte
+   Url  *url.URL
 }
