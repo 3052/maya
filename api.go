@@ -5,6 +5,7 @@ import (
    "fmt"
    "net/url"
    "slices"
+   "strconv"
 )
 
 // Representations parses the MPD, calculates the true bitrate for the middle
@@ -19,13 +20,11 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
    // 1. Build a slice of middle representations, updating their bitrates as we go.
    var middleReps []*dash.Representation
    for _, group := range manifest.GetRepresentations() {
-      if len(group) > 0 {
-         middleRep := group[len(group)/2]
-         if err := getMiddleBitrate(middleRep); err != nil {
-            return err
-         }
-         middleReps = append(middleReps, middleRep)
+      middleRep := group[len(group)/2]
+      if err := getMiddleBitrate(middleRep); err != nil {
+         return err
       }
+      middleReps = append(middleReps, middleRep)
    }
 
    // 2. Sort Phase: Sort the representations based on their new, accurate bitrates.
@@ -44,23 +43,26 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
    return nil
 }
 
-// Download parses the MPD from a byte slice and downloads the specified representation.
-func (c *Config) Download(mpd *url.URL, mpdBody []byte, representationId string) error {
+// Download retrieves the specific group of Representations from the MPD
+// matching the provided hex-encoded hash key.
+func (c *Config) Download(mpd *url.URL, mpdBody []byte, hexKey string) error {
    manifest, err := dash.Parse(mpdBody)
    if err != nil {
       return err
    }
    manifest.MPDURL = mpd
-
-   for _, group := range manifest.GetRepresentations() {
-      // All representations in a group share the same ID.
-      // We check the first one, ensuring the group is not empty.
-      if len(group) > 0 && group[0].ID == representationId {
-         return c.downloadGroup(group)
-      }
+   // Parse the safe hex string back into the uint32 hash
+   hash, err := strconv.ParseUint(hexKey, 16, 32)
+   if err != nil {
+      return fmt.Errorf("invalid hash format: %w", err)
    }
-
-   return fmt.Errorf("representation '%s' not found", representationId)
+   // Use GetRepresentations as the Source of Truth for grouping logic
+   allGroups := manifest.GetRepresentations()
+   group, ok := allGroups[uint32(hash)]
+   if !ok {
+      return fmt.Errorf("representation group %s not found", hexKey)
+   }
+   return c.downloadGroup(group)
 }
 
 // Config holds downloader configuration

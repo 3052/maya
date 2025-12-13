@@ -12,38 +12,10 @@ import (
    "strings"
 )
 
-func getContentLength(targetURL *url.URL) (int64, error) {
-   // 1. Try HEAD
-   resp, err := http.Head(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   if err := resp.Body.Close(); err != nil {
-      return 0, err
-   }
-   if resp.StatusCode != http.StatusOK {
-      return 0, errors.New(resp.Status)
-   }
-   if resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-   // 2. Fallback to GET
-   resp, err = http.Get(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   defer resp.Body.Close()
-   if resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-   // 3. Read body manually if Content-Length header is missing
-   return io.Copy(io.Discard, resp.Body)
-}
-
 // getMiddleBitrate calculates the bitrate of the middle segment and updates
 // the Representation
 func getMiddleBitrate(rep *dash.Representation) error {
-   log.Println("update", rep.ID)
+   log.Printf("update %x", rep.GetContinuityKey())
    segs, err := generateSegments(rep)
    if err != nil {
       return err
@@ -77,6 +49,34 @@ func getMiddleBitrate(rep *dash.Representation) error {
    rep.Bandwidth = int(float64(sizeBits) / mid.duration)
 
    return nil
+}
+
+func getContentLength(targetURL *url.URL) (int64, error) {
+   // 1. Try HEAD
+   resp, err := http.Head(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   if err := resp.Body.Close(); err != nil {
+      return 0, err
+   }
+   if resp.StatusCode != http.StatusOK {
+      return 0, errors.New(resp.Status)
+   }
+   if resp.ContentLength > 0 {
+      return resp.ContentLength, nil
+   }
+   // 2. Fallback to GET
+   resp, err = http.Get(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   defer resp.Body.Close()
+   if resp.ContentLength > 0 {
+      return resp.ContentLength, nil
+   }
+   // 3. Read body manually if Content-Length header is missing
+   return io.Copy(io.Discard, resp.Body)
 }
 
 // Internal types for the worker pool
