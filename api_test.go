@@ -1,14 +1,44 @@
 package net
 
 import (
+   "41.neocities.org/dash"
    "io"
    "log"
    "net/http"
    "net/url"
    "path"
+   "strconv"
    "testing"
    "time"
 )
+
+func TestDownload(t *testing.T) {
+   log.SetFlags(log.Ltime)
+   Transport(func(req *http.Request) string {
+      switch path.Ext(req.URL.Path) {
+      case ".m4s", ".mp4":
+         return ""
+      }
+      return "L"
+   })
+   _, data, err := get(raw_urls[0])
+   if err != nil {
+      t.Fatal(err)
+   }
+   manifest, err := dash.Parse(data)
+   if err != nil {
+      t.Fatal(err)
+   }
+   hash, err := strconv.ParseUint("3614fab4", 16, 32)
+   if err != nil {
+      t.Fatal(err)
+   }
+   allGroups := manifest.GetRepresentations()
+   _, ok := allGroups[uint32(hash)]
+   if !ok {
+      t.Fatal("representation group not found")
+   }
+}
 
 func TestRepresentations(t *testing.T) {
    log.SetFlags(log.Ltime)
