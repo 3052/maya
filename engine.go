@@ -4,10 +4,27 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
+   "fmt"
    "log"
    "os"
+   "strings"
    "sync"
 )
+
+func createOutputFile(rep *dash.Representation) (*os.File, error) {
+   mime := rep.GetMimeType()
+   parts := strings.Split(mime, "/")
+   if len(parts) != 2 {
+      return nil, fmt.Errorf("invalid mime type: %s", mime)
+   }
+   extension := "." + parts[1]
+   if mime == "audio/mp4" {
+      extension = ".m4a"
+   }
+   name := rep.ID + extension
+   log.Println("Create", name)
+   return os.Create(name)
+}
 
 func (c *Config) downloadGroup(group []*dash.Representation) error {
    rep := group[0]
@@ -178,19 +195,4 @@ func (m *mediaFile) processAndWriteSegments(
    }
 
    doneChan <- nil
-}
-
-func createOutputFile(rep *dash.Representation) (*os.File, error) {
-   extension := ".mp4"
-   switch rep.GetMimeType() {
-   case "audio/mp4":
-      extension = ".m4a"
-   case "text/vtt":
-      extension = ".vtt"
-   case "video/mp4":
-      extension = ".m4v"
-   }
-   name := rep.ID + extension
-   log.Println("Create", name)
-   return os.Create(name)
 }

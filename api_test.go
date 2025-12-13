@@ -7,10 +7,9 @@ import (
    "net/url"
    "path"
    "testing"
-   "time"
 )
 
-func TestRepresentations(t *testing.T) {
+func TestApi(t *testing.T) {
    log.SetFlags(log.Ltime)
    Transport(func(req *http.Request) string {
       switch path.Ext(req.URL.Path) {
@@ -19,11 +18,8 @@ func TestRepresentations(t *testing.T) {
       }
       return "L"
    })
-   for i, raw_url := range raw_urls {
-      if i >= 1 {
-         time.Sleep(time.Second)
-      }
-      address, data, err := get(raw_url)
+   for _, api_test := range api_tests {
+      address, data, err := get(api_test)
       if err != nil {
          t.Fatal(err)
       }
@@ -32,11 +28,6 @@ func TestRepresentations(t *testing.T) {
          t.Fatal(err)
       }
    }
-}
-
-var raw_urls = []string{
-   "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd",
-   "https://vod.provider.plex.tv/library/parts/64f79dcd7a3f307a7342b239-dash.mpd?x-plex-token=zrd_wJ2BsMGrtzTHZcn8",
 }
 
 func get(raw_url string) (*url.URL, []byte, error) {
@@ -50,4 +41,9 @@ func get(raw_url string) (*url.URL, []byte, error) {
       return nil, nil, err
    }
    return resp.Request.URL, data, nil
+}
+
+var api_tests = []string{
+   "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd",
+   "https://vod.provider.plex.tv/library/parts/64f79dcd7a3f307a7342b239-dash.mpd?x-plex-token=zrd_wJ2BsMGrtzTHZcn8",
 }
