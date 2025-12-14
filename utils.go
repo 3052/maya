@@ -1,30 +1,13 @@
-package net
+package maya
 
 import (
-   "fmt"
    "log"
    "net/http"
    "net/url"
+   "strconv"
    "strings"
    "time"
 )
-
-type progress struct {
-   total     int
-   processed int
-   counts    []int
-   start     time.Time
-   lastLog   time.Time
-}
-
-func newProgress(total int, numWorkers int) *progress {
-   return &progress{
-      total:   total,
-      counts:  make([]int, numWorkers),
-      start:   time.Now(),
-      lastLog: time.Now(),
-   }
-}
 
 func (p *progress) update(workerID int) {
    p.processed++
@@ -42,18 +25,17 @@ func (p *progress) update(workerID int) {
          avgPerSeg := elapsed / time.Duration(p.processed)
          eta = avgPerSeg * time.Duration(left)
       }
-
-      var sb strings.Builder
-      for i, c := range p.counts {
-         if i > 0 {
-            sb.WriteString(" ")
+      
+      var data []byte
+      for i, count := range p.counts {
+         if i >= 1 {
+            data = append(data, ' ')
          }
-         fmt.Fprintf(&sb, "T%d:%d", i, c)
+         data = strconv.AppendInt(data, count, 10)
       }
-
       log.Printf(
-         "| %s | left %d | ETA %s",
-         sb.String(), left, eta.Truncate(time.Second),
+         "done %s | left %v | ETA %v",
+         data, left, eta.Truncate(time.Second),
       )
       p.lastLog = now
    }
@@ -73,5 +55,22 @@ func Transport(policy func(*http.Request) string) {
          }
          return nil, nil
       },
+   }
+}
+
+type progress struct {
+   total     int
+   processed int
+   counts    []int64
+   start     time.Time
+   lastLog   time.Time
+}
+
+func newProgress(total int, numWorkers int) *progress {
+   return &progress{
+      total:   total,
+      counts:  make([]int64, numWorkers),
+      start:   time.Now(),
+      lastLog: time.Now(),
    }
 }
