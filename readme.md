@@ -1,5 +1,3 @@
-# net
+# maya
 
-interface for network I/O
-
-https://41.neocities.org/net
+https://41.neocities.org/maya
