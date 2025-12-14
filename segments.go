@@ -1,4 +1,4 @@
-package net
+package maya
 
 import (
    "41.neocities.org/dash"
@@ -11,6 +11,40 @@ import (
    "net/url"
    "strings"
 )
+
+func getContentLength(targetURL *url.URL) (int64, error) {
+   // 1. Try HEAD
+   resp, err := http.Head(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   if err := resp.Body.Close(); err != nil {
+      return 0, err
+   }
+   switch resp.StatusCode {
+   case http.StatusOK:
+      // If 200 OK, check if we got the length right away
+      if resp.ContentLength > 0 {
+         return resp.ContentLength, nil
+      }
+   case http.StatusMethodNotAllowed:
+      // If 405, we explicitly allow falling through to the GET request below
+   default:
+      // Any other status code results in an error
+      return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+   }
+   // 2. Fallback to GET
+   resp, err = http.Get(targetURL.String())
+   if err != nil {
+      return 0, err
+   }
+   defer resp.Body.Close()
+   if resp.ContentLength > 0 {
+      return resp.ContentLength, nil
+   }
+   // 3. Read body manually if Content-Length header is missing
+   return io.Copy(io.Discard, resp.Body)
+}
 
 // getMiddleBitrate calculates the bitrate of the middle segment and updates
 // the Representation
@@ -49,34 +83,6 @@ func getMiddleBitrate(rep *dash.Representation) error {
    rep.Bandwidth = int(float64(sizeBits) / mid.duration)
 
    return nil
-}
-
-func getContentLength(targetURL *url.URL) (int64, error) {
-   // 1. Try HEAD
-   resp, err := http.Head(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   if err := resp.Body.Close(); err != nil {
-      return 0, err
-   }
-   if resp.StatusCode != http.StatusOK {
-      return 0, errors.New(resp.Status)
-   }
-   if resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-   // 2. Fallback to GET
-   resp, err = http.Get(targetURL.String())
-   if err != nil {
-      return 0, err
-   }
-   defer resp.Body.Close()
-   if resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-   // 3. Read body manually if Content-Length header is missing
-   return io.Copy(io.Discard, resp.Body)
 }
 
 // Internal types for the worker pool

@@ -1,4 +1,4 @@
-package net
+package maya
 
 import (
    "41.neocities.org/dash"
