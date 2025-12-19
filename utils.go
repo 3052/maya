@@ -29,12 +29,12 @@ func (p *progress) update(workerID int) {
       data := &strings.Builder{}
       for i, count := range p.counts {
          if i >= 1 {
-            data.WriteByte(' ')
+            data.WriteByte(',')
          }
          fmt.Fprint(data, count)
       }
       log.Printf(
-         "done %v | left %v | ETA %v",
+         "Done: %v | Left: %v | Time: %v",
          data, left, eta.Truncate(time.Second),
       )
       p.lastLog = now
