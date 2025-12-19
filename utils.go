@@ -1,7 +1,6 @@
 package maya
 
 import (
-   "fmt"
    "log"
    "net/http"
    "net/url"
@@ -20,22 +19,15 @@ func (p *progress) update(workerID int) {
       left := p.total - p.processed
       elapsed := now.Sub(p.start)
 
-      var eta time.Duration
+      var duration time.Duration
       if p.processed > 0 {
          avgPerSeg := elapsed / time.Duration(p.processed)
-         eta = avgPerSeg * time.Duration(left)
+         duration = avgPerSeg * time.Duration(left)
       }
-      
-      data := &strings.Builder{}
-      for i, count := range p.counts {
-         if i >= 1 {
-            data.WriteByte(' ')
-         }
-         fmt.Fprint(data, count)
-      }
+
       log.Printf(
-         "done %v | left %v | ETA %v",
-         data, left, eta.Truncate(time.Second),
+         "Counts:%v Left:%v Duration:%v",
+         p.counts, left, duration.Truncate(time.Second),
       )
       p.lastLog = now
    }
