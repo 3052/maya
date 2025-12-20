@@ -22,7 +22,7 @@ const (
 
 var (
    errKeyMismatch = errors.New("key ID mismatch")
-   widevineID, _  = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
+   widevineId, _  = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
 )
 
 type mediaFile struct {
@@ -30,15 +30,15 @@ type mediaFile struct {
    content_id []byte
 }
 
-// ingestWidevinePSSH parses Widevine PSSH data and sets the ContentID.
+// ingestWidevinePssh parses Widevine PSSH data and sets the ContentId.
 // It assumes the caller has determined this parsing is necessary.
-func (m *mediaFile) ingestWidevinePSSH(data []byte) error {
+func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    var pssh_data widevine.PsshData
    if err := pssh_data.Unmarshal(data); err != nil {
       return err
    }
-   if pssh_data.ContentID != nil {
-      m.content_id = pssh_data.ContentID
+   if pssh_data.ContentId != nil {
+      m.content_id = pssh_data.ContentId
       log.Printf("content ID %x", m.content_id)
    }
    return nil
@@ -50,7 +50,7 @@ func (m *mediaFile) configureProtection(rep *dash.Representation) error {
       case protectionURN:
          // 1. get `default_KID` from MPD
          // https://ctv.ca MPD is missing PSSH
-         data, err := protect.GetDefaultKID()
+         data, err := protect.GetDefaultKid()
          if err != nil {
             return err
          }
@@ -66,7 +66,7 @@ func (m *mediaFile) configureProtection(rep *dash.Representation) error {
          }
 
          // https://hulu.com poisons the PSSH so we only want content ID
-         data, err := protect.GetPSSH()
+         data, err := protect.GetPssh()
          if err != nil {
             return err
          }
@@ -76,7 +76,7 @@ func (m *mediaFile) configureProtection(rep *dash.Representation) error {
             if err != nil {
                return err
             }
-            if err := m.ingestWidevinePSSH(pssh_box.Data); err != nil {
+            if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
                return err
             }
          }
@@ -112,8 +112,8 @@ func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
    }
 
    var pssh widevine.PsshData
-   pssh.ContentID = media.content_id
-   pssh.KeyIDs = [][]byte{media.key_id}
+   pssh.ContentId = media.content_id
+   pssh.KeyIds = [][]byte{media.key_id}
    req_bytes, err := pssh.BuildLicenseRequest(client_id)
    if err != nil {
       return nil, err
