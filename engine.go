@@ -21,7 +21,7 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    if mime == "audio/mp4" {
       extension = ".m4a"
    }
-   name := rep.ID + extension
+   name := rep.Id + extension
    log.Println("Create", name)
    return os.Create(name)
 }
@@ -80,14 +80,14 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
 
    // Start Workers
    wg.Add(numWorkers)
-   for workerID := 0; workerID < numWorkers; workerID++ {
+   for workerId := 0; workerId < numWorkers; workerId++ {
       go func(id int) {
          defer wg.Done()
          for downloadJob := range jobs {
             data, err := getSegment(downloadJob.request.url, downloadJob.request.header)
-            results <- result{index: downloadJob.index, workerID: id, data: data, err: err}
+            results <- result{index: downloadJob.index, workerId: id, data: data, err: err}
          }
-      }(workerID)
+      }(workerId)
    }
 
    // Start Writer (processes results)
@@ -118,10 +118,10 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
 
       // Combined Logic from configureMoov:
       // Handle Widevine PSSH logic
-      // Optimization: Only search atoms and parse if we don't already have the ContentID
+      // Optimization: Only search atoms and parse if we don't already have the ContentId
       if m.content_id == nil {
-         if wvBox, ok := unfrag.Moov.FindPssh(widevineID); ok {
-            if err := m.ingestWidevinePSSH(wvBox.Data); err != nil {
+         if wvBox, ok := unfrag.Moov.FindPssh(widevineId); ok {
+            if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
                return nil, err
             }
          }
@@ -158,7 +158,7 @@ func (m *mediaFile) processAndWriteSegments(
    // Setup Progress Tracking
    prog := newProgress(totalSegments, numWorkers)
 
-   // Store full result to keep track of workerID
+   // Store full result to keep track of workerId
    pending := make(map[int]result)
    nextIndex := 0
 
@@ -182,7 +182,7 @@ func (m *mediaFile) processAndWriteSegments(
             return
          }
          // Update progress using the worker ID that downloaded this segment
-         prog.update(item.workerID)
+         prog.update(item.workerId)
          delete(pending, nextIndex)
          nextIndex++
       }

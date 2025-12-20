@@ -3,8 +3,8 @@ module 41.neocities.org/maya
 go 1.24.0
 
 require (
-	41.neocities.org/dash v1.30.9
-	41.neocities.org/drm v1.7.6
+	41.neocities.org/dash v1.31.5
+	41.neocities.org/drm v1.7.7
 	41.neocities.org/sofia v1.12.8
 )
 

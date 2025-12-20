@@ -14,7 +14,7 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
    if err != nil {
       return err
    }
-   manifest.MPDURL = mpd
+   manifest.MpdUrl = mpd
 
    // 1. Build a slice of middle representations, updating their bitrates as we go.
    var middleReps []*dash.Representation
@@ -49,7 +49,7 @@ func (c *Config) Download(mpd *url.URL, mpdBody []byte, key string) error {
    if err != nil {
       return err
    }
-   manifest.MPDURL = mpd
+   manifest.MpdUrl = mpd
    // Use GetRepresentations as the Source of Truth for grouping logic
    allGroups := manifest.GetRepresentations()
    group, ok := allGroups[key]

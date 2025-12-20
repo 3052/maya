@@ -12,9 +12,9 @@ import (
    "strings"
 )
 
-func getContentLength(targetURL *url.URL) (int64, error) {
+func getContentLength(targetUrl *url.URL) (int64, error) {
    // 1. Try HEAD
-   resp, err := http.Head(targetURL.String())
+   resp, err := http.Head(targetUrl.String())
    if err != nil {
       return 0, err
    }
@@ -34,7 +34,7 @@ func getContentLength(targetURL *url.URL) (int64, error) {
       return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
    }
    // 2. Fallback to GET
-   resp, err = http.Get(targetURL.String())
+   resp, err = http.Get(targetUrl.String())
    if err != nil {
       return 0, err
    }
@@ -49,7 +49,7 @@ func getContentLength(targetURL *url.URL) (int64, error) {
 // getMiddleBitrate calculates the bitrate of the middle segment and updates
 // the Representation
 func getMiddleBitrate(rep *dash.Representation) error {
-   log.Println("update", rep.ID)
+   log.Println("update", rep.Id)
    segs, err := generateSegments(rep)
    if err != nil {
       return err
@@ -98,7 +98,7 @@ type job struct {
 
 type result struct {
    index    int
-   workerID int
+   workerId int
    data     []byte
    err      error
 }
@@ -125,7 +125,7 @@ func (i *indexRange) String() string {
 
 // downloadInitialization downloads the initialization segment bytes.
 func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representation) ([]byte, error) {
-   var targetURL *url.URL
+   var targetUrl *url.URL
    var head http.Header
    var err error
 
@@ -133,27 +133,27 @@ func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representati
    if rep.SegmentBase != nil {
       head = make(http.Header)
       head.Set("Range", "bytes="+rep.SegmentBase.Initialization.Range)
-      targetURL, err = rep.ResolveBaseURL()
+      targetUrl, err = rep.ResolveBaseUrl()
    } else if tmpl := rep.GetSegmentTemplate(); tmpl != nil && tmpl.Initialization != "" {
-      targetURL, err = tmpl.ResolveInitialization(rep)
+      targetUrl, err = tmpl.ResolveInitialization(rep)
    } else if rep.SegmentList != nil {
-      targetURL, err = rep.SegmentList.Initialization.ResolveSourceURL()
+      targetUrl, err = rep.SegmentList.Initialization.ResolveSourceUrl()
    }
 
    // 2. Handle errors or early exit if no init segment exists
    if err != nil {
       return nil, err
    }
-   if targetURL == nil {
+   if targetUrl == nil {
       return nil, nil
    }
 
    // 3. Download
-   return getSegment(targetURL, head)
+   return getSegment(targetUrl, head)
 }
 
-func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
-   req, err := http.NewRequest("GET", targetURL.String(), nil)
+func getSegment(targetUrl *url.URL, head http.Header) ([]byte, error) {
+   req, err := http.NewRequest("GET", targetUrl.String(), nil)
    if err != nil {
       return nil, err
    }
@@ -181,14 +181,14 @@ func getSegment(targetURL *url.URL, head http.Header) ([]byte, error) {
 // Representation. It handles SegmentBase (sidx), SegmentTemplate
 // (timeline/duration), and SegmentList
 func generateSegments(rep *dash.Representation) ([]segment, error) {
-   baseURL, err := rep.ResolveBaseURL()
+   baseUrl, err := rep.ResolveBaseUrl()
    if err != nil {
       return nil, err
    }
 
    // Strategy 1: SegmentTemplate
    if tmpl := rep.GetSegmentTemplate(); tmpl != nil {
-      urls, err := tmpl.GetSegmentURLs(rep)
+      urls, err := tmpl.GetSegmentUrls(rep)
       if err != nil {
          return nil, err
       }
@@ -227,9 +227,9 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
 
    // Strategy 2: SegmentList
    if list := rep.SegmentList; list != nil {
-      segments := make([]segment, 0, len(list.SegmentURLs))
+      segments := make([]segment, 0, len(list.SegmentUrls))
       dur := float64(list.Duration) / float64(list.GetTimescale())
-      for _, seg := range list.SegmentURLs {
+      for _, seg := range list.SegmentUrls {
          u, err := seg.ResolveMedia()
          if err != nil {
             return nil, err
@@ -246,7 +246,7 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
    if rep.SegmentBase != nil {
       head := http.Header{}
       head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err := getSegment(baseURL, head)
+      sidxData, err := getSegment(baseUrl, head)
       if err != nil {
          return nil, err
       }
@@ -276,7 +276,7 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
          h.Set("Range", fmt.Sprintf("bytes=%d-%d", currentOffset, endOffset))
 
          segments[i] = segment{
-            url:      baseURL,
+            url:      baseUrl,
             header:   h,
             duration: float64(ref.SubsegmentDuration) / float64(sidx.Timescale),
             sizeBits: uint64(ref.ReferencedSize) * 8,
@@ -295,7 +295,7 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
    }
 
-   return []segment{{url: baseURL, duration: duration}}, nil
+   return []segment{{url: baseUrl, duration: duration}}, nil
 }
 
 // getMediaRequests returns the requests using the unified segment generation logic.
