@@ -4,7 +4,7 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
-   "fmt"
+   "io"
    "log"
    "os"
    "strings"
@@ -15,8 +15,9 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    mime := rep.GetMimeType()
    parts := strings.Split(mime, "/")
    if len(parts) != 2 {
-      return nil, fmt.Errorf("invalid mime type: %s", mime)
+      return nil, new_error("invalid mime type:", mime)
    }
+
    extension := "." + parts[1]
    if mime == "audio/mp4" {
       extension = ".m4a"
@@ -29,45 +30,55 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
 func (c *Config) downloadGroup(group []*dash.Representation) error {
    rep := group[0]
    var media mediaFile
+
    // Configure PSSH if available in MPD
    if err := media.configureProtection(rep); err != nil {
       return err
    }
+
    file, err := createOutputFile(rep)
    if err != nil {
       return err
    }
    defer file.Close()
-   // Download raw init segment
-   initData, err := c.downloadInitialization(&media, rep)
-   if err != nil {
-      return err
+
+   // Determine if content is MP4 (needs remuxing/init)
+   isMp4 := strings.Contains(rep.GetMimeType(), "mp4")
+   var remux *sofia.Remuxer
+
+   // Only MP4s have Initialization segments and need Remuxer setup
+   if isMp4 {
+      initData, err := c.downloadInitialization(&media, rep)
+      if err != nil {
+         return err
+      }
+      remux, err = media.initializeWriter(file, initData)
+      if err != nil {
+         return err
+      }
    }
-   // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
-   unfrag, err := media.initializeWriter(file, initData)
-   if err != nil {
-      return err
-   }
-   // Fetch key using info extracted from MPD or Init Segment
+
+   // Fetch key (only used for MP4 decryption logic here)
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
-   // getMediaRequests now only returns requests (and error)
+
    requests, err := getMediaRequests(group)
    if err != nil {
       return err
    }
+
    if len(requests) == 0 {
       return nil
    }
-   numWorkers := c.Threads
-   if numWorkers < 1 {
-      numWorkers = 1
-   }
+
+   numWorkers := max(c.Threads, 1)
+
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
+
    // Start Workers
    wg.Add(numWorkers)
    for workerId := 0; workerId < numWorkers; workerId++ {
@@ -79,43 +90,43 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
          }
       }(workerId)
    }
+
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, unfrag)
+   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
+
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
+
    // Wait for writer to finish
    if err := <-doneChan; err != nil {
       return err
    }
+
    return nil
 }
 
-func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
-   var unfrag sofia.Unfragmenter
-   unfrag.Writer = file
+func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
+   var remux sofia.Remuxer
+   remux.Writer = file
+
    if len(initData) > 0 {
-      // Initialize parses the init segment and sets unfrag.Moov
-      if err := unfrag.Initialize(initData); err != nil {
+      if err := remux.Initialize(initData); err != nil {
          return nil, err
       }
-      // Combined Logic from configureMoov:
-      // Handle Widevine PSSH logic
-      // Optimization: Only search atoms and parse if we don't already have the ContentId
       if m.content_id == nil {
-         if wvBox, ok := unfrag.Moov.FindPssh(widevineId); ok {
+         if wvBox, ok := remux.Moov.FindPssh(widevineId); ok {
             if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
                return nil, err
             }
          }
       }
-      // Cleanup atoms
-      unfrag.Moov.RemovePssh()
+      remux.Moov.RemovePssh()
    }
-   return &unfrag, nil
+   return &remux, nil
 }
 
 func (m *mediaFile) processAndWriteSegments(
@@ -124,25 +135,25 @@ func (m *mediaFile) processAndWriteSegments(
    totalSegments int,
    numWorkers int,
    key []byte,
-   unfrag *sofia.Unfragmenter,
+   remux *sofia.Remuxer,
+   dst io.Writer,
 ) {
-   // Setup Decryption Block once if key is present
-   if len(key) > 0 {
+   // 1. Setup Decryption (Only for MP4 Remuxing)
+   if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
          doneChan <- err
          return
       }
-      // Decrypt samples in place using the block
-      unfrag.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
+      remux.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
          sofia.DecryptSample(sample, info, block)
       }
    }
-   // Setup Progress Tracking
+
    prog := newProgress(totalSegments, numWorkers)
-   // Store full result to keep track of workerId
    pending := make(map[int]result)
    nextIndex := 0
+
    for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
       res := <-results
       if res.err != nil {
@@ -150,27 +161,38 @@ func (m *mediaFile) processAndWriteSegments(
          return
       }
       pending[res.index] = res
-      // Write all available sequential segments
+
       for {
          item, ok := pending[nextIndex]
          if !ok {
             break
          }
-         // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
-         if err := unfrag.AddSegment(item.data); err != nil {
-            doneChan <- err
-            return
+
+         // 2. Write Logic: Remux MP4 or Write Raw for generic files
+         if remux != nil {
+            if err := remux.AddSegment(item.data); err != nil {
+               doneChan <- err
+               return
+            }
+         } else {
+            if _, err := dst.Write(item.data); err != nil {
+               doneChan <- err
+               return
+            }
          }
-         // Update progress using the worker ID that downloaded this segment
+
          prog.update(item.workerId)
          delete(pending, nextIndex)
          nextIndex++
       }
    }
-   // Finish writes the final moov box and updates mdat size
-   if err := unfrag.Finish(); err != nil {
-      doneChan <- err
-      return
+
+   // 3. Finalize
+   if remux != nil {
+      if err := remux.Finish(); err != nil {
+         doneChan <- err
+         return
+      }
    }
    doneChan <- nil
 }

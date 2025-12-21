@@ -8,7 +8,6 @@ import (
    "bytes"
    "encoding/hex"
    "errors"
-   "fmt"
    "log"
    "math/big"
    "os"
@@ -133,11 +132,11 @@ func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
    }
    foundKey, ok := widevine.GetKey(keys, media.key_id)
    if !ok {
-      return nil, fmt.Errorf("GetKey: key not found in response")
+      return nil, errors.New("GetKey: key not found in response")
    }
    var zero [16]byte
    if bytes.Equal(foundKey, zero[:]) {
-      return nil, fmt.Errorf("zero key received")
+      return nil, errors.New("zero key received")
    }
    log.Printf("key %x", foundKey)
    return foundKey, nil
