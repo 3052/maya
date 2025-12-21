@@ -4,7 +4,6 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
-   "fmt"
    "log"
    "os"
    "strings"
@@ -15,7 +14,7 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    mime := rep.GetMimeType()
    parts := strings.Split(mime, "/")
    if len(parts) != 2 {
-      return nil, fmt.Errorf("invalid mime type: %s", mime)
+      return nil, new_error("invalid mime type:", mime)
    }
    extension := "." + parts[1]
    if mime == "audio/mp4" {
@@ -43,8 +42,8 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    if err != nil {
       return err
    }
-   // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
-   unfrag, err := media.initializeWriter(file, initData)
+   // Initialize Remuxer and parse Moov (in place) to get DRM/Timescale info
+   remux, err := media.initializeWriter(file, initData)
    if err != nil {
       return err
    }
@@ -81,7 +80,7 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    }
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, unfrag)
+   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux)
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
@@ -94,28 +93,28 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
    return nil
 }
 
-func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unfragmenter, error) {
-   var unfrag sofia.Unfragmenter
-   unfrag.Writer = file
+func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
+   var remux sofia.Remuxer
+   remux.Writer = file
    if len(initData) > 0 {
-      // Initialize parses the init segment and sets unfrag.Moov
-      if err := unfrag.Initialize(initData); err != nil {
+      // Initialize parses the init segment and sets remux.Moov
+      if err := remux.Initialize(initData); err != nil {
          return nil, err
       }
       // Combined Logic from configureMoov:
       // Handle Widevine PSSH logic
       // Optimization: Only search atoms and parse if we don't already have the ContentId
       if m.content_id == nil {
-         if wvBox, ok := unfrag.Moov.FindPssh(widevineId); ok {
+         if wvBox, ok := remux.Moov.FindPssh(widevineId); ok {
             if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
                return nil, err
             }
          }
       }
       // Cleanup atoms
-      unfrag.Moov.RemovePssh()
+      remux.Moov.RemovePssh()
    }
-   return &unfrag, nil
+   return &remux, nil
 }
 
 func (m *mediaFile) processAndWriteSegments(
@@ -124,7 +123,7 @@ func (m *mediaFile) processAndWriteSegments(
    totalSegments int,
    numWorkers int,
    key []byte,
-   unfrag *sofia.Unfragmenter,
+   remux *sofia.Remuxer,
 ) {
    // Setup Decryption Block once if key is present
    if len(key) > 0 {
@@ -134,7 +133,7 @@ func (m *mediaFile) processAndWriteSegments(
          return
       }
       // Decrypt samples in place using the block
-      unfrag.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
+      remux.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
          sofia.DecryptSample(sample, info, block)
       }
    }
@@ -157,7 +156,7 @@ func (m *mediaFile) processAndWriteSegments(
             break
          }
          // AddSegment decrypts samples, writes mdat payload to file, and triggers OnSampleInfo
-         if err := unfrag.AddSegment(item.data); err != nil {
+         if err := remux.AddSegment(item.data); err != nil {
             doneChan <- err
             return
          }
@@ -168,7 +167,7 @@ func (m *mediaFile) processAndWriteSegments(
       }
    }
    // Finish writes the final moov box and updates mdat size
-   if err := unfrag.Finish(); err != nil {
+   if err := remux.Finish(); err != nil {
       doneChan <- err
       return
    }
