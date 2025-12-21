@@ -50,7 +50,7 @@ func (c *Config) Download(mpd *url.URL, mpdBody []byte, key string) error {
    allGroups := manifest.GetRepresentations()
    group, ok := allGroups[key]
    if !ok {
-      return fmt.Errorf("representation group %q not found", key)
+      return new_error("representation group not found", key)
    }
    return c.downloadGroup(group)
 }
