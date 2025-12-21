@@ -2,11 +2,32 @@ package maya
 
 import (
    "log"
+   "net/http"
+   "net/url"
+   "os"
    "testing"
    "time"
 )
 
-func TestProgress_Visual(t *testing.T) {
+func TestUtilsTransport(t *testing.T) {
+   log.SetFlags(log.Ltime)
+   Transport(func(*http.Request) string {
+      return "L"
+   })
+   var req http.Request
+   req.Header = http.Header{}
+   req.URL = &url.URL{Scheme: "http", Host: "ifconfig.co"}
+   resp, err := http.DefaultClient.Do(&req)
+   if err != nil {
+      t.Fatal(err)
+   }
+   _, err = os.Stdout.ReadFrom(resp.Body)
+   if err != nil {
+      t.Fatal(err)
+   }
+}
+
+func TestUtilsProgress(t *testing.T) {
    log.SetFlags(log.Ltime)
    // Configuration
    workers := 3
