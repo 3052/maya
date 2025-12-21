@@ -9,7 +9,6 @@ import (
    "log"
    "net/http"
    "net/url"
-   "strings"
 )
 
 func getContentLength(targetUrl *url.URL) (int64, error) {
@@ -58,11 +57,9 @@ func getMiddleBitrate(rep *dash.Representation) error {
       rep.Bandwidth = 0
       return nil
    }
-
    // Select Middle Segment
    mid := segs[len(segs)/2]
    sizeBits := mid.sizeBits
-
    // If size is unknown (Template/List), fetch it
    if sizeBits == 0 {
       sizeBytes, err := getContentLength(mid.url)
@@ -74,14 +71,11 @@ func getMiddleBitrate(rep *dash.Representation) error {
       }
       sizeBits = uint64(sizeBytes) * 8
    }
-
    if mid.duration <= 0 {
       return errors.New("invalid duration")
    }
-
    // Update Representation
    rep.Bandwidth = int(float64(sizeBits) / mid.duration)
-
    return nil
 }
 
@@ -111,24 +105,11 @@ type segment struct {
    sizeBits uint64
 }
 
-// indexRange handles the byte range parsing for SegmentBase
-type indexRange [2]uint64
-
-func (i *indexRange) Set(data string) error {
-   _, err := fmt.Sscanf(data, "%v-%v", &i[0], &i[1])
-   return err
-}
-
-func (i *indexRange) String() string {
-   return fmt.Sprintf("%v-%v", i[0], i[1])
-}
-
 // downloadInitialization downloads the initialization segment bytes.
 func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representation) ([]byte, error) {
    var targetUrl *url.URL
    var head http.Header
    var err error
-
    // 1. Resolve the Initialization URL and Headers based on the manifest type
    if rep.SegmentBase != nil {
       head = make(http.Header)
@@ -139,7 +120,6 @@ func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representati
    } else if rep.SegmentList != nil {
       targetUrl, err = rep.SegmentList.Initialization.ResolveSourceUrl()
    }
-
    // 2. Handle errors or early exit if no init segment exists
    if err != nil {
       return nil, err
@@ -147,7 +127,6 @@ func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representati
    if targetUrl == nil {
       return nil, nil
    }
-
    // 3. Download
    return getSegment(targetUrl, head)
 }
@@ -160,18 +139,14 @@ func getSegment(targetUrl *url.URL, head http.Header) ([]byte, error) {
    if head != nil {
       req.Header = head
    }
-
    resp, err := http.DefaultClient.Do(req)
    if err != nil {
       return nil, err
    }
    defer resp.Body.Close()
-
    if resp.StatusCode != http.StatusOK {
       if resp.StatusCode != http.StatusPartialContent {
-         var msg strings.Builder
-         io.Copy(&msg, resp.Body)
-         return nil, fmt.Errorf("status %s: %s", resp.Status, msg.String())
+         return nil, errors.New(resp.Status)
       }
    }
    return io.ReadAll(resp.Body)
@@ -185,27 +160,24 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
    if err != nil {
       return nil, err
    }
-
    // Strategy 1: SegmentTemplate
    if tmpl := rep.GetSegmentTemplate(); tmpl != nil {
       urls, err := tmpl.GetSegmentUrls(rep)
       if err != nil {
          return nil, err
       }
-
       segments := make([]segment, len(urls))
       timescale := float64(tmpl.GetTimescale())
-
       if tmpl.SegmentTimeline != nil {
          // Map timeline entries to generated URLs
          currentIdx := 0
-         for _, s := range tmpl.SegmentTimeline.S {
+         for _, entry := range tmpl.SegmentTimeline.S {
             count := 1
-            if s.R > 0 {
-               count += s.R
+            if entry.R > 0 {
+               count += entry.R
             }
-            dur := float64(s.D) / timescale
-            for i := 0; i < count; i++ {
+            dur := float64(entry.D) / timescale
+            for repeatIdx := 0; repeatIdx < count; repeatIdx++ {
                if currentIdx < len(segments) {
                   segments[currentIdx].url = urls[currentIdx]
                   segments[currentIdx].duration = dur
@@ -217,31 +189,29 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       } else {
          // Constant duration
          dur := float64(tmpl.Duration) / timescale
-         for i := range segments {
-            segments[i].url = urls[i]
-            segments[i].duration = dur
+         for segIdx := range segments {
+            segments[segIdx].url = urls[segIdx]
+            segments[segIdx].duration = dur
          }
       }
       return segments, nil
    }
-
    // Strategy 2: SegmentList
    if list := rep.SegmentList; list != nil {
       segments := make([]segment, 0, len(list.SegmentUrls))
       dur := float64(list.Duration) / float64(list.GetTimescale())
       for _, seg := range list.SegmentUrls {
-         u, err := seg.ResolveMedia()
+         mediaURL, err := seg.ResolveMedia()
          if err != nil {
             return nil, err
          }
          segments = append(segments, segment{
-            url:      u,
+            url:      mediaURL,
             duration: dur,
          })
       }
       return segments, nil
    }
-
    // Strategy 3: SegmentBase (sidx)
    if rep.SegmentBase != nil {
       head := http.Header{}
@@ -250,34 +220,32 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       if err != nil {
          return nil, err
       }
-
       parsed, err := sofia.Parse(sidxData)
       if err != nil {
          return nil, err
       }
-
       sidx, ok := sofia.FindSidx(parsed)
       if !ok {
          return nil, sofia.Missing("sidx")
       }
 
-      var idx indexRange
-      if err := idx.Set(rep.SegmentBase.IndexRange); err != nil {
+      // Simplified Range Parsing
+      var rangeStart, rangeEnd uint64
+      _, err = fmt.Sscanf(rep.SegmentBase.IndexRange, "%d-%d", &rangeStart, &rangeEnd)
+      if err != nil {
          return nil, err
       }
 
       // Anchor point is the byte immediately following the sidx box.
-      currentOffset := idx[1] + 1
+      currentOffset := rangeEnd + 1
       segments := make([]segment, len(sidx.References))
-
-      for i, ref := range sidx.References {
+      for refIdx, ref := range sidx.References {
          endOffset := currentOffset + uint64(ref.ReferencedSize) - 1
-         h := make(http.Header)
-         h.Set("Range", fmt.Sprintf("bytes=%d-%d", currentOffset, endOffset))
-
-         segments[i] = segment{
+         rangeHeader := make(http.Header)
+         rangeHeader.Set("Range", fmt.Sprintf("bytes=%d-%d", currentOffset, endOffset))
+         segments[refIdx] = segment{
             url:      baseUrl,
-            header:   h,
+            header:   rangeHeader,
             duration: float64(ref.SubsegmentDuration) / float64(sidx.Timescale),
             sizeBits: uint64(ref.ReferencedSize) * 8,
          }
@@ -285,16 +253,14 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
       return segments, nil
    }
-
    // Fallback: Single file (BaseURL) without segmentation
    var duration float64
    // Attempt to retrieve duration from parent Period if available
    if rep.Parent != nil && rep.Parent.Parent != nil {
-      if d, err := rep.Parent.Parent.GetDuration(); err == nil {
-         duration = d.Seconds()
+      if periodDuration, err := rep.Parent.Parent.GetDuration(); err == nil {
+         duration = periodDuration.Seconds()
       }
    }
-
    return []segment{{url: baseUrl, duration: duration}}, nil
 }
 
@@ -302,7 +268,6 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
 func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
    var requests []mediaRequest
    var sidxProcessed bool
-
    for _, rep := range group {
       // Optimization: For SegmentBase, the sidx is usually shared across the group.
       // If we processed it once, skip to avoid duplicate downloads.
@@ -311,21 +276,18 @@ func getMediaRequests(group []*dash.Representation) ([]mediaRequest, error) {
             continue
          }
       }
-
       segs, err := generateSegments(rep)
       if err != nil {
          return nil, err
       }
-
       // Mark sidx as processed if we just handled a SegmentBase rep
       if rep.SegmentBase != nil {
          sidxProcessed = true
       }
-
-      for _, s := range segs {
+      for _, seg := range segs {
          requests = append(requests, mediaRequest{
-            url:    s.url,
-            header: s.header,
+            url:    seg.url,
+            header: seg.header,
          })
       }
    }

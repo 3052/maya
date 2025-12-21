@@ -64,7 +64,6 @@ func (m *mediaFile) configureProtection(rep *dash.Representation) error {
          if m.content_id != nil {
             continue
          }
-
          // https://hulu.com poisons the PSSH so we only want content ID
          data, err := protect.GetPssh()
          if err != nil {
@@ -105,12 +104,10 @@ func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-
    pemBytes, err := os.ReadFile(c.PrivateKey)
    if err != nil {
       return nil, err
    }
-
    var pssh widevine.PsshData
    pssh.ContentId = media.content_id
    pssh.KeyIds = [][]byte{media.key_id}
@@ -118,37 +115,30 @@ func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-
    privateKey, err := widevine.ParsePrivateKey(pemBytes)
    if err != nil {
       return nil, err
    }
-
    signedBytes, err := widevine.BuildSignedMessage(req_bytes, privateKey)
    if err != nil {
       return nil, err
    }
-
    respBytes, err := c.Send(signedBytes)
    if err != nil {
       return nil, err
    }
-
    keys, err := widevine.ParseLicenseResponse(respBytes, req_bytes, privateKey)
    if err != nil {
       return nil, err
    }
-
    foundKey, ok := widevine.GetKey(keys, media.key_id)
    if !ok {
       return nil, fmt.Errorf("GetKey: key not found in response")
    }
-
    var zero [16]byte
    if bytes.Equal(foundKey, zero[:]) {
       return nil, fmt.Errorf("zero key received")
    }
-
    log.Printf("key %x", foundKey)
    return foundKey, nil
 }
@@ -162,34 +152,28 @@ func (c *Config) playReadyKey(media *mediaFile) ([]byte, error) {
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-
    signKeyData, err := os.ReadFile(c.EncryptSignKey)
    if err != nil {
       return nil, err
    }
    encryptSignKey := new(big.Int).SetBytes(signKeyData)
-
    playReady.UuidOrGuid(media.key_id)
    body, err := chain.RequestBody(media.key_id, encryptSignKey)
    if err != nil {
       return nil, err
    }
-
    respData, err := c.Send(body)
    if err != nil {
       return nil, err
    }
-
    var license playReady.License
    coord, err := license.Decrypt(respData, encryptSignKey)
    if err != nil {
       return nil, err
    }
-
    if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
       return nil, errKeyMismatch
    }
-
    key := coord.Key()
    log.Printf("key %x", key)
    return key, nil

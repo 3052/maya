@@ -15,7 +15,6 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
       return err
    }
    manifest.MpdUrl = mpd
-
    // 1. Build a slice of middle representations, updating their bitrates as we go.
    var middleReps []*dash.Representation
    for _, group := range manifest.GetRepresentations() {
@@ -25,12 +24,10 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
       }
       middleReps = append(middleReps, middleRep)
    }
-
    // 2. Sort Phase: Sort the representations based on their new, accurate bitrates.
-   slices.SortFunc(middleReps, func(a, b *dash.Representation) int {
-      return a.Bandwidth - b.Bandwidth
+   slices.SortFunc(middleReps, func(repA, repB *dash.Representation) int {
+      return repA.Bandwidth - repB.Bandwidth
    })
-
    // 3. Print Phase: Display the sorted representations.
    for index, rep := range middleReps {
       if index >= 1 {
@@ -38,7 +35,6 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
       }
       fmt.Println(rep)
    }
-
    return nil
 }
 

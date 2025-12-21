@@ -29,55 +29,45 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
 func (c *Config) downloadGroup(group []*dash.Representation) error {
    rep := group[0]
    var media mediaFile
-
    // Configure PSSH if available in MPD
    if err := media.configureProtection(rep); err != nil {
       return err
    }
-
    file, err := createOutputFile(rep)
    if err != nil {
       return err
    }
    defer file.Close()
-
    // Download raw init segment
    initData, err := c.downloadInitialization(&media, rep)
    if err != nil {
       return err
    }
-
    // Initialize Unfragmenter and parse Moov (in place) to get DRM/Timescale info
    unfrag, err := media.initializeWriter(file, initData)
    if err != nil {
       return err
    }
-
    // Fetch key using info extracted from MPD or Init Segment
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
-
    // getMediaRequests now only returns requests (and error)
    requests, err := getMediaRequests(group)
    if err != nil {
       return err
    }
-
    if len(requests) == 0 {
       return nil
    }
-
    numWorkers := c.Threads
    if numWorkers < 1 {
       numWorkers = 1
    }
-
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
-
    // Start Workers
    wg.Add(numWorkers)
    for workerId := 0; workerId < numWorkers; workerId++ {
@@ -89,17 +79,14 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
          }
       }(workerId)
    }
-
    // Start Writer (processes results)
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, unfrag)
-
    // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
-
    // Wait for writer to finish
    if err := <-doneChan; err != nil {
       return err
@@ -115,7 +102,6 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
       if err := unfrag.Initialize(initData); err != nil {
          return nil, err
       }
-
       // Combined Logic from configureMoov:
       // Handle Widevine PSSH logic
       // Optimization: Only search atoms and parse if we don't already have the ContentId
@@ -126,7 +112,6 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Unf
             }
          }
       }
-
       // Cleanup atoms
       unfrag.Moov.RemovePssh()
    }
@@ -148,28 +133,23 @@ func (m *mediaFile) processAndWriteSegments(
          doneChan <- err
          return
       }
-
       // Decrypt samples in place using the block
       unfrag.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
          sofia.DecryptSample(sample, info, block)
       }
    }
-
    // Setup Progress Tracking
    prog := newProgress(totalSegments, numWorkers)
-
    // Store full result to keep track of workerId
    pending := make(map[int]result)
    nextIndex := 0
-
-   for i := 0; i < totalSegments; i++ {
+   for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
       res := <-results
       if res.err != nil {
          doneChan <- res.err
          return
       }
       pending[res.index] = res
-
       // Write all available sequential segments
       for {
          item, ok := pending[nextIndex]
@@ -187,12 +167,10 @@ func (m *mediaFile) processAndWriteSegments(
          nextIndex++
       }
    }
-
    // Finish writes the final moov box and updates mdat size
    if err := unfrag.Finish(); err != nil {
       doneChan <- err
       return
    }
-
    doneChan <- nil
 }

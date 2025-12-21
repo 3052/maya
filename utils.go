@@ -13,18 +13,15 @@ func (p *progress) update(workerID int) {
    if workerID >= 0 && workerID < len(p.counts) {
       p.counts[workerID]++
    }
-
    now := time.Now()
    if now.Sub(p.lastLog) > time.Second {
       segments_left := p.total - p.processed
       elapsed := now.Sub(p.start)
-
       var time_left time.Duration
       if p.processed > 0 {
          avg_per_seg := elapsed / time.Duration(p.processed)
          time_left = avg_per_seg * time.Duration(segments_left)
       }
-
       log.Printf(
          "segments done %v | left %v | time left %v",
          p.counts, segments_left, time_left.Truncate(time.Second),
