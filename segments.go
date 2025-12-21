@@ -4,7 +4,6 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/sofia"
    "errors"
-   "fmt"
    "io"
    "log"
    "net/http"
@@ -29,8 +28,7 @@ func getContentLength(targetUrl *url.URL) (int64, error) {
    case http.StatusMethodNotAllowed:
       // If 405, we explicitly allow falling through to the GET request below
    default:
-      // Any other status code results in an error
-      return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+      return 0, errors.New(resp.Status)
    }
    // 2. Fallback to GET
    resp, err = http.Get(targetUrl.String())
@@ -108,12 +106,12 @@ type segment struct {
 // downloadInitialization downloads the initialization segment bytes.
 func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representation) ([]byte, error) {
    var targetUrl *url.URL
-   var head http.Header
+   var header http.Header
    var err error
    // 1. Resolve the Initialization URL and Headers based on the manifest type
    if rep.SegmentBase != nil {
-      head = make(http.Header)
-      head.Set("Range", "bytes="+rep.SegmentBase.Initialization.Range)
+      header = make(http.Header)
+      header.Set("Range", "bytes="+rep.SegmentBase.Initialization.Range)
       targetUrl, err = rep.ResolveBaseUrl()
    } else if tmpl := rep.GetSegmentTemplate(); tmpl != nil && tmpl.Initialization != "" {
       targetUrl, err = tmpl.ResolveInitialization(rep)
@@ -128,16 +126,16 @@ func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representati
       return nil, nil
    }
    // 3. Download
-   return getSegment(targetUrl, head)
+   return getSegment(targetUrl, header)
 }
 
-func getSegment(targetUrl *url.URL, head http.Header) ([]byte, error) {
+func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
    req, err := http.NewRequest("GET", targetUrl.String(), nil)
    if err != nil {
       return nil, err
    }
-   if head != nil {
-      req.Header = head
+   if header != nil {
+      req.Header = header
    }
    resp, err := http.DefaultClient.Do(req)
    if err != nil {
@@ -214,9 +212,9 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
    }
    // Strategy 3: SegmentBase (sidx)
    if rep.SegmentBase != nil {
-      head := http.Header{}
-      head.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err := getSegment(baseUrl, head)
+      header := http.Header{}
+      header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+      sidxData, err := getSegment(baseUrl, header)
       if err != nil {
          return nil, err
       }
@@ -226,26 +224,22 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
       sidx, ok := sofia.FindSidx(parsed)
       if !ok {
-         return nil, sofia.Missing("sidx")
+         return nil, errors.New("box 'sidx' not found")
       }
-
-      // Simplified Range Parsing
-      var rangeStart, rangeEnd uint64
-      _, err = fmt.Sscanf(rep.SegmentBase.IndexRange, "%d-%d", &rangeStart, &rangeEnd)
+      _, end, err := dash.ParseRange(rep.SegmentBase.IndexRange)
       if err != nil {
          return nil, err
       }
-
       // Anchor point is the byte immediately following the sidx box.
-      currentOffset := rangeEnd + 1
+      currentOffset := end + 1
       segments := make([]segment, len(sidx.References))
       for refIdx, ref := range sidx.References {
          endOffset := currentOffset + uint64(ref.ReferencedSize) - 1
-         rangeHeader := make(http.Header)
-         rangeHeader.Set("Range", fmt.Sprintf("bytes=%d-%d", currentOffset, endOffset))
+         header := make(http.Header)
+         header.Set("range", "bytes=" + dash.FormatRange(currentOffset, endOffset))
          segments[refIdx] = segment{
             url:      baseUrl,
-            header:   rangeHeader,
+            header:   header,
             duration: float64(ref.SubsegmentDuration) / float64(sidx.Timescale),
             sizeBits: uint64(ref.ReferencedSize) * 8,
          }
