@@ -8,6 +8,27 @@ import (
    "time"
 )
 
+// github.com/golang/go/issues/25793
+func Transport(policy func(*http.Request) string) {
+   http.DefaultTransport = &http.Transport{
+      Protocols: &http.Protocols{},
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         flags := policy(req)
+         if strings.ContainsRune(flags, 'L') {
+            if req.Method != "" {
+               log.Println(req.Method, req.URL)
+            } else {
+               log.Println(http.MethodGet, req.URL)
+            }
+         }
+         if strings.ContainsRune(flags, 'P') {
+            return http.ProxyFromEnvironment(req)
+         }
+         return nil, nil
+      },
+   }
+}
+
 func (p *progress) update(workerID int) {
    p.processed++
    if workerID >= 0 && workerID < len(p.counts) {
@@ -27,23 +48,6 @@ func (p *progress) update(workerID int) {
          p.counts, segments_left, time_left.Truncate(time.Second),
       )
       p.lastLog = now
-   }
-}
-
-// github.com/golang/go/issues/25793
-func Transport(policy func(*http.Request) string) {
-   http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{},
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         flags := policy(req)
-         if strings.ContainsRune(flags, 'L') {
-            log.Println(req.Method, req.URL)
-         }
-         if strings.ContainsRune(flags, 'P') {
-            return http.ProxyFromEnvironment(req)
-         }
-         return nil, nil
-      },
    }
 }
 
