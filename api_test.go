@@ -18,15 +18,13 @@ func TestApi(t *testing.T) {
       }
       return "L"
    })
-   for _, api_test := range api_tests {
-      address, data, err := get(api_test)
-      if err != nil {
-         t.Fatal(err)
-      }
-      err = Representations(address, data)
-      if err != nil {
-         t.Fatal(err)
-      }
+   address, data, err := get(api_test)
+   if err != nil {
+      t.Fatal(err)
+   }
+   err = Representations(address, data)
+   if err != nil {
+      t.Fatal(err)
    }
 }
 
@@ -43,7 +41,5 @@ func get(raw_url string) (*url.URL, []byte, error) {
    return resp.Request.URL, data, nil
 }
 
-var api_tests = []string{
-   "https://gcp.prd.media.h264.io/gcs/9ae10161-a2d1-4093-83f6-a1af71a13858/256498.mpd",
-   "https://vod.provider.plex.tv/library/parts/64f79dcd7a3f307a7342b239-dash.mpd?x-plex-token=zrd_wJ2BsMGrtzTHZcn8",
-}
+const api_test = "https://akm.prd.media.h264.io/gcs/167bc1ec-f8e3-43f0-8598-a1b654180e97/efc80a.mpd"
+
