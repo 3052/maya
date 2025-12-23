@@ -1,18 +1,12 @@
 package maya
 
 import (
-   "errors"
    "log"
    "net/http"
    "net/url"
    "strings"
    "time"
 )
-
-func new_error(messages ...string) error {
-   text := strings.Join(messages, " ")
-   return errors.New(text)
-}
 
 // github.com/golang/go/issues/25793
 func Transport(policy func(*http.Request) string) {

@@ -4,6 +4,7 @@ import (
    "41.neocities.org/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
+   "fmt"
    "io"
    "log"
    "os"
@@ -15,9 +16,8 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    mime := rep.GetMimeType()
    parts := strings.Split(mime, "/")
    if len(parts) != 2 {
-      return nil, new_error("invalid mime type:", mime)
+      return nil, fmt.Errorf("invalid mime type %v", mime)
    }
-
    extension := "." + parts[1]
    if mime == "audio/mp4" {
       extension = ".m4a"

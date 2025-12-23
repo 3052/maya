@@ -7,6 +7,23 @@ import (
    "slices"
 )
 
+// Download retrieves the specific group of Representations from the MPD
+// using the ID key (which may be a simplified sequence number "0", "1"...).
+func (c *Config) Download(mpd *url.URL, mpdBody []byte, key string) error {
+   manifest, err := dash.Parse(mpdBody)
+   if err != nil {
+      return err
+   }
+   manifest.MpdUrl = mpd
+   // Use GetRepresentations as the Source of Truth for grouping logic
+   allGroups := manifest.GetRepresentations()
+   group, ok := allGroups[key]
+   if !ok {
+      return fmt.Errorf("representation group not found %v", key)
+   }
+   return c.downloadGroup(group)
+}
+
 // Representations parses the MPD, calculates the true bitrate for the middle
 // representation of each group, and prints them in sorted order.
 func Representations(mpd *url.URL, mpdBody []byte) error {
@@ -36,23 +53,6 @@ func Representations(mpd *url.URL, mpdBody []byte) error {
       fmt.Println(rep)
    }
    return nil
-}
-
-// Download retrieves the specific group of Representations from the MPD
-// using the ID key (which may be a simplified sequence number "0", "1"...).
-func (c *Config) Download(mpd *url.URL, mpdBody []byte, key string) error {
-   manifest, err := dash.Parse(mpdBody)
-   if err != nil {
-      return err
-   }
-   manifest.MpdUrl = mpd
-   // Use GetRepresentations as the Source of Truth for grouping logic
-   allGroups := manifest.GetRepresentations()
-   group, ok := allGroups[key]
-   if !ok {
-      return new_error("representation group not found", key)
-   }
-   return c.downloadGroup(group)
 }
 
 // Config holds downloader configuration
