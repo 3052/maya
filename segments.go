@@ -10,6 +10,26 @@ import (
    "net/url"
 )
 
+func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
+   req := http.Request{URL: targetUrl}
+   if header != nil {
+      req.Header = header
+   } else {
+      req.Header = http.Header{}
+   }
+   resp, err := http.DefaultClient.Do(&req)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      if resp.StatusCode != http.StatusPartialContent {
+         return nil, errors.New(resp.Status)
+      }
+   }
+   return io.ReadAll(resp.Body)
+}
+
 func getContentLength(targetUrl *url.URL) (int64, error) {
    // 1. Try HEAD
    resp, err := http.Head(targetUrl.String())
@@ -127,27 +147,6 @@ func (c *Config) downloadInitialization(media *mediaFile, rep *dash.Representati
    }
    // 3. Download
    return getSegment(targetUrl, header)
-}
-
-func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
-   req, err := http.NewRequest("GET", targetUrl.String(), nil)
-   if err != nil {
-      return nil, err
-   }
-   if header != nil {
-      req.Header = header
-   }
-   resp, err := http.DefaultClient.Do(req)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      if resp.StatusCode != http.StatusPartialContent {
-         return nil, errors.New(resp.Status)
-      }
-   }
-   return io.ReadAll(resp.Body)
 }
 
 // generateSegments centralizes the logic to produce a list of segments for a
