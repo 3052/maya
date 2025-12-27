@@ -1,7 +1,7 @@
 package maya
 
 import (
-   "41.neocities.org/dash"
+   "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
    "fmt"
