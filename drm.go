@@ -1,7 +1,6 @@
 package maya
 
 import (
-   "41.neocities.org/luna/dash"
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
@@ -11,12 +10,6 @@ import (
    "log"
    "math/big"
    "os"
-   "strings"
-)
-
-const (
-   protectionURN = "urn:mpeg:dash:mp4protection:2011"
-   widevineURN   = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 )
 
 var (
@@ -43,50 +36,30 @@ func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    return nil
 }
 
-func (m *mediaFile) configureProtection(rep *dash.Representation) error {
-   for _, protect := range rep.GetContentProtection() {
-      switch strings.ToLower(protect.SchemeIdUri) {
-      case protectionURN:
-         // 1. get `default_KID` from MPD
-         // https://ctv.ca MPD is missing PSSH
-         data, err := protect.GetDefaultKid()
-         if err != nil {
-            return err
+func (m *mediaFile) configureProtection(protections []protectionInfo) error {
+   for _, protect := range protections {
+      switch protect.Scheme {
+      case "widevine":
+         if len(protect.Pssh) > 0 {
+            var pssh_box sofia.PsshBox
+            if err := pssh_box.Parse(protect.Pssh); err == nil {
+               if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
+                  return err
+               }
+            }
          }
-         if data != nil {
-            m.key_id = data
+         if len(protect.KeyID) > 0 {
+            m.key_id = protect.KeyID
             log.Printf("key ID %x", m.key_id)
          }
-      case widevineURN:
-         // 2. check if MPD has PSSH, check if PSSH has content ID
-         // Optimization: If we already have the ID, skip work
-         if m.content_id != nil {
-            continue
-         }
-         // https://hulu.com poisons the PSSH so we only want content ID
-         data, err := protect.GetPssh()
-         if err != nil {
-            return err
-         }
-         if data != nil {
-            var pssh_box sofia.PsshBox
-            err = pssh_box.Parse(data)
-            if err != nil {
-               return err
-            }
-            if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
-               return err
-            }
-         }
+      case "playready":
+         // TODO: Implement PlayReady configuration
       }
    }
    return nil
 }
 
 func (c *Config) fetchKey(media *mediaFile) ([]byte, error) {
-   if c.DecryptionKey != "" {
-      return hex.DecodeString(c.DecryptionKey)
-   }
    if media.key_id == nil {
       return nil, nil
    }

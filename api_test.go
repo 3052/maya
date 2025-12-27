@@ -22,7 +22,15 @@ func TestApi(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   err = Representations(address, data)
+
+   // Since we know the test URL points to an MPD, we call ParseDASH directly.
+   mpd, err := ParseDASH(data, address)
+   if err != nil {
+      t.Fatal(err)
+   }
+
+   // The call to ListStreamsDASH is now direct and unambiguous.
+   err = ListStreamsDASH(mpd)
    if err != nil {
       t.Fatal(err)
    }
@@ -42,4 +50,3 @@ func get(raw_url string) (*url.URL, []byte, error) {
 }
 
 const api_test = "https://akm.prd.media.h264.io/gcs/167bc1ec-f8e3-43f0-8598-a1b654180e97/efc80a.mpd"
-

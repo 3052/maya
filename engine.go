@@ -1,19 +1,35 @@
 package maya
 
 import (
-   "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
    "crypto/aes"
    "fmt"
    "io"
    "log"
+   "net/http"
+   "net/url"
    "os"
    "strings"
    "sync"
 )
 
-func createOutputFile(rep *dash.Representation) (*os.File, error) {
-   mime := rep.GetMimeType()
+// Internal types for the worker pool
+type mediaRequest struct {
+   url    *url.URL
+   header http.Header
+}
+type job struct {
+   index   int
+   request mediaRequest
+}
+type result struct {
+   index    int
+   workerId int
+   data     []byte
+   err      error
+}
+
+func createOutputFile(id string, mime string) (*os.File, error) {
    parts := strings.Split(mime, "/")
    if len(parts) != 2 {
       return nil, fmt.Errorf("invalid mime type %v", mime)
@@ -22,64 +38,67 @@ func createOutputFile(rep *dash.Representation) (*os.File, error) {
    if mime == "audio/mp4" {
       extension = ".m4a"
    }
-   name := rep.Id + extension
+   if mime == "video/mp2t" {
+      extension = ".ts"
+   }
+   name := id + extension
    log.Println("Create", name)
    return os.Create(name)
 }
 
-func (c *Config) downloadGroup(group []*dash.Representation) error {
+// downloadGroupInternal is the shared engine that works with the stream abstraction.
+func (c *Config) downloadGroupInternal(group streamGroup) error {
+   if len(group) == 0 {
+      return fmt.Errorf("cannot download empty stream group")
+   }
    rep := group[0]
    var media mediaFile
-
-   // Configure PSSH if available in MPD
-   if err := media.configureProtection(rep); err != nil {
+   protections, err := rep.getProtection()
+   if err != nil {
       return err
    }
-
-   file, err := createOutputFile(rep)
+   if err := media.configureProtection(protections); err != nil {
+      return err
+   }
+   file, err := createOutputFile(rep.getID(), rep.getMimeType())
    if err != nil {
       return err
    }
    defer file.Close()
-
-   // Determine if content is MP4 (needs remuxing/init)
-   isMp4 := strings.Contains(rep.GetMimeType(), "mp4")
+   isMp4 := strings.Contains(rep.getMimeType(), "mp4")
    var remux *sofia.Remuxer
-
-   // Only MP4s have Initialization segments and need Remuxer setup
    if isMp4 {
-      initData, err := c.downloadInitialization(&media, rep)
+      initSeg, err := rep.getInitSegment()
       if err != nil {
          return err
+      }
+      var initData []byte
+      if initSeg != nil {
+         initData, err = getSegment(initSeg.url, initSeg.header)
+         if err != nil {
+            return err
+         }
       }
       remux, err = media.initializeWriter(file, initData)
       if err != nil {
          return err
       }
    }
-
-   // Fetch key (only used for MP4 decryption logic here)
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
-
    requests, err := getMediaRequests(group)
    if err != nil {
       return err
    }
-
    if len(requests) == 0 {
       return nil
    }
-
    numWorkers := max(c.Threads, 1)
-
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
-
-   // Start Workers
    wg.Add(numWorkers)
    for workerId := 0; workerId < numWorkers; workerId++ {
       go func(id int) {
@@ -90,29 +109,38 @@ func (c *Config) downloadGroup(group []*dash.Representation) error {
          }
       }(workerId)
    }
-
-   // Start Writer (processes results)
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
-
-   // Send Jobs
    for reqIndex, req := range requests {
       jobs <- job{index: reqIndex, request: req}
    }
    close(jobs)
-
-   // Wait for writer to finish
    if err := <-doneChan; err != nil {
       return err
    }
-
    return nil
+}
+
+// getMediaRequests is now fully generic. It iterates through a group of streams
+// and asks each one to provide its list of downloadable segments.
+func getMediaRequests(group streamGroup) ([]mediaRequest, error) {
+   var requests []mediaRequest
+   for _, s := range group {
+      // Delegate responsibility to the stream itself.
+      segments, err := s.getSegments()
+      if err != nil {
+         return nil, err
+      }
+      for _, seg := range segments {
+         requests = append(requests, mediaRequest{url: seg.url, header: seg.header})
+      }
+   }
+   return requests, nil
 }
 
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
    var remux sofia.Remuxer
    remux.Writer = file
-
    if len(initData) > 0 {
       if err := remux.Initialize(initData); err != nil {
          return nil, err
@@ -138,7 +166,6 @@ func (m *mediaFile) processAndWriteSegments(
    remux *sofia.Remuxer,
    dst io.Writer,
 ) {
-   // 1. Setup Decryption (Only for MP4 Remuxing)
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
@@ -149,11 +176,9 @@ func (m *mediaFile) processAndWriteSegments(
          sofia.DecryptSample(sample, info, block)
       }
    }
-
    prog := newProgress(totalSegments, numWorkers)
    pending := make(map[int]result)
    nextIndex := 0
-
    for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
       res := <-results
       if res.err != nil {
@@ -161,14 +186,11 @@ func (m *mediaFile) processAndWriteSegments(
          return
       }
       pending[res.index] = res
-
       for {
          item, ok := pending[nextIndex]
          if !ok {
             break
          }
-
-         // 2. Write Logic: Remux MP4 or Write Raw for generic files
          if remux != nil {
             if err := remux.AddSegment(item.data); err != nil {
                doneChan <- err
@@ -180,14 +202,11 @@ func (m *mediaFile) processAndWriteSegments(
                return
             }
          }
-
          prog.update(item.workerId)
          delete(pending, nextIndex)
          nextIndex++
       }
    }
-
-   // 3. Finalize
    if remux != nil {
       if err := remux.Finish(); err != nil {
          doneChan <- err
