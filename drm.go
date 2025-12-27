@@ -26,7 +26,6 @@ type mediaFile struct {
 }
 
 // ingestWidevinePssh parses Widevine PSSH data and sets the ContentId.
-// It assumes the caller has determined this parsing is necessary.
 func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    var pssh_data widevine.PsshData
    if err := pssh_data.Unmarshal(data); err != nil {
@@ -39,39 +38,42 @@ func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    return nil
 }
 
-func (m *mediaFile) configureProtection(protections []protectionInfo) error {
-   for _, protect := range protections {
-      switch protect.Scheme {
-      case "widevine":
-         if len(protect.Pssh) > 0 {
-            var pssh_box sofia.PsshBox
-            if err := pssh_box.Parse(protect.Pssh); err == nil {
-               if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
-                  return err
-               }
-            }
+// configureProtection copies the necessary data from the manifest into the mediaFile.
+func (m *mediaFile) configureProtection(protection *protectionInfo) error {
+   if len(protection.Pssh) > 0 {
+      var pssh_box sofia.PsshBox
+      if err := pssh_box.Parse(protection.Pssh); err == nil {
+         // This is Widevine-specific, but is safe to run as it only sets a field.
+         if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
+            return err
          }
-         if len(protect.KeyID) > 0 {
-            m.key_id = protect.KeyID
-            log.Printf("key ID %x", m.key_id)
-         }
-      case "playready":
-         // TODO: Implement PlayReady configuration
       }
+   }
+   if len(protection.KeyID) > 0 {
+      m.key_id = protection.KeyID
+      log.Printf("key ID %x", m.key_id)
    }
    return nil
 }
 
+// fetchKey dispatches to the correct DRM key function based on the provided Config credentials.
 func (c *Config) fetchKey(media *mediaFile) ([]byte, error) {
    if media.key_id == nil {
-      return nil, nil
+      return nil, nil // No key needed (unencrypted).
    }
-   if c.CertificateChain != "" {
-      if c.EncryptSignKey != "" {
-         return c.playReadyKey(media)
-      }
+
+   // Prioritize PlayReady if its credentials are provided.
+   if c.CertificateChain != "" && c.EncryptSignKey != "" {
+      return c.playReadyKey(media)
    }
-   return c.widevineKey(media)
+
+   // Fallback to Widevine if its credentials are provided.
+   if c.ClientId != "" && c.PrivateKey != "" {
+      return c.widevineKey(media)
+   }
+
+   // The stream is encrypted, but we have no credentials.
+   return nil, nil
 }
 
 func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {

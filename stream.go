@@ -18,38 +18,31 @@ type streamGroup []stream
 type stream interface {
    getSegments() ([]segment, error)
    getInitSegment() (*segment, error)
-   getProtection() ([]protectionInfo, error)
+   getProtection(scheme string) (*protectionInfo, error)
    getID() string
    getBandwidth() int
    String() string
 }
 
-// protectionInfo holds standardized DRM information.
+// protectionInfo holds standardized DRM data.
 type protectionInfo struct {
-   Scheme string
-   Pssh   []byte
-   KeyID  []byte
+   Pssh  []byte
+   KeyID []byte
 }
 
 // --- DASH Stream Implementation ---
 
 type dashStream struct {
    rep            *dash.Representation
-   preFetchedSidx map[string][]byte
+   preFetchedSidx []byte // Contains sidx data, fetched by the main DownloadDASH function.
 }
 
 func (s *dashStream) getSegments() ([]segment, error) {
    if s.rep.SegmentBase != nil {
-      baseUrl, err := s.rep.ResolveBaseUrl()
-      if err != nil {
-         return nil, err
+      if s.preFetchedSidx == nil {
+         return nil, fmt.Errorf("sidx data was not pre-fetched for stream %s", s.rep.Id)
       }
-      cacheKey := baseUrl.String() + s.rep.SegmentBase.IndexRange
-      sidxData, found := s.preFetchedSidx[cacheKey]
-      if !found {
-         return nil, fmt.Errorf("sidx data for key %s not found in pre-fetched map", cacheKey)
-      }
-      return generateSegmentsFromSidx(s.rep, sidxData)
+      return generateSegmentsFromSidx(s.rep, s.preFetchedSidx)
    }
    return generateSegments(s.rep)
 }
@@ -73,23 +66,24 @@ func (s *dashStream) getInitSegment() (*segment, error) {
    return &segment{url: targetUrl, header: header}, nil
 }
 
-func (s *dashStream) getProtection() ([]protectionInfo, error) {
+// getProtection finds the protection data that matches the requested scheme.
+func (s *dashStream) getProtection(scheme string) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-   var protections []protectionInfo
+   const playreadyURN = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
+
    for _, cp := range s.rep.GetContentProtection() {
-      var info protectionInfo
-      if strings.ToLower(cp.SchemeIdUri) == widevineURN {
-         info.Scheme = "widevine"
-      } else {
-         continue
+      schemeUri := strings.ToLower(cp.SchemeIdUri)
+      matches := (scheme == "widevine" && schemeUri == widevineURN) ||
+         (scheme == "playready" && schemeUri == playreadyURN)
+
+      if matches {
+         pssh, _ := cp.GetPssh()
+         kid, _ := cp.GetDefaultKid()
+         return &protectionInfo{Pssh: pssh, KeyID: kid}, nil
       }
-      pssh, _ := cp.GetPssh()
-      info.Pssh = pssh
-      kid, _ := cp.GetDefaultKid()
-      info.KeyID = kid
-      protections = append(protections, info)
    }
-   return protections, nil
+
+   return nil, nil // No matching protection data found.
 }
 
 func (s *dashStream) getID() string     { return s.rep.Id }
@@ -162,22 +156,24 @@ func (s *hlsVariantStream) getInitSegment() (*segment, error) {
    return nil, nil
 }
 
-func (s *hlsVariantStream) getProtection() ([]protectionInfo, error) {
+func (s *hlsVariantStream) getProtection(scheme string) (*protectionInfo, error) {
    mediaPl, err := s.fetchPlaylist()
    if err != nil {
       return nil, err
    }
-   var protections []protectionInfo
-   if len(mediaPl.Keys) > 0 {
+
+   if scheme == "widevine" && len(mediaPl.Keys) > 0 {
       hlsKey := mediaPl.Keys[0]
       if strings.Contains(hlsKey.KeyFormat, "widevine") && hlsKey.URI != nil && hlsKey.URI.Scheme == "data" {
          psshData, err := hlsKey.DecodeData()
          if err == nil {
-            protections = append(protections, protectionInfo{Scheme: "widevine", Pssh: psshData})
+            // HLS doesn't typically provide a KeyID in the same way as DASH,
+            // so we leave it nil and rely on the PSSH.
+            return &protectionInfo{Pssh: psshData}, nil
          }
       }
    }
-   return protections, nil
+   return nil, nil // No matching protection data found.
 }
 
 func (s *hlsVariantStream) getID() string     { return strconv.Itoa(s.variant.ID) }
@@ -225,22 +221,21 @@ func (s *hlsRenditionStream) getInitSegment() (*segment, error) {
    return nil, nil
 }
 
-func (s *hlsRenditionStream) getProtection() ([]protectionInfo, error) {
+func (s *hlsRenditionStream) getProtection(scheme string) (*protectionInfo, error) {
    mediaPl, err := s.fetchPlaylist()
    if err != nil {
       return nil, err
    }
-   var protections []protectionInfo
-   if len(mediaPl.Keys) > 0 {
+   if scheme == "widevine" && len(mediaPl.Keys) > 0 {
       hlsKey := mediaPl.Keys[0]
       if strings.Contains(hlsKey.KeyFormat, "widevine") && hlsKey.URI != nil && hlsKey.URI.Scheme == "data" {
          psshData, err := hlsKey.DecodeData()
          if err == nil {
-            protections = append(protections, protectionInfo{Scheme: "widevine", Pssh: psshData})
+            return &protectionInfo{Pssh: psshData}, nil
          }
       }
    }
-   return protections, nil
+   return nil, nil // No matching protection data found.
 }
 
 func (s *hlsRenditionStream) getID() string     { return strconv.Itoa(s.rendition.ID) }

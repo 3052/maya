@@ -19,7 +19,7 @@ type mediaRequest struct {
    url    *url.URL
    header http.Header
 }
-type job struct {
+type downloadJob struct {
    index   int
    request mediaRequest
 }
@@ -75,12 +75,22 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
 
    // Step 3: Configure DRM and the remuxer (if needed).
    var media mediaFile
-   protections, err := stream.getProtection()
-   if err != nil {
-      return err
+   // Determine which DRM data to extract from the manifest based on the config.
+   var activeScheme string
+   if c.CertificateChain != "" && c.EncryptSignKey != "" {
+      activeScheme = "playready"
+   } else if c.ClientId != "" && c.PrivateKey != "" {
+      activeScheme = "widevine"
    }
-   if err := media.configureProtection(protections); err != nil {
-      return err
+
+   if activeScheme != "" {
+      if protection, err_prot := stream.getProtection(activeScheme); err_prot != nil {
+         return err_prot
+      } else if protection != nil {
+         if err := media.configureProtection(protection); err != nil {
+            return err
+         }
+      }
    }
 
    var remux *sofia.Remuxer
@@ -131,16 +141,16 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
    }
 
    numWorkers := max(c.Threads, 1)
-   jobs := make(chan job, len(requests))
+   jobs := make(chan downloadJob, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
    wg.Add(numWorkers)
    for workerId := 0; workerId < numWorkers; workerId++ {
       go func(id int) {
          defer wg.Done()
-         for downloadJob := range jobs {
-            data, err := getSegment(downloadJob.request.url, downloadJob.request.header)
-            results <- result{index: downloadJob.index, workerId: id, data: data, err: err}
+         for job := range jobs {
+            data, err := getSegment(job.request.url, job.request.header)
+            results <- result{index: job.index, workerId: id, data: data, err: err}
          }
       }(workerId)
    }
@@ -148,7 +158,7 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
    for reqIndex, req := range requests {
-      jobs <- job{index: reqIndex, request: req}
+      jobs <- downloadJob{index: reqIndex, request: req}
    }
    close(jobs)
    if err := <-doneChan; err != nil {

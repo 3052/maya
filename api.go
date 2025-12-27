@@ -47,23 +47,22 @@ func (c *Config) DownloadDASH(manifest *dash.Mpd) error {
    }
 
    // "Fetch-First" approach: Pre-fetch any necessary sidx data before starting the engine.
-   sidxData := make(map[string][]byte)
+   var sidxData []byte
    for _, rep := range dashGroup {
       if rep.SegmentBase != nil {
          baseUrl, err := rep.ResolveBaseUrl()
          if err != nil {
             return err
          }
-         cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
-         if _, exists := sidxData[cacheKey]; !exists {
-            header := http.Header{}
-            header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-            data, err := getSegment(baseUrl, header)
-            if err != nil {
-               return err
-            }
-            sidxData[cacheKey] = data
+         header := http.Header{}
+         header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+         data, err := getSegment(baseUrl, header)
+         if err != nil {
+            return err
          }
+         sidxData = data
+         // Since all sidx in a group are the same, we only need to fetch it once.
+         break
       }
    }
 
@@ -111,11 +110,14 @@ func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist) error {
 // ListStreamsDASH parses and prints available streams from a DASH manifest.
 func ListStreamsDASH(manifest *dash.Mpd) error {
    var middleStreams []stream
+   // Create a cache that lives for the duration of the listing operation.
+   sidxCache := make(map[string][]byte)
    for _, group := range manifest.GetRepresentations() {
       rep := group[len(group)/2]
-      // Restore the check to only calculate bitrate for video streams.
+      // Only calculate bitrate for video streams.
       if rep.GetMimeType() == "video/mp4" {
-         if err := getMiddleBitrate(rep); err != nil {
+         // Pass the cache down to the bitrate function.
+         if err := getMiddleBitrate(rep, sidxCache); err != nil {
             log.Printf("Could not calculate bitrate for stream %s: %v", rep.Id, err)
          }
       }

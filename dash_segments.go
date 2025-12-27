@@ -18,25 +18,32 @@ type segment struct {
 }
 
 // getMiddleBitrate calculates the bitrate of the middle segment and updates
-// the Representation. This is DASH-specific.
-func getMiddleBitrate(rep *dash.Representation) error {
+// the Representation. It uses a cache to avoid re-fetching the same sidx.
+func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
    log.Println("update", rep.Id)
 
    var segs []segment
    var err error
 
-   // This function is self-contained for listing streams. If it needs sidx,
-   // it must fetch it directly.
    if rep.SegmentBase != nil {
       baseUrl, err_base := rep.ResolveBaseUrl()
       if err_base != nil {
          return err_base
       }
-      header := http.Header{}
-      header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err_get := getSegment(baseUrl, header)
-      if err_get != nil {
-         return err_get
+      cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
+
+      // Check the cache first.
+      sidxData, exists := sidxCache[cacheKey]
+      if !exists {
+         // If not in cache, download it.
+         header := http.Header{}
+         header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+         sidxData, err = getSegment(baseUrl, header)
+         if err != nil {
+            return err
+         }
+         // Store it in the cache for the next group.
+         sidxCache[cacheKey] = sidxData
       }
       segs, err = generateSegmentsFromSidx(rep, sidxData)
    } else {
