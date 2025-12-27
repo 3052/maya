@@ -8,8 +8,8 @@ import (
    "net/url"
 )
 
-// ParseDASH parses a DASH manifest (MPD).
-func ParseDASH(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
+// ParseDash parses a DASH manifest (MPD).
+func ParseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    manifest, err := dash.Parse(body)
    if err != nil {
       return nil, fmt.Errorf("failed to parse DASH manifest: %w", err)
@@ -18,8 +18,8 @@ func ParseDASH(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    return manifest, nil
 }
 
-// ParseHLS parses an HLS master or media playlist.
-func ParseHLS(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
+// ParseHls parses an HLS master or media playlist.
+func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    bodyStr := string(body)
    master, err := hls.DecodeMaster(bodyStr)
    if err != nil {
@@ -36,49 +36,59 @@ func ParseHLS(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
 
 // --- Public Download Functions ---
 
-// DownloadDASH downloads an unencrypted DASH stream.
-func (c *Config) DownloadDASH(manifest *dash.Mpd) error {
-   return downloadDASHInternal(c, manifest, nil)
+// DownloadDash downloads an unencrypted DASH stream.
+func (c *Config) DownloadDash(manifest *dash.Mpd) error {
+   return downloadDashInternal(c, manifest, nil)
 }
 
-// DownloadDASH_Widevine downloads a Widevine-encrypted DASH stream.
-func (c *Config) DownloadDASH_Widevine(manifest *dash.Mpd, clientIDPath, privateKeyPath string) error {
+// DownloadDashWidevine downloads a Widevine-encrypted DASH stream.
+func (c *Config) DownloadDashWidevine(manifest *dash.Mpd, clientIDPath, privateKeyPath string) error {
    drmCfg := &drmConfig{
       Scheme:     "widevine",
       ClientId:   clientIDPath,
       PrivateKey: privateKeyPath,
    }
-   return downloadDASHInternal(c, manifest, drmCfg)
+   return downloadDashInternal(c, manifest, drmCfg)
 }
 
-// DownloadDASH_PlayReady downloads a PlayReady-encrypted DASH stream.
-func (c *Config) DownloadDASH_PlayReady(manifest *dash.Mpd, certChainPath, encryptKeyPath string) error {
+// DownloadDashPlayReady downloads a PlayReady-encrypted DASH stream.
+func (c *Config) DownloadDashPlayReady(manifest *dash.Mpd, certChainPath, encryptKeyPath string) error {
    drmCfg := &drmConfig{
       Scheme:           "playready",
       CertificateChain: certChainPath,
       EncryptSignKey:   encryptKeyPath,
    }
-   return downloadDASHInternal(c, manifest, drmCfg)
+   return downloadDashInternal(c, manifest, drmCfg)
 }
 
-// DownloadHLS downloads an unencrypted HLS stream.
-func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist) error {
-   return downloadHLSInternal(c, playlist, nil)
+// DownloadHls downloads an unencrypted HLS stream.
+func (c *Config) DownloadHls(playlist *hls.MasterPlaylist) error {
+   return downloadHlsInternal(c, playlist, nil)
 }
 
-// DownloadHLS_Widevine downloads a Widevine-encrypted HLS stream.
-func (c *Config) DownloadHLS_Widevine(playlist *hls.MasterPlaylist, clientIDPath, privateKeyPath string) error {
+// DownloadHlsWidevine downloads a Widevine-encrypted HLS stream.
+func (c *Config) DownloadHlsWidevine(playlist *hls.MasterPlaylist, clientIDPath, privateKeyPath string) error {
    drmCfg := &drmConfig{
       Scheme:     "widevine",
       ClientId:   clientIDPath,
       PrivateKey: privateKeyPath,
    }
-   return downloadHLSInternal(c, playlist, drmCfg)
+   return downloadHlsInternal(c, playlist, drmCfg)
+}
+
+// DownloadHlsPlayReady downloads a PlayReady-encrypted HLS stream.
+func (c *Config) DownloadHlsPlayReady(playlist *hls.MasterPlaylist, certChainPath, encryptKeyPath string) error {
+   drmCfg := &drmConfig{
+      Scheme:           "playready",
+      CertificateChain: certChainPath,
+      EncryptSignKey:   encryptKeyPath,
+   }
+   return downloadHlsInternal(c, playlist, drmCfg)
 }
 
 // --- List Functions ---
 
-func ListStreamsDASH(manifest *dash.Mpd) error {
+func ListStreamsDash(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
    for _, group := range manifest.GetRepresentations() {
       rep := group[len(group)/2]
@@ -93,7 +103,7 @@ func ListStreamsDASH(manifest *dash.Mpd) error {
    return nil
 }
 
-func ListStreamsHLS(playlist *hls.MasterPlaylist) error {
+func ListStreamsHls(playlist *hls.MasterPlaylist) error {
    for _, variant := range playlist.Variants {
       fmt.Println(variant)
       fmt.Println()

@@ -11,8 +11,8 @@ import (
    "strconv"
 )
 
-// downloadDASHInternal orchestrates the entire download process for a DASH stream.
-func downloadDASHInternal(c *Config, manifest *dash.Mpd, drmCfg *drmConfig) error {
+// downloadDashInternal orchestrates the entire download process for a DASH stream.
+func downloadDashInternal(c *Config, manifest *dash.Mpd, drmCfg *drmConfig) error {
    dashGroup, ok := manifest.GetRepresentations()[c.StreamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", c.StreamId)
@@ -79,7 +79,7 @@ func downloadDASHInternal(c *Config, manifest *dash.Mpd, drmCfg *drmConfig) erro
 
    var media mediaFile
    if drmCfg != nil {
-      protection, _ := getDashProtection(rep, drmCfg.Scheme)
+      protection, _ := getDashProtection(rep)
       if protection != nil {
          if err := media.configureProtection(protection); err != nil {
             return err
@@ -110,8 +110,8 @@ func downloadDASHInternal(c *Config, manifest *dash.Mpd, drmCfg *drmConfig) erro
    return c.executeDownload(remainingRequests, key, remux, file)
 }
 
-// downloadHLSInternal orchestrates the entire download process for an HLS stream.
-func downloadHLSInternal(c *Config, playlist *hls.MasterPlaylist, drmCfg *drmConfig) error {
+// downloadHlsInternal orchestrates the entire download process for an HLS stream.
+func downloadHlsInternal(c *Config, playlist *hls.MasterPlaylist, drmCfg *drmConfig) error {
    keyInt, err := strconv.Atoi(c.StreamId)
    if err != nil {
       return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)

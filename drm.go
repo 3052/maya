@@ -40,7 +40,7 @@ type drmConfig struct {
    PrivateKey       string
 }
 
-// ingestWidevinePssh parses Widevine PSSH data and sets the ContentId.
+// ingestWidevinePssh parses Widevine PSSH data and sets the ContentId and KeyID.
 func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    var pssh_data widevine.PsshData
    if err := pssh_data.Unmarshal(data); err != nil {
@@ -49,6 +49,11 @@ func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    if pssh_data.ContentId != nil {
       m.content_id = pssh_data.ContentId
       log.Printf("content ID %x", m.content_id)
+   }
+   // If Key ID isn't set yet (e.g. from manifest) and PSSH has one, use it.
+   if m.key_id == nil && len(pssh_data.KeyIds) > 0 {
+      m.key_id = pssh_data.KeyIds[0]
+      log.Printf("key ID from PSSH: %x", m.key_id)
    }
    return nil
 }

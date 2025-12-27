@@ -23,14 +23,12 @@ func TestApi(t *testing.T) {
       t.Fatal(err)
    }
 
-   // Since we know the test URL points to an MPD, we call ParseDASH directly.
-   mpd, err := ParseDASH(data, address)
+   mpd, err := ParseDash(data, address)
    if err != nil {
       t.Fatal(err)
    }
 
-   // The call to ListStreamsDASH is now direct and unambiguous.
-   err = ListStreamsDASH(mpd)
+   err = ListStreamsDash(mpd)
    if err != nil {
       t.Fatal(err)
    }

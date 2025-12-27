@@ -87,16 +87,22 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Rem
       if err := remux.Initialize(initData); err != nil {
          return nil, err
       }
-      if m.content_id == nil {
+      // If we haven't found a key ID from the manifest, try to find it in the PSSH
+      // data from the init segment. This is common in HLS.
+      if m.key_id == nil {
          wvIDBytes, err := hex.DecodeString(widevineSystemId)
          if err != nil {
             panic("failed to decode hardcoded widevine system id")
          }
+         // Try to find a Widevine PSSH box.
          if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
+            // This will attempt to extract both content_id and key_id.
             if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
                return nil, err
             }
          }
+         // NOTE: PlayReady PSSH parsing from the init segment is not implemented here.
+         // It would require finding the PlayReady PSSH box and parsing it to get the KID.
       }
       remux.Moov.RemovePssh()
    }

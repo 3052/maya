@@ -18,23 +18,47 @@ type segment struct {
    sizeBits uint64
 }
 
-// getDashProtection finds the protection data that matches the requested scheme.
-func getDashProtection(rep *dash.Representation, scheme string) (*protectionInfo, error) {
+// getDashProtection extracts Widevine PSSH and the default Key ID from a representation.
+// This information is often sufficient for both Widevine and PlayReady license requests under CENC.
+func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-   const playreadyURN = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
+   var psshData []byte
+   var keyID []byte
 
+   // In CENC, the KeyID is usually common, while the PSSH is system-specific.
+   // We iterate to find the first available common KeyID and the specific Widevine PSSH box.
    for _, cp := range rep.GetContentProtection() {
-      schemeUri := strings.ToLower(cp.SchemeIdUri)
-      matches := (scheme == "widevine" && schemeUri == widevineURN) ||
-         (scheme == "playready" && schemeUri == playreadyURN)
+      // Attempt to get the KID if we haven't found one yet.
+      if keyID == nil {
+         kid, err := cp.GetDefaultKid()
+         if err != nil {
+            // The library can return an error on bad hex. Log it but continue,
+            // as another ContentProtection element might have a valid one.
+            log.Printf("warning: could not parse default_KID: %v", err)
+         } else if kid != nil {
+            keyID = kid
+         }
+      }
 
-      if matches {
-         pssh, _ := cp.GetPssh()
-         kid, _ := cp.GetDefaultKid()
-         return &protectionInfo{Pssh: pssh, KeyID: kid}, nil
+      // Attempt to get the Widevine PSSH if we see the matching scheme.
+      if strings.ToLower(cp.SchemeIdUri) == widevineURN {
+         pssh, err := cp.GetPssh()
+         if err != nil {
+            log.Printf("warning: could not parse widevine pssh: %v", err)
+         } else if pssh != nil {
+            psshData = pssh
+         }
       }
    }
-   return nil, nil // No matching protection data found.
+
+   // A Key ID is essential for any DRM. If none was found, we can't proceed.
+   // The caller will see a nil protectionInfo and skip the DRM steps.
+   if keyID == nil {
+      return nil, nil
+   }
+
+   // If we found a key ID, return the protection info.
+   return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
 }
 
 // getDashMediaRequests generates the full list of media segments for a DASH group.

@@ -4,6 +4,7 @@ import (
    "41.neocities.org/luna/hls"
    "fmt"
    "io"
+   "log"
    "net/http"
    "net/url"
    "strings"
@@ -34,15 +35,20 @@ func fetchMediaPlaylist(uri, base *url.URL) (*hls.MediaPlaylist, error) {
 
 // getHlsProtection finds the protection data that matches the requested scheme.
 func getHlsProtection(mediaPl *hls.MediaPlaylist, scheme string) (*protectionInfo, error) {
-   if scheme == "widevine" && len(mediaPl.Keys) > 0 {
-      hlsKey := mediaPl.Keys[0]
-      if strings.Contains(hlsKey.KeyFormat, "widevine") && hlsKey.URI != nil && hlsKey.URI.Scheme == "data" {
-         psshData, err := hlsKey.DecodeData()
-         if err == nil {
-            // HLS doesn't typically provide a KeyID in the same way as DASH,
-            // so we leave it nil and rely on the PSSH.
-            return &protectionInfo{Pssh: psshData}, nil
+   // Find the first EXT-X-KEY tag that matches the requested DRM scheme and has embedded PSSH data.
+   for _, key := range mediaPl.Keys {
+      keyFormat := strings.ToLower(key.KeyFormat)
+      isWidevine := scheme == "widevine" && strings.Contains(keyFormat, "widevine")
+      isPlayReady := scheme == "playready" && strings.Contains(keyFormat, "playready")
+
+      if (isWidevine || isPlayReady) && key.URI != nil && key.URI.Scheme == "data" {
+         psshData, err := key.DecodeData()
+         if err != nil {
+            log.Printf("failed to decode PSSH data from HLS manifest: %v", err)
+            continue // Try next key
          }
+         // HLS often puts the KID inside the PSSH box. We extract it later in the process.
+         return &protectionInfo{Pssh: psshData}, nil
       }
    }
    return nil, nil // No matching protection data found.
