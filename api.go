@@ -3,13 +3,9 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
-   "41.neocities.org/sofia"
    "fmt"
    "log"
-   "net/http"
    "net/url"
-   "os"
-   "strconv"
 )
 
 // ParseDASH parses a DASH manifest (MPD).
@@ -38,219 +34,50 @@ func ParseHLS(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    return master, nil
 }
 
-// DownloadDASH retrieves a group of representations from a DASH manifest.
+// --- Public Download Functions ---
+
+// DownloadDASH downloads an unencrypted DASH stream.
 func (c *Config) DownloadDASH(manifest *dash.Mpd) error {
-   dashGroup, ok := manifest.GetRepresentations()[c.StreamId]
-   if !ok {
-      return fmt.Errorf("representation group not found %v", c.StreamId)
-   }
-   if len(dashGroup) == 0 {
-      return fmt.Errorf("representation group is empty")
-   }
-   rep := dashGroup[0] // Use the first representation for metadata.
-
-   // Step 1: Pre-fetch sidx data for the entire group.
-   var sidxData []byte
-   if rep.SegmentBase != nil {
-      baseUrl, err := rep.ResolveBaseUrl()
-      if err != nil {
-         return err
-      }
-      header := http.Header{}
-      header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err = getSegment(baseUrl, header)
-      if err != nil {
-         return err
-      }
-   }
-
-   // Step 2: Download the first segment for content detection.
-   var firstData []byte
-   var err error
-   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
-      baseUrl, _ := rep.ResolveBaseUrl()
-      header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
-      firstData, err = getSegment(baseUrl, header)
-   } else {
-      // Use the full segment generator to get the first media segment.
-      segs, err_segs := generateSegments(rep)
-      if err_segs != nil {
-         return err_segs
-      }
-      if len(segs) == 0 {
-         return nil
-      }
-      firstData, err = getSegment(segs[0].url, segs[0].header)
-   }
-   if err != nil {
-      return fmt.Errorf("failed to download first segment for content detection: %w", err)
-   }
-
-   // Step 3: Detect, create file, and configure DRM.
-   detection := detectContentType(firstData)
-   if detection.Extension == "" {
-      return fmt.Errorf("could not determine file type for stream %s", rep.Id)
-   }
-   fileName := rep.Id + detection.Extension
-   log.Println("Create", fileName)
-   file, err := os.Create(fileName)
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-
-   var media mediaFile
-   if c.isDrmNeeded() {
-      protection, _ := getDashProtection(rep, c.activeDrmScheme())
-      if protection != nil {
-         if err := media.configureProtection(protection); err != nil {
-            return err
-         }
-      }
-   }
-
-   // Step 4: Prepare remuxer and process the first segment.
-   var remux *sofia.Remuxer
-   if detection.IsFMP4 {
-      remux, err = media.initializeWriter(file, firstData)
-      if err != nil {
-         return err
-      }
-   } else {
-      if _, err := file.Write(firstData); err != nil {
-         return err
-      }
-   }
-
-   // Step 5: Get key and all media requests.
-   key, err := c.fetchKey(&media)
-   if err != nil {
-      return err
-   }
-
-   requests, err := getDashMediaRequests(dashGroup, sidxData)
-   if err != nil {
-      return err
-   }
-
-   // Step 6: Execute the download for the remaining segments.
-   remainingRequests := requests
-   if len(requests) > 0 && !(rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil) {
-      remainingRequests = requests[1:]
-   }
-
-   return c.executeDownload(remainingRequests, key, remux, file)
+   return downloadDASHInternal(c, manifest, nil)
 }
 
-// DownloadHLS retrieves a variant or rendition stream from an HLS playlist.
+// DownloadDASH_Widevine downloads a Widevine-encrypted DASH stream.
+func (c *Config) DownloadDASH_Widevine(manifest *dash.Mpd, clientIDPath, privateKeyPath string) error {
+   drmCfg := &drmConfig{
+      Scheme:     "widevine",
+      ClientId:   clientIDPath,
+      PrivateKey: privateKeyPath,
+   }
+   return downloadDASHInternal(c, manifest, drmCfg)
+}
+
+// DownloadDASH_PlayReady downloads a PlayReady-encrypted DASH stream.
+func (c *Config) DownloadDASH_PlayReady(manifest *dash.Mpd, certChainPath, encryptKeyPath string) error {
+   drmCfg := &drmConfig{
+      Scheme:           "playready",
+      CertificateChain: certChainPath,
+      EncryptSignKey:   encryptKeyPath,
+   }
+   return downloadDASHInternal(c, manifest, drmCfg)
+}
+
+// DownloadHLS downloads an unencrypted HLS stream.
 func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist) error {
-   keyInt, err := strconv.Atoi(c.StreamId)
-   if err != nil {
-      return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)
-   }
-   baseURL := playlist.Variants[0].URI
-
-   // Find the target, which can be a Variant or Rendition.
-   var targetURI *url.URL
-   var targetID string
-   var protection *protectionInfo
-   var segments []segment
-
-   for _, v := range playlist.Variants {
-      if v.ID == keyInt {
-         targetURI = v.URI
-         targetID = strconv.Itoa(v.ID)
-         mediaPl, err_pl := fetchMediaPlaylist(targetURI, baseURL)
-         if err_pl != nil {
-            return err_pl
-         }
-         protection, _ = getHlsProtection(mediaPl, c.activeDrmScheme())
-         segments, err = hlsSegments(mediaPl)
-         if err != nil {
-            return err
-         }
-         break
-      }
-   }
-   if targetURI == nil {
-      for _, r := range playlist.Medias {
-         if r.ID == keyInt {
-            targetURI = r.URI
-            targetID = strconv.Itoa(r.ID)
-            mediaPl, err_pl := fetchMediaPlaylist(targetURI, baseURL)
-            if err_pl != nil {
-               return err_pl
-            }
-            protection, _ = getHlsProtection(mediaPl, c.activeDrmScheme())
-            segments, err = hlsSegments(mediaPl)
-            if err != nil {
-               return err
-            }
-            break
-         }
-      }
-   }
-   if targetURI == nil {
-      return fmt.Errorf("stream with ID not found: %d", keyInt)
-   }
-
-   // Step 2 & 3 (combined): Download first segment, detect, create file.
-   if len(segments) == 0 {
-      return nil
-   }
-   firstData, err := getSegment(segments[0].url, segments[0].header)
-   if err != nil {
-      return err
-   }
-
-   detection := detectContentType(firstData)
-   if detection.Extension == "" {
-      return fmt.Errorf("could not determine file type for stream %s", targetID)
-   }
-   fileName := targetID + detection.Extension
-   log.Println("Create", fileName)
-   file, err := os.Create(fileName)
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-
-   var media mediaFile
-   if protection != nil {
-      if err := media.configureProtection(protection); err != nil {
-         return err
-      }
-   }
-
-   // Step 4: Prepare remuxer.
-   var remux *sofia.Remuxer
-   if detection.IsFMP4 {
-      remux, err = media.initializeWriter(file, firstData)
-      if err != nil {
-         return err
-      }
-   } else {
-      if _, err := file.Write(firstData); err != nil {
-         return err
-      }
-   }
-
-   // Step 5: Get key and requests.
-   key, err := c.fetchKey(&media)
-   if err != nil {
-      return err
-   }
-
-   requests := make([]mediaRequest, len(segments))
-   for i, s := range segments {
-      requests[i] = mediaRequest{url: s.url, header: s.header}
-   }
-
-   // Step 6: Execute download.
-   return c.executeDownload(requests[1:], key, remux, file)
+   return downloadHLSInternal(c, playlist, nil)
 }
 
-// ListStreamsDASH parses and prints available streams from a DASH manifest.
+// DownloadHLS_Widevine downloads a Widevine-encrypted HLS stream.
+func (c *Config) DownloadHLS_Widevine(playlist *hls.MasterPlaylist, clientIDPath, privateKeyPath string) error {
+   drmCfg := &drmConfig{
+      Scheme:     "widevine",
+      ClientId:   clientIDPath,
+      PrivateKey: privateKeyPath,
+   }
+   return downloadHLSInternal(c, playlist, drmCfg)
+}
+
+// --- List Functions ---
+
 func ListStreamsDASH(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
    for _, group := range manifest.GetRepresentations() {
@@ -266,7 +93,6 @@ func ListStreamsDASH(manifest *dash.Mpd) error {
    return nil
 }
 
-// ListStreamsHLS parses and prints all available streams (variants and renditions) from an HLS playlist.
 func ListStreamsHLS(playlist *hls.MasterPlaylist) error {
    for _, variant := range playlist.Variants {
       fmt.Println(variant)
@@ -279,28 +105,10 @@ func ListStreamsHLS(playlist *hls.MasterPlaylist) error {
    return nil
 }
 
-// Config holds downloader configuration.
+// --- Config Struct ---
+
 type Config struct {
-   Send             func([]byte) ([]byte, error)
-   Threads          int
-   CertificateChain string
-   EncryptSignKey   string
-   ClientId         string
-   PrivateKey       string
-   // StreamId is the identifier of the stream to download (e.g., "0", "1", etc.).
+   Send     func([]byte) ([]byte, error)
+   Threads  int
    StreamId string
-}
-
-func (c *Config) isDrmNeeded() bool {
-   return (c.CertificateChain != "" && c.EncryptSignKey != "") || (c.ClientId != "" && c.PrivateKey != "")
-}
-
-func (c *Config) activeDrmScheme() string {
-   if c.CertificateChain != "" && c.EncryptSignKey != "" {
-      return "playready"
-   }
-   if c.ClientId != "" && c.PrivateKey != "" {
-      return "widevine"
-   }
-   return ""
 }

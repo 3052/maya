@@ -31,6 +31,15 @@ type mediaFile struct {
    content_id []byte
 }
 
+// drmConfig holds the credentials for a single download action. It is unexported.
+type drmConfig struct {
+   Scheme           string
+   CertificateChain string
+   EncryptSignKey   string
+   ClientId         string
+   PrivateKey       string
+}
+
 // ingestWidevinePssh parses Widevine PSSH data and sets the ContentId.
 func (m *mediaFile) ingestWidevinePssh(data []byte) error {
    var pssh_data widevine.PsshData
@@ -49,7 +58,6 @@ func (m *mediaFile) configureProtection(protection *protectionInfo) error {
    if len(protection.Pssh) > 0 {
       var pssh_box sofia.PsshBox
       if err := pssh_box.Parse(protection.Pssh); err == nil {
-         // This is Widevine-specific, but is safe to run as it only sets a field.
          if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
             return err
          }
@@ -62,32 +70,30 @@ func (m *mediaFile) configureProtection(protection *protectionInfo) error {
    return nil
 }
 
-// fetchKey dispatches to the correct DRM key function based on the provided Config credentials.
-func (c *Config) fetchKey(media *mediaFile) ([]byte, error) {
-   if media.key_id == nil {
-      return nil, nil // No key needed (unencrypted).
+// fetchKey dispatches to the correct DRM key function. It is a method on Config to access the Send func.
+func (c *Config) fetchKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
+   if drmCfg == nil || media.key_id == nil {
+      return nil, nil // No DRM or unencrypted.
    }
 
-   // Prioritize PlayReady if its credentials are provided.
-   if c.CertificateChain != "" && c.EncryptSignKey != "" {
-      return c.playReadyKey(media)
+   switch drmCfg.Scheme {
+   case "widevine":
+      return c.widevineKey(drmCfg, media)
+   case "playready":
+      return c.playReadyKey(drmCfg, media)
    }
-
-   // Fallback to Widevine if its credentials are provided.
-   if c.ClientId != "" && c.PrivateKey != "" {
-      return c.widevineKey(media)
-   }
-
-   // The stream is encrypted, but we have no credentials.
    return nil, nil
 }
 
-func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
-   client_id, err := os.ReadFile(c.ClientId)
+func (c *Config) widevineKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
+   if drmCfg.ClientId == "" || drmCfg.PrivateKey == "" {
+      return nil, errors.New("widevine requires ClientId and PrivateKey paths")
+   }
+   client_id, err := os.ReadFile(drmCfg.ClientId)
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(c.PrivateKey)
+   pemBytes, err := os.ReadFile(drmCfg.PrivateKey)
    if err != nil {
       return nil, err
    }
@@ -126,8 +132,11 @@ func (c *Config) widevineKey(media *mediaFile) ([]byte, error) {
    return foundKey, nil
 }
 
-func (c *Config) playReadyKey(media *mediaFile) ([]byte, error) {
-   chainData, err := os.ReadFile(c.CertificateChain)
+func (c *Config) playReadyKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
+   if drmCfg.CertificateChain == "" || drmCfg.EncryptSignKey == "" {
+      return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
+   }
+   chainData, err := os.ReadFile(drmCfg.CertificateChain)
    if err != nil {
       return nil, err
    }
@@ -135,7 +144,7 @@ func (c *Config) playReadyKey(media *mediaFile) ([]byte, error) {
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-   signKeyData, err := os.ReadFile(c.EncryptSignKey)
+   signKeyData, err := os.ReadFile(drmCfg.EncryptSignKey)
    if err != nil {
       return nil, err
    }

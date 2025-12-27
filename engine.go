@@ -5,10 +5,12 @@ import (
    "crypto/aes"
    "encoding/hex"
    "io"
+   "log"
    "net/http"
    "net/url"
    "os"
    "sync"
+   "time"
 )
 
 // Internal types for the worker pool
@@ -59,6 +61,23 @@ func (c *Config) executeDownload(requests []mediaRequest, key []byte, remux *sof
    close(jobs)
 
    return <-doneChan
+}
+
+// initializeRemuxer handles the logic of setting up the remuxer if needed.
+func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte, media *mediaFile) (*sofia.Remuxer, error) {
+   var remux *sofia.Remuxer
+   if isFMP4 {
+      var err error
+      remux, err = media.initializeWriter(file, firstData)
+      if err != nil {
+         return nil, err
+      }
+   } else {
+      if _, err := file.Write(firstData); err != nil {
+         return nil, err
+      }
+   }
+   return remux, nil
 }
 
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
@@ -141,4 +160,46 @@ func processAndWriteSegments(
       }
    }
    doneChan <- nil
+}
+
+// --- Progress Tracking Utility ---
+
+// progress tracks and logs the status of a multi-threaded download.
+type progress struct {
+   total     int
+   processed int
+   counts    []int
+   start     time.Time
+   lastLog   time.Time
+}
+
+func newProgress(total int, numWorkers int) *progress {
+   return &progress{
+      total:   total,
+      counts:  make([]int, numWorkers),
+      start:   time.Now(),
+      lastLog: time.Now(),
+   }
+}
+
+func (p *progress) update(workerID int) {
+   p.processed++
+   if workerID >= 0 && workerID < len(p.counts) {
+      p.counts[workerID]++
+   }
+   now := time.Now()
+   if now.Sub(p.lastLog) > time.Second {
+      segments_left := p.total - p.processed
+      elapsed := now.Sub(p.start)
+      var timeLeft time.Duration
+      if p.processed > 0 {
+         avg_per_seg := elapsed / time.Duration(p.processed)
+         timeLeft = avg_per_seg * time.Duration(segments_left)
+      }
+      log.Printf(
+         "segments done %v | left %v | time left %v",
+         p.counts, segments_left, timeLeft.Truncate(time.Second),
+      )
+      p.lastLog = now
+   }
 }
