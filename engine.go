@@ -3,6 +3,7 @@ package maya
 import (
    "41.neocities.org/sofia"
    "crypto/aes"
+   "encoding/hex"
    "fmt"
    "io"
    "log"
@@ -29,72 +30,106 @@ type result struct {
    err      error
 }
 
-func createOutputFile(id string, mime string) (*os.File, error) {
-   parts := strings.Split(mime, "/")
-   if len(parts) != 2 {
-      return nil, fmt.Errorf("invalid mime type %v", mime)
-   }
-   extension := "." + parts[1]
-   if mime == "audio/mp4" {
-      extension = ".m4a"
-   }
-   if mime == "video/mp2t" {
-      extension = ".ts"
-   }
-   name := id + extension
-   log.Println("Create", name)
-   return os.Create(name)
-}
-
 // downloadGroupInternal is the shared engine that works with the stream abstraction.
 func (c *Config) downloadGroupInternal(group streamGroup) error {
    if len(group) == 0 {
       return fmt.Errorf("cannot download empty stream group")
    }
-   rep := group[0]
+   stream := group[0]
+
+   // Step 1: Download the first piece of data to determine content type.
+   var firstData []byte
+   var err error
+   if initSeg, _ := stream.getInitSegment(); initSeg != nil {
+      firstData, err = getSegment(initSeg.url, initSeg.header)
+   } else {
+      segments, segErr := stream.getSegments()
+      if segErr != nil {
+         return segErr
+      }
+      if len(segments) == 0 {
+         return nil // Nothing to download.
+      }
+      firstData, err = getSegment(segments[0].url, segments[0].header)
+   }
+   if err != nil {
+      return fmt.Errorf("failed to download first segment for content detection: %w", err)
+   }
+
+   // Step 2: Detect content type and create the output file.
+   detection := detectContentType(firstData)
+   if detection.Extension == "" {
+      return fmt.Errorf("could not determine file type for stream %s", stream.getID())
+   }
+   ext := detection.Extension
+   if !strings.HasPrefix(ext, ".") {
+      ext = "." + ext
+   }
+   fileName := stream.getID() + ext
+   log.Println("Create", fileName)
+   file, err := os.Create(fileName)
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+
+   // Step 3: Configure DRM and the remuxer (if needed).
    var media mediaFile
-   protections, err := rep.getProtection()
+   protections, err := stream.getProtection()
    if err != nil {
       return err
    }
    if err := media.configureProtection(protections); err != nil {
       return err
    }
-   file, err := createOutputFile(rep.getID(), rep.getMimeType())
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-   isMp4 := strings.Contains(rep.getMimeType(), "mp4")
+
    var remux *sofia.Remuxer
-   if isMp4 {
-      initSeg, err := rep.getInitSegment()
+   if detection.IsFMP4 {
+      remux, err = media.initializeWriter(file, firstData)
       if err != nil {
          return err
       }
-      var initData []byte
-      if initSeg != nil {
-         initData, err = getSegment(initSeg.url, initSeg.header)
-         if err != nil {
-            return err
-         }
-      }
-      remux, err = media.initializeWriter(file, initData)
-      if err != nil {
+   } else {
+      // If not remuxing, write the first segment directly to the file.
+      if _, err := file.Write(firstData); err != nil {
          return err
       }
    }
+
+   // Step 4: Fetch decryption key and prepare the rest of the segments.
    key, err := c.fetchKey(&media)
    if err != nil {
       return err
    }
-   requests, err := getMediaRequests(group)
+
+   allSegments, err := stream.getSegments()
    if err != nil {
       return err
    }
-   if len(requests) == 0 {
+   // We've already processed the first segment.
+   remainingSegments := allSegments
+   if len(allSegments) > 0 {
+      // If there was an init segment, we download all media segments.
+      // If there wasn't, we skip the first media segment which we already used.
+      if initSeg, _ := stream.getInitSegment(); initSeg == nil {
+         remainingSegments = allSegments[1:]
+      }
+   }
+   if len(remainingSegments) == 0 {
+      // This can happen if there's only one segment and no init segment.
+      // Since we already downloaded and wrote it, the download is complete.
+      if remux != nil {
+         return remux.Finish()
+      }
       return nil
    }
+
+   // Step 5: Start the worker pool for the remaining segments.
+   requests := make([]mediaRequest, len(remainingSegments))
+   for i, seg := range remainingSegments {
+      requests[i] = mediaRequest{url: seg.url, header: seg.header}
+   }
+
    numWorkers := max(c.Threads, 1)
    jobs := make(chan job, len(requests))
    results := make(chan result, len(requests))
@@ -109,6 +144,7 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
          }
       }(workerId)
    }
+
    doneChan := make(chan error, 1)
    go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
    for reqIndex, req := range requests {
@@ -121,23 +157,6 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
    return nil
 }
 
-// getMediaRequests is now fully generic. It iterates through a group of streams
-// and asks each one to provide its list of downloadable segments.
-func getMediaRequests(group streamGroup) ([]mediaRequest, error) {
-   var requests []mediaRequest
-   for _, s := range group {
-      // Delegate responsibility to the stream itself.
-      segments, err := s.getSegments()
-      if err != nil {
-         return nil, err
-      }
-      for _, seg := range segments {
-         requests = append(requests, mediaRequest{url: seg.url, header: seg.header})
-      }
-   }
-   return requests, nil
-}
-
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
    var remux sofia.Remuxer
    remux.Writer = file
@@ -146,7 +165,13 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Rem
          return nil, err
       }
       if m.content_id == nil {
-         if wvBox, ok := remux.Moov.FindPssh(widevineId); ok {
+         // Decode the Widevine System ID string constant when needed.
+         wvIDBytes, err := hex.DecodeString(widevineSystemId)
+         if err != nil {
+            // This should never happen with a hardcoded constant.
+            panic("failed to decode hardcoded widevine system id")
+         }
+         if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
             if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
                return nil, err
             }

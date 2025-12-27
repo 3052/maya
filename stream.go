@@ -7,21 +7,21 @@ import (
    "io"
    "net/http"
    "net/url"
+   "strconv"
    "strings"
 )
 
 // streamGroup represents a collection of related streams.
 type streamGroup []stream
 
-// stream represents a single media stream (e.g., a specific resolution/bitrate).
-// It returns a slice of the 'segment' struct which is defined in dash_segments.go
+// stream represents a single media stream with a common set of methods.
 type stream interface {
-   getMimeType() string
    getSegments() ([]segment, error)
    getInitSegment() (*segment, error)
    getProtection() ([]protectionInfo, error)
    getID() string
    getBandwidth() int
+   String() string
 }
 
 // protectionInfo holds standardized DRM information.
@@ -35,10 +35,9 @@ type protectionInfo struct {
 
 type dashStream struct {
    rep            *dash.Representation
-   preFetchedSidx map[string][]byte // Contains sidx data, fetched by the main DownloadDASH function.
+   preFetchedSidx map[string][]byte
 }
 
-// getSegments now uses the pre-fetched sidx data passed during its creation.
 func (s *dashStream) getSegments() ([]segment, error) {
    if s.rep.SegmentBase != nil {
       baseUrl, err := s.rep.ResolveBaseUrl()
@@ -46,16 +45,12 @@ func (s *dashStream) getSegments() ([]segment, error) {
          return nil, err
       }
       cacheKey := baseUrl.String() + s.rep.SegmentBase.IndexRange
-
       sidxData, found := s.preFetchedSidx[cacheKey]
       if !found {
-         // This should not happen in the new architecture, but we can handle it gracefully.
          return nil, fmt.Errorf("sidx data for key %s not found in pre-fetched map", cacheKey)
       }
       return generateSegmentsFromSidx(s.rep, sidxData)
    }
-
-   // For other types (SegmentTemplate, SegmentList), the logic is unchanged.
    return generateSegments(s.rep)
 }
 
@@ -97,27 +92,18 @@ func (s *dashStream) getProtection() ([]protectionInfo, error) {
    return protections, nil
 }
 
-func (s *dashStream) getMimeType() string { return s.rep.GetMimeType() }
-func (s *dashStream) getID() string       { return s.rep.Id }
-func (s *dashStream) getBandwidth() int   { return s.rep.Bandwidth }
+func (s *dashStream) getID() string     { return s.rep.Id }
+func (s *dashStream) getBandwidth() int { return s.rep.Bandwidth }
+func (s *dashStream) String() string    { return s.rep.String() }
 
-// --- HLS Stream Implementation ---
+// --- HLS Stream Implementations ---
 
-type hlsStream struct {
-   variant       *hls.Variant
-   baseURL       *url.URL
-   id            string
-   mediaPlaylist *hls.MediaPlaylist // Cache
-}
-
-func (s *hlsStream) fetchAndParseMediaPlaylist() (*hls.MediaPlaylist, error) {
-   if s.mediaPlaylist != nil {
-      return s.mediaPlaylist, nil
+// fetchMediaPlaylist is a shared helper for both HLS variant and rendition streams.
+func fetchMediaPlaylist(uri, base *url.URL) (*hls.MediaPlaylist, error) {
+   if uri == nil {
+      return nil, fmt.Errorf("HLS stream has no URI")
    }
-   if s.variant.URI == nil {
-      return nil, fmt.Errorf("HLS variant has no URI")
-   }
-   mediaURL := s.baseURL.ResolveReference(s.variant.URI)
+   mediaURL := base.ResolveReference(uri)
    resp, err := http.Get(mediaURL.String())
    if err != nil {
       return nil, err
@@ -132,12 +118,29 @@ func (s *hlsStream) fetchAndParseMediaPlaylist() (*hls.MediaPlaylist, error) {
       return nil, err
    }
    mediaPl.ResolveURIs(mediaURL)
-   s.mediaPlaylist = mediaPl
    return mediaPl, nil
 }
 
-func (s *hlsStream) getSegments() ([]segment, error) {
-   mediaPl, err := s.fetchAndParseMediaPlaylist()
+// hlsVariantStream adapts an hls.Variant to the stream interface.
+type hlsVariantStream struct {
+   variant       *hls.Variant
+   baseURL       *url.URL
+   mediaPlaylist *hls.MediaPlaylist // Cache
+}
+
+func (s *hlsVariantStream) fetchPlaylist() (*hls.MediaPlaylist, error) {
+   if s.mediaPlaylist == nil {
+      pl, err := fetchMediaPlaylist(s.variant.URI, s.baseURL)
+      if err != nil {
+         return nil, err
+      }
+      s.mediaPlaylist = pl
+   }
+   return s.mediaPlaylist, nil
+}
+
+func (s *hlsVariantStream) getSegments() ([]segment, error) {
+   mediaPl, err := s.fetchPlaylist()
    if err != nil {
       return nil, err
    }
@@ -148,8 +151,8 @@ func (s *hlsStream) getSegments() ([]segment, error) {
    return segments, nil
 }
 
-func (s *hlsStream) getInitSegment() (*segment, error) {
-   mediaPl, err := s.fetchAndParseMediaPlaylist()
+func (s *hlsVariantStream) getInitSegment() (*segment, error) {
+   mediaPl, err := s.fetchPlaylist()
    if err != nil {
       return nil, err
    }
@@ -159,8 +162,8 @@ func (s *hlsStream) getInitSegment() (*segment, error) {
    return nil, nil
 }
 
-func (s *hlsStream) getProtection() ([]protectionInfo, error) {
-   mediaPl, err := s.fetchAndParseMediaPlaylist()
+func (s *hlsVariantStream) getProtection() ([]protectionInfo, error) {
+   mediaPl, err := s.fetchPlaylist()
    if err != nil {
       return nil, err
    }
@@ -177,15 +180,69 @@ func (s *hlsStream) getProtection() ([]protectionInfo, error) {
    return protections, nil
 }
 
-func (s *hlsStream) getMimeType() string {
-   if strings.Contains(s.variant.Codecs, "avc1") || strings.Contains(s.variant.Codecs, "hev1") {
-      return "video/mp4"
-   }
-   if strings.Contains(s.variant.Codecs, "mp4a") {
-      return "audio/mp4"
-   }
-   return "video/mp2t"
+func (s *hlsVariantStream) getID() string     { return strconv.Itoa(s.variant.ID) }
+func (s *hlsVariantStream) getBandwidth() int { return s.variant.Bandwidth }
+func (s *hlsVariantStream) String() string    { return s.variant.String() }
+
+// hlsRenditionStream adapts an hls.Rendition to the stream interface.
+type hlsRenditionStream struct {
+   rendition     *hls.Rendition
+   baseURL       *url.URL
+   mediaPlaylist *hls.MediaPlaylist // Cache
 }
 
-func (s *hlsStream) getID() string     { return s.id }
-func (s *hlsStream) getBandwidth() int { return s.variant.Bandwidth }
+func (s *hlsRenditionStream) fetchPlaylist() (*hls.MediaPlaylist, error) {
+   if s.mediaPlaylist == nil {
+      pl, err := fetchMediaPlaylist(s.rendition.URI, s.baseURL)
+      if err != nil {
+         return nil, err
+      }
+      s.mediaPlaylist = pl
+   }
+   return s.mediaPlaylist, nil
+}
+
+func (s *hlsRenditionStream) getSegments() ([]segment, error) {
+   mediaPl, err := s.fetchPlaylist()
+   if err != nil {
+      return nil, err
+   }
+   var segments []segment
+   for _, hlsSeg := range mediaPl.Segments {
+      segments = append(segments, segment{url: hlsSeg.URI, header: nil})
+   }
+   return segments, nil
+}
+
+func (s *hlsRenditionStream) getInitSegment() (*segment, error) {
+   mediaPl, err := s.fetchPlaylist()
+   if err != nil {
+      return nil, err
+   }
+   if len(mediaPl.Segments) > 0 && mediaPl.Segments[0].Map != nil {
+      return &segment{url: mediaPl.Segments[0].Map}, nil
+   }
+   return nil, nil
+}
+
+func (s *hlsRenditionStream) getProtection() ([]protectionInfo, error) {
+   mediaPl, err := s.fetchPlaylist()
+   if err != nil {
+      return nil, err
+   }
+   var protections []protectionInfo
+   if len(mediaPl.Keys) > 0 {
+      hlsKey := mediaPl.Keys[0]
+      if strings.Contains(hlsKey.KeyFormat, "widevine") && hlsKey.URI != nil && hlsKey.URI.Scheme == "data" {
+         psshData, err := hlsKey.DecodeData()
+         if err == nil {
+            protections = append(protections, protectionInfo{Scheme: "widevine", Pssh: psshData})
+         }
+      }
+   }
+   return protections, nil
+}
+
+func (s *hlsRenditionStream) getID() string     { return strconv.Itoa(s.rendition.ID) }
+func (s *hlsRenditionStream) getBandwidth() int { return 0 } // Renditions don't have bandwidth.
+func (s *hlsRenditionStream) String() string    { return s.rendition.String() }

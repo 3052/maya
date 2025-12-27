@@ -28,35 +28,6 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
    return io.ReadAll(resp.Body)
 }
 
-// getContentLength discovers the size of a remote resource in bytes.
-func getContentLength(targetUrl *url.URL) (int64, error) {
-   // 1. Try HEAD
-   resp, err := http.Head(targetUrl.String())
-   if err != nil {
-      return 0, err
-   }
-   resp.Body.Close()
-   if resp.StatusCode == http.StatusOK && resp.ContentLength > 0 {
-      return resp.ContentLength, nil
-   }
-
-   // 2. Fallback to GET
-   if resp.StatusCode == http.StatusMethodNotAllowed || resp.ContentLength <= 0 {
-      resp, err = http.Get(targetUrl.String())
-      if err != nil {
-         return 0, err
-      }
-      defer resp.Body.Close()
-      if resp.ContentLength > 0 {
-         return resp.ContentLength, nil
-      }
-      // 3. Read body manually if Content-Length header is missing
-      return io.Copy(io.Discard, resp.Body)
-   }
-
-   return 0, errors.New(resp.Status)
-}
-
 // Transport configures the default HTTP transport for logging and proxy support.
 func Transport(policy func(*http.Request) string) {
    http.DefaultTransport = &http.Transport{

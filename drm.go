@@ -5,16 +5,19 @@ import (
    "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
    "bytes"
-   "encoding/hex"
    "errors"
    "log"
    "math/big"
    "os"
 )
 
+const (
+   // widevineSystemId is the UUID for the Widevine DRM system.
+   widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
+)
+
 var (
    errKeyMismatch = errors.New("key ID mismatch")
-   widevineId, _  = hex.DecodeString("edef8ba979d64acea3c827dcd51d21ed")
 )
 
 type mediaFile struct {

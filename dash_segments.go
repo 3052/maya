@@ -25,48 +25,51 @@ func getMiddleBitrate(rep *dash.Representation) error {
    var segs []segment
    var err error
 
-   // For bitrate calculation, we must fetch the sidx on-demand if needed.
+   // This function is self-contained for listing streams. If it needs sidx,
+   // it must fetch it directly.
    if rep.SegmentBase != nil {
-      var baseUrl *url.URL
-      baseUrl, err = rep.ResolveBaseUrl()
-      if err != nil {
-         return err
+      baseUrl, err_base := rep.ResolveBaseUrl()
+      if err_base != nil {
+         return err_base
       }
       header := http.Header{}
       header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-      var sidxData []byte
-      sidxData, err = getSegment(baseUrl, header)
-      if err != nil {
-         return err
+      sidxData, err_get := getSegment(baseUrl, header)
+      if err_get != nil {
+         return err_get
       }
       segs, err = generateSegmentsFromSidx(rep, sidxData)
    } else {
+      // For other types (SegmentTemplate, etc.), use the general generator.
       segs, err = generateSegments(rep)
    }
 
    if err != nil {
-      return err
+      return err // Catch errors from either segment generation path.
    }
 
    if len(segs) == 0 {
       rep.Bandwidth = 0
       return nil
    }
+
    mid := segs[len(segs)/2]
+
+   // The segment size is already known for sidx, so we don't need to re-download.
+   // For other types, we must download the whole segment to know its size.
    sizeBits := mid.sizeBits
    if sizeBits == 0 {
-      sizeBytes, err_len := getContentLength(mid.url)
-      if err_len != nil {
-         return err_len
+      data, err_get := getSegment(mid.url, mid.header)
+      if err_get != nil {
+         return err_get // Cannot fetch middle segment
       }
-      if sizeBytes <= 0 {
-         return errors.New("content length missing")
-      }
-      sizeBits = uint64(sizeBytes) * 8
+      sizeBits = uint64(len(data)) * 8
    }
+
    if mid.duration <= 0 {
-      return errors.New("invalid duration")
+      return errors.New("invalid duration for bitrate calculation")
    }
+
    rep.Bandwidth = int(float64(sizeBits) / mid.duration)
    return nil
 }
@@ -108,7 +111,6 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segm
 
 // generateSegments centralizes the logic to produce a list of segments for a
 // DASH Representation. It handles SegmentTemplate and SegmentList.
-// SegmentBase (sidx) is now handled by getSegments in the dashStream.
 func generateSegments(rep *dash.Representation) ([]segment, error) {
    baseUrl, err := rep.ResolveBaseUrl()
    if err != nil {

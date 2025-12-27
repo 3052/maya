@@ -4,9 +4,11 @@ import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
    "fmt"
+   "log"
    "net/http"
    "net/url"
    "slices"
+   "strconv"
 )
 
 // ParseDASH parses a DASH manifest (MPD).
@@ -36,11 +38,12 @@ func ParseHLS(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
 }
 
 // DownloadDASH retrieves a group of representations from a DASH manifest.
-func (c *Config) DownloadDASH(manifest *dash.Mpd, key string) error {
+// The stream to download is specified by the StreamId field in the Config.
+func (c *Config) DownloadDASH(manifest *dash.Mpd) error {
    dashGroups := manifest.GetRepresentations()
-   dashGroup, ok := dashGroups[key]
+   dashGroup, ok := dashGroups[c.StreamId]
    if !ok {
-      return fmt.Errorf("representation group not found %v", key)
+      return fmt.Errorf("representation group not found %v", c.StreamId)
    }
 
    // "Fetch-First" approach: Pre-fetch any necessary sidx data before starting the engine.
@@ -71,22 +74,37 @@ func (c *Config) DownloadDASH(manifest *dash.Mpd, key string) error {
    return c.downloadGroupInternal(group)
 }
 
-// DownloadHLS retrieves a variant stream from an HLS playlist.
-func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist, key string) error {
-   // For HLS, we treat each variant as a downloadable "group"
-   variantIndex := 0 // Simple key mapping for now, "0", "1", etc.
-   fmt.Sscanf(key, "%d", &variantIndex)
-   if variantIndex >= len(playlist.Variants) {
-      return fmt.Errorf("variant index not found %v", key)
+// DownloadHLS retrieves a variant or rendition stream from an HLS playlist by its ID.
+func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist) error {
+   keyInt, err := strconv.Atoi(c.StreamId)
+   if err != nil {
+      return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)
    }
-   variant := playlist.Variants[variantIndex]
-   group := streamGroup{
-      &hlsStream{
-         variant: variant,
-         baseURL: playlist.Variants[0].URI, // A bit of a simplification
-         id:      fmt.Sprintf("hls-%d", variantIndex),
-      },
+
+   // Find the target stream, which can be either a Variant or a Rendition.
+   var targetStream stream
+   baseURL := playlist.Variants[0].URI // Assume base URL can be derived from the first variant.
+
+   for _, v := range playlist.Variants {
+      if v.ID == keyInt {
+         targetStream = &hlsVariantStream{variant: v, baseURL: baseURL}
+         break
+      }
    }
+   if targetStream == nil {
+      for _, r := range playlist.Medias {
+         if r.ID == keyInt {
+            targetStream = &hlsRenditionStream{rendition: r, baseURL: baseURL}
+            break
+         }
+      }
+   }
+
+   if targetStream == nil {
+      return fmt.Errorf("stream with ID not found: %d", keyInt)
+   }
+
+   group := streamGroup{targetStream}
    return c.downloadGroupInternal(group)
 }
 
@@ -95,9 +113,10 @@ func ListStreamsDASH(manifest *dash.Mpd) error {
    var middleStreams []stream
    for _, group := range manifest.GetRepresentations() {
       rep := group[len(group)/2]
+      // Restore the check to only calculate bitrate for video streams.
       if rep.GetMimeType() == "video/mp4" {
          if err := getMiddleBitrate(rep); err != nil {
-            return err
+            log.Printf("Could not calculate bitrate for stream %s: %v", rep.Id, err)
          }
       }
       middleStreams = append(middleStreams, &dashStream{rep: rep})
@@ -106,13 +125,21 @@ func ListStreamsDASH(manifest *dash.Mpd) error {
    return nil
 }
 
-// ListStreamsHLS parses and prints available streams from an HLS playlist.
+// ListStreamsHLS parses and prints all available streams (variants and renditions) from an HLS playlist.
 func ListStreamsHLS(playlist *hls.MasterPlaylist) error {
    var streams []stream
-   for i, variant := range playlist.Variants {
-      streams = append(streams, &hlsStream{
+   baseURL := playlist.Variants[0].URI // Base for resolving relative rendition URIs.
+
+   for _, variant := range playlist.Variants {
+      streams = append(streams, &hlsVariantStream{
          variant: variant,
-         id:      fmt.Sprintf("%d", i),
+         baseURL: baseURL,
+      })
+   }
+   for _, rendition := range playlist.Medias {
+      streams = append(streams, &hlsRenditionStream{
+         rendition: rendition,
+         baseURL:   baseURL,
       })
    }
    printStreams(streams)
@@ -129,12 +156,12 @@ func printStreams(streams []stream) {
       if index >= 1 {
          fmt.Println()
       }
-      fmt.Printf("ID: %s\nBandwidth: %d\nMimeType: %s\n",
-         s.getID(), s.getBandwidth(), s.getMimeType())
+      // fmt.Println will automatically call the String() method on the stream.
+      fmt.Println(s)
    }
 }
 
-// Config holds downloader configuration
+// Config holds downloader configuration.
 type Config struct {
    Send             func([]byte) ([]byte, error)
    Threads          int
@@ -142,4 +169,6 @@ type Config struct {
    EncryptSignKey   string
    ClientId         string
    PrivateKey       string
+   // StreamId is the identifier of the stream to download (e.g., "0", "1", etc.).
+   StreamId string
 }
