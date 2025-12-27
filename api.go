@@ -3,11 +3,12 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "41.neocities.org/sofia"
    "fmt"
    "log"
    "net/http"
    "net/url"
-   "slices"
+   "os"
    "strconv"
 )
 
@@ -38,129 +39,244 @@ func ParseHLS(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
 }
 
 // DownloadDASH retrieves a group of representations from a DASH manifest.
-// The stream to download is specified by the StreamId field in the Config.
 func (c *Config) DownloadDASH(manifest *dash.Mpd) error {
-   dashGroups := manifest.GetRepresentations()
-   dashGroup, ok := dashGroups[c.StreamId]
+   dashGroup, ok := manifest.GetRepresentations()[c.StreamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", c.StreamId)
    }
+   if len(dashGroup) == 0 {
+      return fmt.Errorf("representation group is empty")
+   }
+   rep := dashGroup[0] // Use the first representation for metadata.
 
-   // "Fetch-First" approach: Pre-fetch any necessary sidx data before starting the engine.
+   // Step 1: Pre-fetch sidx data for the entire group.
    var sidxData []byte
-   for _, rep := range dashGroup {
-      if rep.SegmentBase != nil {
-         baseUrl, err := rep.ResolveBaseUrl()
-         if err != nil {
-            return err
-         }
-         header := http.Header{}
-         header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
-         data, err := getSegment(baseUrl, header)
-         if err != nil {
-            return err
-         }
-         sidxData = data
-         // Since all sidx in a group are the same, we only need to fetch it once.
-         break
+   if rep.SegmentBase != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
+      }
+      header := http.Header{}
+      header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+      sidxData, err = getSegment(baseUrl, header)
+      if err != nil {
+         return err
       }
    }
 
-   var group streamGroup
-   for _, rep := range dashGroup {
-      group = append(group, &dashStream{rep: rep, preFetchedSidx: sidxData})
+   // Step 2: Download the first segment for content detection.
+   var firstData []byte
+   var err error
+   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
+      baseUrl, _ := rep.ResolveBaseUrl()
+      header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
+      firstData, err = getSegment(baseUrl, header)
+   } else {
+      // Use the full segment generator to get the first media segment.
+      segs, err_segs := generateSegments(rep)
+      if err_segs != nil {
+         return err_segs
+      }
+      if len(segs) == 0 {
+         return nil
+      }
+      firstData, err = getSegment(segs[0].url, segs[0].header)
    }
-   return c.downloadGroupInternal(group)
+   if err != nil {
+      return fmt.Errorf("failed to download first segment for content detection: %w", err)
+   }
+
+   // Step 3: Detect, create file, and configure DRM.
+   detection := detectContentType(firstData)
+   if detection.Extension == "" {
+      return fmt.Errorf("could not determine file type for stream %s", rep.Id)
+   }
+   fileName := rep.Id + detection.Extension
+   log.Println("Create", fileName)
+   file, err := os.Create(fileName)
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+
+   var media mediaFile
+   if c.isDrmNeeded() {
+      protection, _ := getDashProtection(rep, c.activeDrmScheme())
+      if protection != nil {
+         if err := media.configureProtection(protection); err != nil {
+            return err
+         }
+      }
+   }
+
+   // Step 4: Prepare remuxer and process the first segment.
+   var remux *sofia.Remuxer
+   if detection.IsFMP4 {
+      remux, err = media.initializeWriter(file, firstData)
+      if err != nil {
+         return err
+      }
+   } else {
+      if _, err := file.Write(firstData); err != nil {
+         return err
+      }
+   }
+
+   // Step 5: Get key and all media requests.
+   key, err := c.fetchKey(&media)
+   if err != nil {
+      return err
+   }
+
+   requests, err := getDashMediaRequests(dashGroup, sidxData)
+   if err != nil {
+      return err
+   }
+
+   // Step 6: Execute the download for the remaining segments.
+   remainingRequests := requests
+   if len(requests) > 0 && !(rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil) {
+      remainingRequests = requests[1:]
+   }
+
+   return c.executeDownload(remainingRequests, key, remux, file)
 }
 
-// DownloadHLS retrieves a variant or rendition stream from an HLS playlist by its ID.
+// DownloadHLS retrieves a variant or rendition stream from an HLS playlist.
 func (c *Config) DownloadHLS(playlist *hls.MasterPlaylist) error {
    keyInt, err := strconv.Atoi(c.StreamId)
    if err != nil {
       return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)
    }
+   baseURL := playlist.Variants[0].URI
 
-   // Find the target stream, which can be either a Variant or a Rendition.
-   var targetStream stream
-   baseURL := playlist.Variants[0].URI // Assume base URL can be derived from the first variant.
+   // Find the target, which can be a Variant or Rendition.
+   var targetURI *url.URL
+   var targetID string
+   var protection *protectionInfo
+   var segments []segment
 
    for _, v := range playlist.Variants {
       if v.ID == keyInt {
-         targetStream = &hlsVariantStream{variant: v, baseURL: baseURL}
+         targetURI = v.URI
+         targetID = strconv.Itoa(v.ID)
+         mediaPl, err_pl := fetchMediaPlaylist(targetURI, baseURL)
+         if err_pl != nil {
+            return err_pl
+         }
+         protection, _ = getHlsProtection(mediaPl, c.activeDrmScheme())
+         segments, err = hlsSegments(mediaPl)
+         if err != nil {
+            return err
+         }
          break
       }
    }
-   if targetStream == nil {
+   if targetURI == nil {
       for _, r := range playlist.Medias {
          if r.ID == keyInt {
-            targetStream = &hlsRenditionStream{rendition: r, baseURL: baseURL}
+            targetURI = r.URI
+            targetID = strconv.Itoa(r.ID)
+            mediaPl, err_pl := fetchMediaPlaylist(targetURI, baseURL)
+            if err_pl != nil {
+               return err_pl
+            }
+            protection, _ = getHlsProtection(mediaPl, c.activeDrmScheme())
+            segments, err = hlsSegments(mediaPl)
+            if err != nil {
+               return err
+            }
             break
          }
       }
    }
-
-   if targetStream == nil {
+   if targetURI == nil {
       return fmt.Errorf("stream with ID not found: %d", keyInt)
    }
 
-   group := streamGroup{targetStream}
-   return c.downloadGroupInternal(group)
+   // Step 2 & 3 (combined): Download first segment, detect, create file.
+   if len(segments) == 0 {
+      return nil
+   }
+   firstData, err := getSegment(segments[0].url, segments[0].header)
+   if err != nil {
+      return err
+   }
+
+   detection := detectContentType(firstData)
+   if detection.Extension == "" {
+      return fmt.Errorf("could not determine file type for stream %s", targetID)
+   }
+   fileName := targetID + detection.Extension
+   log.Println("Create", fileName)
+   file, err := os.Create(fileName)
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+
+   var media mediaFile
+   if protection != nil {
+      if err := media.configureProtection(protection); err != nil {
+         return err
+      }
+   }
+
+   // Step 4: Prepare remuxer.
+   var remux *sofia.Remuxer
+   if detection.IsFMP4 {
+      remux, err = media.initializeWriter(file, firstData)
+      if err != nil {
+         return err
+      }
+   } else {
+      if _, err := file.Write(firstData); err != nil {
+         return err
+      }
+   }
+
+   // Step 5: Get key and requests.
+   key, err := c.fetchKey(&media)
+   if err != nil {
+      return err
+   }
+
+   requests := make([]mediaRequest, len(segments))
+   for i, s := range segments {
+      requests[i] = mediaRequest{url: s.url, header: s.header}
+   }
+
+   // Step 6: Execute download.
+   return c.executeDownload(requests[1:], key, remux, file)
 }
 
 // ListStreamsDASH parses and prints available streams from a DASH manifest.
 func ListStreamsDASH(manifest *dash.Mpd) error {
-   var middleStreams []stream
-   // Create a cache that lives for the duration of the listing operation.
    sidxCache := make(map[string][]byte)
    for _, group := range manifest.GetRepresentations() {
       rep := group[len(group)/2]
-      // Only calculate bitrate for video streams.
       if rep.GetMimeType() == "video/mp4" {
-         // Pass the cache down to the bitrate function.
          if err := getMiddleBitrate(rep, sidxCache); err != nil {
             log.Printf("Could not calculate bitrate for stream %s: %v", rep.Id, err)
          }
       }
-      middleStreams = append(middleStreams, &dashStream{rep: rep})
+      fmt.Println(rep)
+      fmt.Println()
    }
-   printStreams(middleStreams)
    return nil
 }
 
 // ListStreamsHLS parses and prints all available streams (variants and renditions) from an HLS playlist.
 func ListStreamsHLS(playlist *hls.MasterPlaylist) error {
-   var streams []stream
-   baseURL := playlist.Variants[0].URI // Base for resolving relative rendition URIs.
-
    for _, variant := range playlist.Variants {
-      streams = append(streams, &hlsVariantStream{
-         variant: variant,
-         baseURL: baseURL,
-      })
+      fmt.Println(variant)
+      fmt.Println()
    }
    for _, rendition := range playlist.Medias {
-      streams = append(streams, &hlsRenditionStream{
-         rendition: rendition,
-         baseURL:   baseURL,
-      })
+      fmt.Println(rendition)
+      fmt.Println()
    }
-   printStreams(streams)
    return nil
-}
-
-// printStreams is a shared helper for displaying stream info.
-func printStreams(streams []stream) {
-   slices.SortFunc(streams, func(a, b stream) int {
-      return a.getBandwidth() - b.getBandwidth()
-   })
-
-   for index, s := range streams {
-      if index >= 1 {
-         fmt.Println()
-      }
-      // fmt.Println will automatically call the String() method on the stream.
-      fmt.Println(s)
-   }
 }
 
 // Config holds downloader configuration.
@@ -173,4 +289,18 @@ type Config struct {
    PrivateKey       string
    // StreamId is the identifier of the stream to download (e.g., "0", "1", etc.).
    StreamId string
+}
+
+func (c *Config) isDrmNeeded() bool {
+   return (c.CertificateChain != "" && c.EncryptSignKey != "") || (c.ClientId != "" && c.PrivateKey != "")
+}
+
+func (c *Config) activeDrmScheme() string {
+   if c.CertificateChain != "" && c.EncryptSignKey != "" {
+      return "playready"
+   }
+   if c.ClientId != "" && c.PrivateKey != "" {
+      return "widevine"
+   }
+   return ""
 }

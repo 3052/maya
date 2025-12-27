@@ -7,6 +7,7 @@ import (
    "log"
    "net/http"
    "net/url"
+   "strings"
 )
 
 // Internal segment representation, primarily for DASH's detailed view.
@@ -17,11 +18,49 @@ type segment struct {
    sizeBits uint64
 }
 
-// getMiddleBitrate calculates the bitrate of the middle segment and updates
-// the Representation. It uses a cache to avoid re-fetching the same sidx.
+// getDashProtection finds the protection data that matches the requested scheme.
+func getDashProtection(rep *dash.Representation, scheme string) (*protectionInfo, error) {
+   const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+   const playreadyURN = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
+
+   for _, cp := range rep.GetContentProtection() {
+      schemeUri := strings.ToLower(cp.SchemeIdUri)
+      matches := (scheme == "widevine" && schemeUri == widevineURN) ||
+         (scheme == "playready" && schemeUri == playreadyURN)
+
+      if matches {
+         pssh, _ := cp.GetPssh()
+         kid, _ := cp.GetDefaultKid()
+         return &protectionInfo{Pssh: pssh, KeyID: kid}, nil
+      }
+   }
+   return nil, nil // No matching protection data found.
+}
+
+// getDashMediaRequests generates the full list of media segments for a DASH group.
+func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]mediaRequest, error) {
+   var requests []mediaRequest
+   for _, rep := range group {
+      var segs []segment
+      var err error
+      if rep.SegmentBase != nil {
+         segs, err = generateSegmentsFromSidx(rep, sidxData)
+      } else {
+         segs, err = generateSegments(rep)
+      }
+      if err != nil {
+         return nil, err
+      }
+      for _, seg := range segs {
+         requests = append(requests, mediaRequest{url: seg.url, header: seg.header})
+      }
+   }
+   return requests, nil
+}
+
+// getMiddleBitrate calculates the bitrate of the middle segment and updates the Representation.
 func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
    log.Println("update", rep.Id)
-
    var segs []segment
    var err error
 
@@ -31,44 +70,35 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
          return err_base
       }
       cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
-
-      // Check the cache first.
       sidxData, exists := sidxCache[cacheKey]
       if !exists {
-         // If not in cache, download it.
          header := http.Header{}
          header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
          sidxData, err = getSegment(baseUrl, header)
          if err != nil {
             return err
          }
-         // Store it in the cache for the next group.
          sidxCache[cacheKey] = sidxData
       }
       segs, err = generateSegmentsFromSidx(rep, sidxData)
    } else {
-      // For other types (SegmentTemplate, etc.), use the general generator.
       segs, err = generateSegments(rep)
    }
 
    if err != nil {
-      return err // Catch errors from either segment generation path.
+      return err
    }
-
    if len(segs) == 0 {
       rep.Bandwidth = 0
       return nil
    }
-
    mid := segs[len(segs)/2]
 
-   // The segment size is already known for sidx, so we don't need to re-download.
-   // For other types, we must download the whole segment to know its size.
    sizeBits := mid.sizeBits
    if sizeBits == 0 {
       data, err_get := getSegment(mid.url, mid.header)
       if err_get != nil {
-         return err_get // Cannot fetch middle segment
+         return err_get
       }
       sizeBits = uint64(len(data)) * 8
    }

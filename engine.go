@@ -4,13 +4,10 @@ import (
    "41.neocities.org/sofia"
    "crypto/aes"
    "encoding/hex"
-   "fmt"
    "io"
-   "log"
    "net/http"
    "net/url"
    "os"
-   "strings"
    "sync"
 )
 
@@ -30,114 +27,13 @@ type result struct {
    err      error
 }
 
-// downloadGroupInternal is the shared engine that works with the stream abstraction.
-func (c *Config) downloadGroupInternal(group streamGroup) error {
-   if len(group) == 0 {
-      return fmt.Errorf("cannot download empty stream group")
-   }
-   stream := group[0]
-
-   // Step 1: Download the first piece of data to determine content type.
-   var firstData []byte
-   var err error
-   if initSeg, _ := stream.getInitSegment(); initSeg != nil {
-      firstData, err = getSegment(initSeg.url, initSeg.header)
-   } else {
-      segments, segErr := stream.getSegments()
-      if segErr != nil {
-         return segErr
-      }
-      if len(segments) == 0 {
-         return nil // Nothing to download.
-      }
-      firstData, err = getSegment(segments[0].url, segments[0].header)
-   }
-   if err != nil {
-      return fmt.Errorf("failed to download first segment for content detection: %w", err)
-   }
-
-   // Step 2: Detect content type and create the output file.
-   detection := detectContentType(firstData)
-   if detection.Extension == "" {
-      return fmt.Errorf("could not determine file type for stream %s", stream.getID())
-   }
-   ext := detection.Extension
-   if !strings.HasPrefix(ext, ".") {
-      ext = "." + ext
-   }
-   fileName := stream.getID() + ext
-   log.Println("Create", fileName)
-   file, err := os.Create(fileName)
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-
-   // Step 3: Configure DRM and the remuxer (if needed).
-   var media mediaFile
-   // Determine which DRM data to extract from the manifest based on the config.
-   var activeScheme string
-   if c.CertificateChain != "" && c.EncryptSignKey != "" {
-      activeScheme = "playready"
-   } else if c.ClientId != "" && c.PrivateKey != "" {
-      activeScheme = "widevine"
-   }
-
-   if activeScheme != "" {
-      if protection, err_prot := stream.getProtection(activeScheme); err_prot != nil {
-         return err_prot
-      } else if protection != nil {
-         if err := media.configureProtection(protection); err != nil {
-            return err
-         }
-      }
-   }
-
-   var remux *sofia.Remuxer
-   if detection.IsFMP4 {
-      remux, err = media.initializeWriter(file, firstData)
-      if err != nil {
-         return err
-      }
-   } else {
-      // If not remuxing, write the first segment directly to the file.
-      if _, err := file.Write(firstData); err != nil {
-         return err
-      }
-   }
-
-   // Step 4: Fetch decryption key and prepare the rest of the segments.
-   key, err := c.fetchKey(&media)
-   if err != nil {
-      return err
-   }
-
-   allSegments, err := stream.getSegments()
-   if err != nil {
-      return err
-   }
-   // We've already processed the first segment.
-   remainingSegments := allSegments
-   if len(allSegments) > 0 {
-      // If there was an init segment, we download all media segments.
-      // If there wasn't, we skip the first media segment which we already used.
-      if initSeg, _ := stream.getInitSegment(); initSeg == nil {
-         remainingSegments = allSegments[1:]
-      }
-   }
-   if len(remainingSegments) == 0 {
-      // This can happen if there's only one segment and no init segment.
-      // Since we already downloaded and wrote it, the download is complete.
+// executeDownload is the generic, shared engine for running the worker pool.
+func (c *Config) executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File) error {
+   if len(requests) == 0 {
       if remux != nil {
          return remux.Finish()
       }
       return nil
-   }
-
-   // Step 5: Start the worker pool for the remaining segments.
-   requests := make([]mediaRequest, len(remainingSegments))
-   for i, seg := range remainingSegments {
-      requests[i] = mediaRequest{url: seg.url, header: seg.header}
    }
 
    numWorkers := max(c.Threads, 1)
@@ -156,15 +52,13 @@ func (c *Config) downloadGroupInternal(group streamGroup) error {
    }
 
    doneChan := make(chan error, 1)
-   go media.processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
+   go processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
    for reqIndex, req := range requests {
       jobs <- downloadJob{index: reqIndex, request: req}
    }
    close(jobs)
-   if err := <-doneChan; err != nil {
-      return err
-   }
-   return nil
+
+   return <-doneChan
 }
 
 func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
@@ -175,10 +69,8 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Rem
          return nil, err
       }
       if m.content_id == nil {
-         // Decode the Widevine System ID string constant when needed.
          wvIDBytes, err := hex.DecodeString(widevineSystemId)
          if err != nil {
-            // This should never happen with a hardcoded constant.
             panic("failed to decode hardcoded widevine system id")
          }
          if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
@@ -192,7 +84,7 @@ func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Rem
    return &remux, nil
 }
 
-func (m *mediaFile) processAndWriteSegments(
+func processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
    totalSegments int,

@@ -20,6 +20,12 @@ var (
    errKeyMismatch = errors.New("key ID mismatch")
 )
 
+// protectionInfo holds standardized DRM data extracted from a manifest.
+type protectionInfo struct {
+   Pssh  []byte
+   KeyID []byte
+}
+
 type mediaFile struct {
    key_id     []byte
    content_id []byte
