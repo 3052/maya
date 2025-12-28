@@ -19,10 +19,12 @@ type mediaRequest struct {
    url    *url.URL
    header http.Header
 }
+
 type downloadJob struct {
    index   int
    request mediaRequest
 }
+
 type result struct {
    index    int
    workerId int

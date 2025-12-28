@@ -4,7 +4,6 @@ import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
    "fmt"
-   "log"
    "net/url"
 )
 
@@ -51,18 +50,18 @@ func ListStreamsDash(manifest *dash.Mpd) error {
    // 1. Collect a representative from each group and calculate missing bitrates.
    repsForSorting := make([]*dash.Representation, 0, len(groups))
    for _, group := range groups {
-      rep := group[len(group)/2]
-      if rep.GetMimeType() == "video/mp4" {
-         if err := getMiddleBitrate(rep, sidxCache); err != nil {
-            log.Printf("Could not calculate bitrate for stream %s: %v", rep.Id, err)
+      representation := group[len(group)/2]
+      if representation.GetMimeType() == "video/mp4" {
+         if err := getMiddleBitrate(representation, sidxCache); err != nil {
+            return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
          }
       }
-      repsForSorting = append(repsForSorting, rep)
+      repsForSorting = append(repsForSorting, representation)
    }
    dash.SortByBandwidth(repsForSorting)
    // 3. Print the sorted list.
-   for _, rep := range repsForSorting {
-      fmt.Println(rep)
+   for _, representation := range repsForSorting {
+      fmt.Println(representation)
       fmt.Println()
    }
    return nil
@@ -87,7 +86,6 @@ type Config struct {
    Send     func([]byte) ([]byte, error)
    Threads  int
    StreamId string
-
    // DRM configuration. Set only one of the following.
    Widevine  *WidevineConfig
    PlayReady *PlayReadyConfig

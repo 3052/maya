@@ -4,6 +4,7 @@ import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
    "errors"
+   "fmt"
    "log"
    "net/http"
    "net/url"
@@ -24,33 +25,30 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
    var psshData []byte
    var keyID []byte
-
    // In CENC, the KeyID is usually common, while the PSSH is system-specific.
    // We iterate to find the first available common KeyID and the specific Widevine PSSH box.
-   for _, cp := range rep.GetContentProtection() {
+   for _, contentProtection := range rep.GetContentProtection() {
       // Attempt to get the KID if we haven't found one yet.
       if keyID == nil {
-         kid, err := cp.GetDefaultKid()
+         kid, err := contentProtection.GetDefaultKid()
          if err != nil {
-            // The library can return an error on bad hex. Log it but continue,
-            // as another ContentProtection element might have a valid one.
-            log.Printf("warning: could not parse default_KID: %v", err)
-         } else if kid != nil {
+            return nil, fmt.Errorf("could not parse default_KID: %w", err)
+         }
+         if kid != nil {
             keyID = kid
          }
       }
-
       // Attempt to get the Widevine PSSH if we see the matching scheme.
-      if strings.ToLower(cp.SchemeIdUri) == widevineURN {
-         pssh, err := cp.GetPssh()
+      if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
+         pssh, err := contentProtection.GetPssh()
          if err != nil {
-            log.Printf("warning: could not parse widevine pssh: %v", err)
-         } else if pssh != nil {
+            return nil, fmt.Errorf("could not parse widevine pssh: %w", err)
+         }
+         if pssh != nil {
             psshData = pssh
          }
       }
    }
-
    // A Key ID is essential for any DRM. If none was found, we can't proceed.
    // The caller will see a nil protectionInfo and skip the DRM steps.
    if keyID == nil {
@@ -85,7 +83,6 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
 // getMiddleBitrate calculates an accurate bitrate for a representation.
 func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
    log.Println("update", rep.Id)
-
    // SIDX Path: Calculate true average bitrate from all segments in sidx.
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
@@ -103,7 +100,6 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
          }
          sidxCache[cacheKey] = sidxData
       }
-
       segs, err := generateSegmentsFromSidx(rep, sidxData)
       if err != nil {
          return err
@@ -112,22 +108,18 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
          rep.Bandwidth = 0
          return nil
       }
-
       var totalSizeBits uint64 = 0
       var totalDuration float64 = 0
       for _, seg := range segs {
          totalSizeBits += seg.sizeBits
          totalDuration += seg.duration
       }
-
       if totalDuration <= 0 {
          return errors.New("invalid total duration from sidx for bitrate calculation")
       }
-
       rep.Bandwidth = int(float64(totalSizeBits) / totalDuration)
       return nil
    }
-
    // SegmentTemplate/List Path: Sample middle segment as manifest Bandwidth is unreliable.
    segs, err := generateSegments(rep)
    if err != nil {
@@ -138,17 +130,14 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
       return nil
    }
    mid := segs[len(segs)/2]
-
    data, err := getSegment(mid.url, mid.header)
    if err != nil {
       return err
    }
    sizeBits := uint64(len(data)) * 8
-
    if mid.duration <= 0 {
       return errors.New("invalid duration for bitrate calculation")
    }
-
    rep.Bandwidth = int(float64(sizeBits) / mid.duration)
    return nil
 }
@@ -196,16 +185,16 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       return nil, err
    }
    // Strategy 1: SegmentTemplate
-   if tmpl := rep.GetSegmentTemplate(); tmpl != nil {
-      urls, err := tmpl.GetSegmentUrls(rep)
+   if template := rep.GetSegmentTemplate(); template != nil {
+      urls, err := template.GetSegmentUrls(rep)
       if err != nil {
          return nil, err
       }
       segments := make([]segment, len(urls))
-      timescale := float64(tmpl.GetTimescale())
-      if tmpl.SegmentTimeline != nil {
+      timescale := float64(template.GetTimescale())
+      if template.SegmentTimeline != nil {
          currentIdx := 0
-         for _, entry := range tmpl.SegmentTimeline.S {
+         for _, entry := range template.SegmentTimeline.S {
             count := 1
             if entry.R > 0 {
                count += entry.R
@@ -220,7 +209,7 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
             }
          }
       } else {
-         dur := float64(tmpl.Duration) / timescale
+         dur := float64(template.Duration) / timescale
          for segIdx := range segments {
             segments[segIdx].url = urls[segIdx]
             segments[segIdx].duration = dur
@@ -229,10 +218,10 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       return segments, nil
    }
    // Strategy 2: SegmentList
-   if list := rep.SegmentList; list != nil {
-      segments := make([]segment, 0, len(list.SegmentUrls))
-      dur := float64(list.Duration) / float64(list.GetTimescale())
-      for _, seg := range list.SegmentUrls {
+   if segmentList := rep.SegmentList; segmentList != nil {
+      segments := make([]segment, 0, len(segmentList.SegmentUrls))
+      dur := float64(segmentList.Duration) / float64(segmentList.GetTimescale())
+      for _, seg := range segmentList.SegmentUrls {
          mediaURL, err := seg.ResolveMedia()
          if err != nil {
             return nil, err

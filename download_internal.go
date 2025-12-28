@@ -26,7 +26,6 @@ func (c *Config) finishDownload(
       log.Println("Stream contains no data.")
       return nil
    }
-
    // Step 1: Detect type and create file.
    detection := detectContentType(firstData)
    if detection.Extension == "" {
@@ -39,13 +38,11 @@ func (c *Config) finishDownload(
       return err
    }
    defer file.Close()
-
    // Step 2: Prepare remuxer and get DRM info from init segment.
    remux, initProtection, err := initializeRemuxer(detection.IsFMP4, file, firstData)
    if err != nil {
       return err
    }
-
    // Step 3: Assemble final DRM info and fetch key.
    var keyID, contentID []byte
    isDRM := c.Widevine != nil || c.PlayReady != nil
@@ -75,13 +72,11 @@ func (c *Config) finishDownload(
    if err != nil {
       return err
    }
-
    // Step 4: Execute the download.
    remainingRequests := allRequests
    if skipFirst && len(allRequests) > 0 {
       remainingRequests = allRequests[1:]
    }
-
    return c.executeDownload(remainingRequests, key, remux, file)
 }
 
@@ -95,52 +90,54 @@ func (c *Config) downloadDashInternal(manifest *dash.Mpd) error {
       return fmt.Errorf("representation group is empty")
    }
    rep := dashGroup[0]
-
    // 1. Prepare DASH-specific info
    var sidxData []byte
-   var err error
    if rep.SegmentBase != nil {
-      var baseUrl *url.URL
-      baseUrl, err = rep.ResolveBaseUrl()
+      baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {
          return err
       }
       header := http.Header{}
-      header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+      header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
       sidxData, err = getSegment(baseUrl, header)
       if err != nil {
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }
    }
-
    // 2. Prepare inputs for the shared downloader
    var firstData []byte
    isInitSegmentBased := rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil
    if isInitSegmentBased {
-      baseUrl, _ := rep.ResolveBaseUrl()
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
+      }
       header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
       firstData, err = getSegment(baseUrl, header)
+      if err != nil {
+         return err
+      }
    } else {
-      segs, segsErr := getDashMediaRequests(dashGroup, sidxData)
-      if segsErr != nil {
-         return segsErr
+      segs, err := getDashMediaRequests(dashGroup, sidxData)
+      if err != nil {
+         return err
       }
       if len(segs) > 0 {
          firstData, err = getSegment(segs[0].url, segs[0].header)
+         if err != nil {
+            return err
+         }
       }
    }
-   if err != nil {
-      return fmt.Errorf("failed to get initial DASH data: %w", err)
-   }
-
    allRequests, err := getDashMediaRequests(dashGroup, sidxData)
    if err != nil {
       return err
    }
-
-   protection, _ := getDashProtection(rep)
+   protection, err := getDashProtection(rep)
+   if err != nil {
+      return err
+   }
    shouldSkip := !isInitSegmentBased
-
    // 3. Call the shared downloader
    return c.finishDownload(firstData, rep.Id, protection, allRequests, shouldSkip)
 }
@@ -151,20 +148,18 @@ func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist) error {
    if err != nil {
       return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)
    }
-
    // 1. Prepare HLS-specific info
    var targetURI *url.URL
-   var targetID string
-   for _, v := range playlist.Streams {
-      if v.ID == keyInt {
-         targetURI, targetID = v.URI, strconv.Itoa(v.ID)
+   for _, variant := range playlist.Streams {
+      if variant.ID == keyInt {
+         targetURI = variant.URI
          break
       }
    }
    if targetURI == nil {
-      for _, r := range playlist.Medias {
-         if r.ID == keyInt {
-            targetURI, targetID = r.URI, strconv.Itoa(r.ID)
+      for _, rendition := range playlist.Medias {
+         if rendition.ID == keyInt {
+            targetURI = rendition.URI
             break
          }
       }
@@ -172,17 +167,14 @@ func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist) error {
    if targetURI == nil {
       return fmt.Errorf("stream with ID not found: %d", keyInt)
    }
-
    mediaPl, err := fetchMediaPlaylist(targetURI)
    if err != nil {
       return err
    }
-
    hlsSegs, err := hlsSegments(mediaPl)
    if err != nil {
       return err
    }
-
    // 2. Prepare inputs for the shared downloader
    var firstData []byte
    if len(hlsSegs) > 0 {
@@ -191,15 +183,15 @@ func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist) error {
          return fmt.Errorf("failed to get initial HLS data: %w", err)
       }
    }
-
    allRequests := make([]mediaRequest, len(hlsSegs))
-   for i, s := range hlsSegs {
-      allRequests[i] = mediaRequest{url: s.url, header: s.header}
+   for i, segment := range hlsSegs {
+      allRequests[i] = mediaRequest{url: segment.url, header: segment.header}
    }
-
-   protection, _ := getHlsProtection(mediaPl)
+   protection, err := getHlsProtection(mediaPl)
+   if err != nil {
+      return err
+   }
    shouldSkip := true
-
    // 3. Call the shared downloader
-   return c.finishDownload(firstData, targetID, protection, allRequests, shouldSkip)
+   return c.finishDownload(firstData, c.StreamId, protection, allRequests, shouldSkip)
 }
