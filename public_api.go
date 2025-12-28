@@ -6,6 +6,7 @@ import (
    "fmt"
    "log"
    "net/url"
+   "sort"
 )
 
 // ParseDash parses a DASH manifest (MPD).
@@ -25,7 +26,7 @@ func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    if err != nil {
       // Fallback for media playlists presented as a master playlist
       if _, mediaErr := hls.DecodeMedia(bodyStr); mediaErr == nil {
-         master = &hls.MasterPlaylist{Variants: []*hls.Variant{{URI: baseURL}}}
+         master = &hls.MasterPlaylist{Streams: []*hls.Stream{{URI: baseURL}}}
       } else {
          return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
       }
@@ -38,73 +39,84 @@ func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
 
 // DownloadDash downloads an unencrypted DASH stream.
 func (c *Config) DownloadDash(manifest *dash.Mpd) error {
-   return downloadDashInternal(c, manifest, nil)
+   return c.downloadDashInternal(manifest, nil)
 }
 
 // DownloadDashWidevine downloads a Widevine-encrypted DASH stream.
 func (c *Config) DownloadDashWidevine(manifest *dash.Mpd, clientIDPath, privateKeyPath string) error {
    drmCfg := &drmConfig{
-      Scheme:     "widevine",
       ClientId:   clientIDPath,
       PrivateKey: privateKeyPath,
    }
-   return downloadDashInternal(c, manifest, drmCfg)
+   return c.downloadDashInternal(manifest, drmCfg)
 }
 
 // DownloadDashPlayReady downloads a PlayReady-encrypted DASH stream.
 func (c *Config) DownloadDashPlayReady(manifest *dash.Mpd, certChainPath, encryptKeyPath string) error {
    drmCfg := &drmConfig{
-      Scheme:           "playready",
       CertificateChain: certChainPath,
       EncryptSignKey:   encryptKeyPath,
    }
-   return downloadDashInternal(c, manifest, drmCfg)
+   return c.downloadDashInternal(manifest, drmCfg)
 }
 
 // DownloadHls downloads an unencrypted HLS stream.
 func (c *Config) DownloadHls(playlist *hls.MasterPlaylist) error {
-   return downloadHlsInternal(c, playlist, nil)
+   return c.downloadHlsInternal(playlist, nil)
 }
 
 // DownloadHlsWidevine downloads a Widevine-encrypted HLS stream.
 func (c *Config) DownloadHlsWidevine(playlist *hls.MasterPlaylist, clientIDPath, privateKeyPath string) error {
    drmCfg := &drmConfig{
-      Scheme:     "widevine",
       ClientId:   clientIDPath,
       PrivateKey: privateKeyPath,
    }
-   return downloadHlsInternal(c, playlist, drmCfg)
+   return c.downloadHlsInternal(playlist, drmCfg)
 }
 
 // DownloadHlsPlayReady downloads a PlayReady-encrypted HLS stream.
 func (c *Config) DownloadHlsPlayReady(playlist *hls.MasterPlaylist, certChainPath, encryptKeyPath string) error {
    drmCfg := &drmConfig{
-      Scheme:           "playready",
       CertificateChain: certChainPath,
       EncryptSignKey:   encryptKeyPath,
    }
-   return downloadHlsInternal(c, playlist, drmCfg)
+   return c.downloadHlsInternal(playlist, drmCfg)
 }
 
 // --- List Functions ---
 
 func ListStreamsDash(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
-   for _, group := range manifest.GetRepresentations() {
+   groups := manifest.GetRepresentations()
+
+   // 1. Collect a representative from each group and calculate missing bitrates.
+   repsForSorting := make([]*dash.Representation, 0, len(groups))
+   for _, group := range groups {
       rep := group[len(group)/2]
       if rep.GetMimeType() == "video/mp4" {
          if err := getMiddleBitrate(rep, sidxCache); err != nil {
             log.Printf("Could not calculate bitrate for stream %s: %v", rep.Id, err)
          }
       }
+      repsForSorting = append(repsForSorting, rep)
+   }
+
+   // 2. Sort the collected representations by bandwidth in ascending order.
+   sort.Slice(repsForSorting, func(i, j int) bool {
+      return repsForSorting[i].Bandwidth < repsForSorting[j].Bandwidth
+   })
+
+   // 3. Print the sorted list.
+   for _, rep := range repsForSorting {
       fmt.Println(rep)
       fmt.Println()
    }
+
    return nil
 }
 
 func ListStreamsHls(playlist *hls.MasterPlaylist) error {
-   for _, variant := range playlist.Variants {
+   for _, variant := range playlist.Streams {
       fmt.Println(variant)
       fmt.Println()
    }

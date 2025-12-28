@@ -10,12 +10,12 @@ import (
    "strings"
 )
 
-// fetchMediaPlaylist is a shared helper for both HLS variant and rendition streams.
-func fetchMediaPlaylist(uri, base *url.URL) (*hls.MediaPlaylist, error) {
-   if uri == nil {
+// fetchMediaPlaylist fetches and parses an HLS media playlist.
+// It assumes the provided URI has already been resolved to an absolute URL.
+func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
+   if mediaURL == nil {
       return nil, fmt.Errorf("HLS stream has no URI")
    }
-   mediaURL := base.ResolveReference(uri)
    resp, err := http.Get(mediaURL.String())
    if err != nil {
       return nil, err
@@ -29,29 +29,30 @@ func fetchMediaPlaylist(uri, base *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
+   // URIs for segments *within* the media playlist are resolved relative to the
+   // media playlist's own URL.
    mediaPl.ResolveURIs(mediaURL)
    return mediaPl, nil
 }
 
-// getHlsProtection finds the protection data that matches the requested scheme.
-func getHlsProtection(mediaPl *hls.MediaPlaylist, scheme string) (*protectionInfo, error) {
-   // Find the first EXT-X-KEY tag that matches the requested DRM scheme and has embedded PSSH data.
+// getHlsProtection extracts the Widevine PSSH from an HLS manifest.
+// For CENC content, this PSSH contains the key ID needed for any DRM.
+func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
    for _, key := range mediaPl.Keys {
       keyFormat := strings.ToLower(key.KeyFormat)
-      isWidevine := scheme == "widevine" && strings.Contains(keyFormat, "widevine")
-      isPlayReady := scheme == "playready" && strings.Contains(keyFormat, "playready")
+      isWidevinePssh := strings.Contains(keyFormat, "widevine")
 
-      if (isWidevine || isPlayReady) && key.URI != nil && key.URI.Scheme == "data" {
+      if isWidevinePssh && key.URI != nil && key.URI.Scheme == "data" {
          psshData, err := key.DecodeData()
          if err != nil {
-            log.Printf("failed to decode PSSH data from HLS manifest: %v", err)
-            continue // Try next key
+            log.Printf("failed to decode Widevine PSSH data from HLS manifest: %v", err)
+            continue // Try the next key tag if this one is malformed
          }
-         // HLS often puts the KID inside the PSSH box. We extract it later in the process.
+         // The KeyID is inside the PSSH box and will be extracted later.
          return &protectionInfo{Pssh: psshData}, nil
       }
    }
-   return nil, nil // No matching protection data found.
+   return nil, nil // No Widevine PSSH data found.
 }
 
 // hlsSegments generates a list of segments from a media playlist.

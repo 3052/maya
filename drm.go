@@ -31,9 +31,9 @@ type mediaFile struct {
    content_id []byte
 }
 
-// drmConfig holds the credentials for a single download action. It is unexported.
+// drmConfig holds the credentials for a single download action. The DRM system
+// is inferred from which fields are populated.
 type drmConfig struct {
-   Scheme           string
    CertificateChain string
    EncryptSignKey   string
    ClientId         string
@@ -81,13 +81,17 @@ func (c *Config) fetchKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
       return nil, nil // No DRM or unencrypted.
    }
 
-   switch drmCfg.Scheme {
-   case "widevine":
+   // Infer DRM scheme from which credentials are set.
+   isWidevine := drmCfg.ClientId != "" && drmCfg.PrivateKey != ""
+   isPlayReady := drmCfg.CertificateChain != "" && drmCfg.EncryptSignKey != ""
+
+   if isWidevine {
       return c.widevineKey(drmCfg, media)
-   case "playready":
+   } else if isPlayReady {
       return c.playReadyKey(drmCfg, media)
    }
-   return nil, nil
+
+   return nil, nil // No valid DRM config found
 }
 
 func (c *Config) widevineKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
