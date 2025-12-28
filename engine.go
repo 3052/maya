@@ -1,10 +1,8 @@
 package maya
 
 import (
-   "41.neocities.org/drm/widevine" // ADDED
    "41.neocities.org/sofia"
    "crypto/aes"
-   "encoding/hex"
    "io"
    "log"
    "net/http"
@@ -14,17 +12,19 @@ import (
    "time"
 )
 
-// Internal types for the worker pool
+// mediaRequest represents a single segment to be downloaded.
 type mediaRequest struct {
    url    *url.URL
    header http.Header
 }
 
+// workItem is a request bundled with its index for out-of-order processing.
 type workItem struct {
    index   int
    request mediaRequest
 }
 
+// result is the outcome of a download attempt from a worker.
 type result struct {
    index    int
    workerId int
@@ -32,15 +32,15 @@ type result struct {
    err      error
 }
 
-// executeDownload is the generic, shared engine for running the worker pool.
-func (j *Job) executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File) error {
+// executeDownload runs the concurrent worker pool to download all segments.
+func executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
    if len(requests) == 0 {
       if remux != nil {
          return remux.Finish()
       }
       return nil
    }
-   numWorkers := max(j.Threads, 1)
+   numWorkers := max(threads, 1)
    workQueue := make(chan workItem, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
@@ -63,59 +63,9 @@ func (j *Job) executeDownload(requests []mediaRequest, key []byte, remux *sofia.
    return <-doneChan
 }
 
-// initializeRemuxer handles remuxer setup and now returns DRM info found in the init segment.
-func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Remuxer, *protectionInfo, error) {
-   if !isFMP4 {
-      if _, err := file.Write(firstData); err != nil {
-         return nil, nil, err
-      }
-      return nil, nil, nil
-   }
-   remux, initProtection, err := initializeWriter(file, firstData)
-   if err != nil {
-      return nil, nil, err
-   }
-   return remux, initProtection, nil
-}
-
-func initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, *protectionInfo, error) {
-   var remux sofia.Remuxer
-   remux.Writer = file
-   if len(initData) == 0 {
-      return &remux, nil, nil
-   }
-   if err := remux.Initialize(initData); err != nil {
-      return nil, nil, err
-   }
-   // Now that init data is parsed, check for PSSH boxes for DRM info.
-   var initProtection *protectionInfo
-   wvIDBytes, err := hex.DecodeString(widevineSystemId)
-   if err != nil {
-      panic("failed to decode hardcoded widevine system id")
-   }
-   if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
-      var psshData widevine.PsshData
-      if err := psshData.Unmarshal(wvBox.Data); err == nil {
-         if len(psshData.KeyIds) > 0 {
-            initProtection = &protectionInfo{KeyID: psshData.KeyIds[0]}
-         }
-      }
-   }
-   // NOTE: PlayReady PSSH parsing from the init segment is not implemented here.
-   // Clean the PSSH boxes from the output file.
-   remux.Moov.RemovePssh()
-   return &remux, initProtection, nil
-}
-
-func processAndWriteSegments(
-   doneChan chan<- error,
-   results <-chan result,
-   totalSegments int,
-   numWorkers int,
-   key []byte,
-   remux *sofia.Remuxer,
-   dst io.Writer,
-) {
+// processAndWriteSegments consumes results from the worker pool, decrypts (if necessary),
+// remuxes (if necessary), and writes the data to the destination file in the correct order.
+func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, numWorkers int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
@@ -165,8 +115,6 @@ func processAndWriteSegments(
    }
    doneChan <- nil
 }
-
-// --- Progress Tracking Utility ---
 
 // progress tracks and logs the status of a multi-threaded download.
 type progress struct {

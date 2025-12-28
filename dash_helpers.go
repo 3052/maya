@@ -20,15 +20,11 @@ type segment struct {
 }
 
 // getDashProtection extracts Widevine PSSH and the default Key ID from a representation.
-// This information is often sufficient for both Widevine and PlayReady license requests under CENC.
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
    var psshData []byte
    var keyID []byte
-   // In CENC, the KeyID is usually common, while the PSSH is system-specific.
-   // We iterate to find the first available common KeyID and the specific Widevine PSSH box.
    for _, contentProtection := range rep.GetContentProtection() {
-      // Attempt to get the KID if we haven't found one yet.
       if keyID == nil {
          kid, err := contentProtection.GetDefaultKid()
          if err != nil {
@@ -38,7 +34,6 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
             keyID = kid
          }
       }
-      // Attempt to get the Widevine PSSH if we see the matching scheme.
       if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
          pssh, err := contentProtection.GetPssh()
          if err != nil {
@@ -49,13 +44,10 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
          }
       }
    }
-   // A Key ID is essential for any DRM. If none was found, we can't proceed.
-   // The caller will see a nil protectionInfo and skip the DRM steps.
    if keyID == nil {
       return nil, nil
    }
    log.Printf("key ID from manifest: %x", keyID)
-   // If we found a key ID, return the protection info.
    return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
 }
 
@@ -83,7 +75,6 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
 // getMiddleBitrate calculates an accurate bitrate for a representation.
 func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
    log.Println("update", rep.Id)
-   // SIDX Path: Calculate true average bitrate from all segments in sidx.
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {
@@ -120,7 +111,6 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
       rep.Bandwidth = int(float64(totalSizeBits) / totalDuration)
       return nil
    }
-   // SegmentTemplate/List Path: Sample middle segment as manifest Bandwidth is unreliable.
    segs, err := generateSegments(rep)
    if err != nil {
       return err
@@ -177,14 +167,12 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segm
    return segments, nil
 }
 
-// generateSegments centralizes the logic to produce a list of segments for a
-// DASH Representation. It handles SegmentTemplate and SegmentList.
+// generateSegments centralizes the logic to produce a list of segments.
 func generateSegments(rep *dash.Representation) ([]segment, error) {
    baseUrl, err := rep.ResolveBaseUrl()
    if err != nil {
       return nil, err
    }
-   // Strategy 1: SegmentTemplate
    if template := rep.GetSegmentTemplate(); template != nil {
       urls, err := template.GetSegmentUrls(rep)
       if err != nil {
@@ -217,7 +205,6 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
       return segments, nil
    }
-   // Strategy 2: SegmentList
    if segmentList := rep.SegmentList; segmentList != nil {
       segments := make([]segment, 0, len(segmentList.SegmentUrls))
       dur := float64(segmentList.Duration) / float64(segmentList.GetTimescale())
@@ -233,7 +220,6 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
       return segments, nil
    }
-   // Fallback: Single file (BaseURL) without segmentation
    var duration float64
    if rep.Parent != nil && rep.Parent.Parent != nil {
       if periodDuration, err := rep.Parent.Parent.GetDuration(); err == nil {

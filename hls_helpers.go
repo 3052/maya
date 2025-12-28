@@ -14,7 +14,6 @@ const (
 )
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
-// It assumes the provided URI has already been resolved to an absolute URL.
 func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if mediaURL == nil {
       return nil, fmt.Errorf("HLS stream has no URI")
@@ -32,14 +31,11 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
-   // URIs for segments *within* the media playlist are resolved relative to the
-   // media playlist's own URL.
    mediaPl.ResolveURIs(mediaURL)
    return mediaPl, nil
 }
 
 // getHlsProtection extracts the Widevine PSSH from an HLS manifest.
-// For CENC content, this PSSH contains the key ID needed for any DRM.
 func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
    for _, key := range mediaPl.Keys {
       if key.KeyFormat == widevineURN && key.URI != nil && key.URI.Scheme == "data" {
@@ -47,7 +43,6 @@ func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
          if err != nil {
             return nil, fmt.Errorf("failed to decode Widevine PSSH data from HLS manifest: %w", err)
          }
-         // The KeyID is inside the PSSH box and will be extracted later.
          return &protectionInfo{Pssh: psshData}, nil
       }
    }

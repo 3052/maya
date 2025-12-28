@@ -28,18 +28,50 @@ func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    return master, nil
 }
 
-// --- Public Download Functions ---
+// --- Job Structs and Download Methods ---
 
-// DownloadDash downloads a DASH stream.
-// If j.Widevine or j.PlayReady is set, it will attempt decryption.
-func (j *Job) DownloadDash(manifest *dash.Mpd) error {
-   return j.downloadDashInternal(manifest)
+// Job handles the core, non-DRM parameters for a download.
+type Job struct {
+   DASH    *dash.Mpd
+   HLS     *hls.MasterPlaylist
+   Threads int
 }
 
-// DownloadHls downloads an HLS stream.
-// If j.Widevine or j.PlayReady is set, it will attempt decryption.
-func (j *Job) DownloadHls(playlist *hls.MasterPlaylist) error {
-   return j.downloadHlsInternal(playlist)
+// Download executes an unencrypted (clear) stream download.
+func (j *Job) Download(streamId string) error {
+   return runDownload(j.DASH, j.HLS, j.Threads, streamId, nil)
+}
+
+// PlayReadyJob handles PlayReady encrypted downloads.
+type PlayReadyJob struct {
+   Job              Job
+   CertificateChain string
+   EncryptSignKey   string
+   Send             func([]byte) ([]byte, error)
+}
+
+// Download executes the download for a PlayReady encrypted stream.
+func (j *PlayReadyJob) Download(streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.playReadyKey(keyID)
+   }
+   return runDownload(j.Job.DASH, j.Job.HLS, j.Job.Threads, streamId, keyFetcher)
+}
+
+// WidevineJob handles Widevine encrypted downloads.
+type WidevineJob struct {
+   Job        Job
+   ClientID   string
+   PrivateKey string
+   Send       func([]byte) ([]byte, error)
+}
+
+// Download executes the download for a Widevine encrypted stream.
+func (j *WidevineJob) Download(streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.widevineKey(keyID, contentID)
+   }
+   return runDownload(j.Job.DASH, j.Job.HLS, j.Job.Threads, streamId, keyFetcher)
 }
 
 // --- List Functions ---
@@ -78,15 +110,4 @@ func ListStreamsHls(playlist *hls.MasterPlaylist) error {
       fmt.Println()
    }
    return nil
-}
-
-// --- Job Struct ---
-
-type Job struct {
-   Send     func([]byte) ([]byte, error)
-   Threads  int
-   StreamId string
-   // DRM configuration. Set only one of the following.
-   Widevine  *WidevineJob
-   PlayReady *PlayReadyJob
 }

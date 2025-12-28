@@ -25,41 +25,15 @@ type protectionInfo struct {
    KeyID []byte
 }
 
-// WidevineJob holds the specific credentials for Widevine license requests.
-type WidevineJob struct {
-   ClientID   string
-   PrivateKey string
-}
-
-// PlayReadyJob holds the specific credentials for PlayReady license requests.
-type PlayReadyJob struct {
-   CertificateChain string
-   EncryptSignKey   string
-}
-
-// fetchKey dispatches to the correct DRM key function based on the provided configuration.
-func (j *Job) fetchKey(keyID []byte, contentID []byte) ([]byte, error) {
-   if (j.Widevine == nil && j.PlayReady == nil) || keyID == nil {
-      return nil, nil // No DRM config or no Key ID found.
-   }
-   if j.Widevine != nil {
-      return j.widevineKey(j.Widevine, keyID, contentID)
-   }
-   if j.PlayReady != nil {
-      return j.playReadyKey(j.PlayReady, keyID)
-   }
-   return nil, nil // No valid DRM config found
-}
-
-func (j *Job) widevineKey(wvJob *WidevineJob, keyID []byte, contentID []byte) ([]byte, error) {
-   if wvJob.ClientID == "" || wvJob.PrivateKey == "" {
+func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error) {
+   if j.ClientID == "" || j.PrivateKey == "" {
       return nil, errors.New("widevine requires ClientID and PrivateKey paths")
    }
-   client_id, err := os.ReadFile(wvJob.ClientID)
+   client_id, err := os.ReadFile(j.ClientID)
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(wvJob.PrivateKey)
+   pemBytes, err := os.ReadFile(j.PrivateKey)
    if err != nil {
       return nil, err
    }
@@ -98,11 +72,11 @@ func (j *Job) widevineKey(wvJob *WidevineJob, keyID []byte, contentID []byte) ([
    return foundKey, nil
 }
 
-func (j *Job) playReadyKey(prJob *PlayReadyJob, keyID []byte) ([]byte, error) {
-   if prJob.CertificateChain == "" || prJob.EncryptSignKey == "" {
+func (j *PlayReadyJob) playReadyKey(keyID []byte) ([]byte, error) {
+   if j.CertificateChain == "" || j.EncryptSignKey == "" {
       return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
    }
-   chainData, err := os.ReadFile(prJob.CertificateChain)
+   chainData, err := os.ReadFile(j.CertificateChain)
    if err != nil {
       return nil, err
    }
@@ -110,7 +84,7 @@ func (j *Job) playReadyKey(prJob *PlayReadyJob, keyID []byte) ([]byte, error) {
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-   signKeyData, err := os.ReadFile(prJob.EncryptSignKey)
+   signKeyData, err := os.ReadFile(j.EncryptSignKey)
    if err != nil {
       return nil, err
    }
