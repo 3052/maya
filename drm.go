@@ -25,43 +25,41 @@ type protectionInfo struct {
    KeyID []byte
 }
 
-// WidevineConfig holds the specific credentials for Widevine license requests.
-type WidevineConfig struct {
+// WidevineJob holds the specific credentials for Widevine license requests.
+type WidevineJob struct {
    ClientID   string
    PrivateKey string
 }
 
-// PlayReadyConfig holds the specific credentials for PlayReady license requests.
-type PlayReadyConfig struct {
+// PlayReadyJob holds the specific credentials for PlayReady license requests.
+type PlayReadyJob struct {
    CertificateChain string
    EncryptSignKey   string
 }
 
 // fetchKey dispatches to the correct DRM key function based on the provided configuration.
-func (c *Config) fetchKey(keyID []byte, contentID []byte) ([]byte, error) {
-   if (c.Widevine == nil && c.PlayReady == nil) || keyID == nil {
+func (j *Job) fetchKey(keyID []byte, contentID []byte) ([]byte, error) {
+   if (j.Widevine == nil && j.PlayReady == nil) || keyID == nil {
       return nil, nil // No DRM config or no Key ID found.
    }
-
-   if c.Widevine != nil {
-      return c.widevineKey(c.Widevine, keyID, contentID)
+   if j.Widevine != nil {
+      return j.widevineKey(j.Widevine, keyID, contentID)
    }
-   if c.PlayReady != nil {
-      return c.playReadyKey(c.PlayReady, keyID)
+   if j.PlayReady != nil {
+      return j.playReadyKey(j.PlayReady, keyID)
    }
-
    return nil, nil // No valid DRM config found
 }
 
-func (c *Config) widevineKey(wvCfg *WidevineConfig, keyID []byte, contentID []byte) ([]byte, error) {
-   if wvCfg.ClientID == "" || wvCfg.PrivateKey == "" {
+func (j *Job) widevineKey(wvJob *WidevineJob, keyID []byte, contentID []byte) ([]byte, error) {
+   if wvJob.ClientID == "" || wvJob.PrivateKey == "" {
       return nil, errors.New("widevine requires ClientID and PrivateKey paths")
    }
-   client_id, err := os.ReadFile(wvCfg.ClientID)
+   client_id, err := os.ReadFile(wvJob.ClientID)
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(wvCfg.PrivateKey)
+   pemBytes, err := os.ReadFile(wvJob.PrivateKey)
    if err != nil {
       return nil, err
    }
@@ -80,7 +78,7 @@ func (c *Config) widevineKey(wvCfg *WidevineConfig, keyID []byte, contentID []by
    if err != nil {
       return nil, err
    }
-   respBytes, err := c.Send(signedBytes)
+   respBytes, err := j.Send(signedBytes)
    if err != nil {
       return nil, err
    }
@@ -100,11 +98,11 @@ func (c *Config) widevineKey(wvCfg *WidevineConfig, keyID []byte, contentID []by
    return foundKey, nil
 }
 
-func (c *Config) playReadyKey(prCfg *PlayReadyConfig, keyID []byte) ([]byte, error) {
-   if prCfg.CertificateChain == "" || prCfg.EncryptSignKey == "" {
+func (j *Job) playReadyKey(prJob *PlayReadyJob, keyID []byte) ([]byte, error) {
+   if prJob.CertificateChain == "" || prJob.EncryptSignKey == "" {
       return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
    }
-   chainData, err := os.ReadFile(prCfg.CertificateChain)
+   chainData, err := os.ReadFile(prJob.CertificateChain)
    if err != nil {
       return nil, err
    }
@@ -112,7 +110,7 @@ func (c *Config) playReadyKey(prCfg *PlayReadyConfig, keyID []byte) ([]byte, err
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-   signKeyData, err := os.ReadFile(prCfg.EncryptSignKey)
+   signKeyData, err := os.ReadFile(prJob.EncryptSignKey)
    if err != nil {
       return nil, err
    }
@@ -122,7 +120,7 @@ func (c *Config) playReadyKey(prCfg *PlayReadyConfig, keyID []byte) ([]byte, err
    if err != nil {
       return nil, err
    }
-   respData, err := c.Send(body)
+   respData, err := j.Send(body)
    if err != nil {
       return nil, err
    }

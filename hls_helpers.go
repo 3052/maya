@@ -4,10 +4,13 @@ import (
    "41.neocities.org/luna/hls"
    "fmt"
    "io"
-   "log"
    "net/http"
    "net/url"
-   "strings"
+)
+
+const (
+   // widevineURN is the standard URN identifying the Widevine DRM system in manifests.
+   widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 )
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
@@ -39,14 +42,10 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
 // For CENC content, this PSSH contains the key ID needed for any DRM.
 func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
    for _, key := range mediaPl.Keys {
-      keyFormat := strings.ToLower(key.KeyFormat)
-      isWidevinePssh := strings.Contains(keyFormat, "widevine")
-
-      if isWidevinePssh && key.URI != nil && key.URI.Scheme == "data" {
+      if key.KeyFormat == widevineURN && key.URI != nil && key.URI.Scheme == "data" {
          psshData, err := key.DecodeData()
          if err != nil {
-            log.Printf("failed to decode Widevine PSSH data from HLS manifest: %v", err)
-            continue // Try the next key tag if this one is malformed
+            return nil, fmt.Errorf("failed to decode Widevine PSSH data from HLS manifest: %w", err)
          }
          // The KeyID is inside the PSSH box and will be extracted later.
          return &protectionInfo{Pssh: psshData}, nil

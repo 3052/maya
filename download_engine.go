@@ -19,10 +19,12 @@ type mediaRequest struct {
    url    *url.URL
    header http.Header
 }
-type downloadJob struct {
+
+type workItem struct {
    index   int
    request mediaRequest
 }
+
 type result struct {
    index    int
    workerId int
@@ -31,36 +33,33 @@ type result struct {
 }
 
 // executeDownload is the generic, shared engine for running the worker pool.
-func (c *Config) executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File) error {
+func (j *Job) executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File) error {
    if len(requests) == 0 {
       if remux != nil {
          return remux.Finish()
       }
       return nil
    }
-
-   numWorkers := max(c.Threads, 1)
-   jobs := make(chan downloadJob, len(requests))
+   numWorkers := max(j.Threads, 1)
+   workQueue := make(chan workItem, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
    wg.Add(numWorkers)
    for workerId := 0; workerId < numWorkers; workerId++ {
       go func(id int) {
          defer wg.Done()
-         for job := range jobs {
-            data, err := getSegment(job.request.url, job.request.header)
-            results <- result{index: job.index, workerId: id, data: data, err: err}
+         for item := range workQueue {
+            data, err := getSegment(item.request.url, item.request.header)
+            results <- result{index: item.index, workerId: id, data: data, err: err}
          }
       }(workerId)
    }
-
    doneChan := make(chan error, 1)
    go processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
    for reqIndex, req := range requests {
-      jobs <- downloadJob{index: reqIndex, request: req}
+      workQueue <- workItem{index: reqIndex, request: req}
    }
-   close(jobs)
-
+   close(workQueue)
    return <-doneChan
 }
 
@@ -72,7 +71,6 @@ func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Rem
       }
       return nil, nil, nil
    }
-
    remux, initProtection, err := initializeWriter(file, firstData)
    if err != nil {
       return nil, nil, err
@@ -86,11 +84,9 @@ func initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, *protecti
    if len(initData) == 0 {
       return &remux, nil, nil
    }
-
    if err := remux.Initialize(initData); err != nil {
       return nil, nil, err
    }
-
    // Now that init data is parsed, check for PSSH boxes for DRM info.
    var initProtection *protectionInfo
    wvIDBytes, err := hex.DecodeString(widevineSystemId)
@@ -106,7 +102,6 @@ func initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, *protecti
       }
    }
    // NOTE: PlayReady PSSH parsing from the init segment is not implemented here.
-
    // Clean the PSSH boxes from the output file.
    remux.Moov.RemovePssh()
    return &remux, initProtection, nil
@@ -172,6 +167,7 @@ func processAndWriteSegments(
 }
 
 // --- Progress Tracking Utility ---
+
 // progress tracks and logs the status of a multi-threaded download.
 type progress struct {
    total     int
