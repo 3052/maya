@@ -1,8 +1,10 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine" // ADDED
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "41.neocities.org/sofia" // ADDED
    "fmt"
    "log"
    "net/http"
@@ -12,13 +14,11 @@ import (
 )
 
 // finishDownload takes the prepared, format-specific data and runs the shared
-// part of the download process: content detection, file creation, DRM, remuxing,
-// and execution.
+// part of the download process. It uses the DRM settings on its receiver `c`.
 func (c *Config) finishDownload(
-   drmCfg *drmConfig,
    firstData []byte,
    streamID string,
-   protection *protectionInfo,
+   manifestProtection *protectionInfo,
    allRequests []mediaRequest,
    skipFirst bool,
 ) error {
@@ -40,20 +40,38 @@ func (c *Config) finishDownload(
    }
    defer file.Close()
 
-   // Step 2: Configure DRM.
-   var media mediaFile
-   if drmCfg != nil && protection != nil {
-      if err := media.configureProtection(protection); err != nil {
-         return err
-      }
-   }
-
-   // Step 3: Prepare remuxer and get decryption key.
-   remux, err := initializeRemuxer(detection.IsFMP4, file, firstData, &media)
+   // Step 2: Prepare remuxer and get DRM info from init segment.
+   remux, initProtection, err := initializeRemuxer(detection.IsFMP4, file, firstData)
    if err != nil {
       return err
    }
-   key, err := c.fetchKey(drmCfg, &media)
+
+   // Step 3: Assemble final DRM info and fetch key.
+   var keyID, contentID []byte
+   isDRM := c.Widevine != nil || c.PlayReady != nil
+   if isDRM {
+      // Start with info from the manifest (DASH).
+      if manifestProtection != nil {
+         keyID = manifestProtection.KeyID
+         // ContentID for Widevine requests is usually in the PSSH box.
+         if len(manifestProtection.Pssh) > 0 {
+            var wvData widevine.PsshData
+            psshBox := sofia.PsshBox{}
+            if err := psshBox.Parse(manifestProtection.Pssh); err == nil {
+               if err := wvData.Unmarshal(psshBox.Data); err == nil {
+                  contentID = wvData.ContentId
+               }
+            }
+         }
+      }
+      // The init segment can also contain a PSSH box with a KeyID (common in HLS).
+      // If we didn't get a KeyID from the manifest, use this one.
+      if keyID == nil && initProtection != nil {
+         keyID = initProtection.KeyID
+         log.Printf("key ID from PSSH: %x", keyID)
+      }
+   }
+   key, err := c.fetchKey(keyID, contentID)
    if err != nil {
       return err
    }
@@ -68,7 +86,7 @@ func (c *Config) finishDownload(
 }
 
 // downloadDashInternal prepares all DASH-specific data and passes it to finishDownload.
-func (c *Config) downloadDashInternal(manifest *dash.Mpd, drmCfg *drmConfig) error {
+func (c *Config) downloadDashInternal(manifest *dash.Mpd) error {
    dashGroup, ok := manifest.GetRepresentations()[c.StreamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", c.StreamId)
@@ -124,11 +142,11 @@ func (c *Config) downloadDashInternal(manifest *dash.Mpd, drmCfg *drmConfig) err
    shouldSkip := !isInitSegmentBased
 
    // 3. Call the shared downloader
-   return c.finishDownload(drmCfg, firstData, rep.Id, protection, allRequests, shouldSkip)
+   return c.finishDownload(firstData, rep.Id, protection, allRequests, shouldSkip)
 }
 
 // downloadHlsInternal prepares all HLS-specific data and passes it to finishDownload.
-func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist, drmCfg *drmConfig) error {
+func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist) error {
    keyInt, err := strconv.Atoi(c.StreamId)
    if err != nil {
       return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", c.StreamId)
@@ -183,5 +201,5 @@ func (c *Config) downloadHlsInternal(playlist *hls.MasterPlaylist, drmCfg *drmCo
    shouldSkip := true
 
    // 3. Call the shared downloader
-   return c.finishDownload(drmCfg, firstData, targetID, protection, allRequests, shouldSkip)
+   return c.finishDownload(firstData, targetID, protection, allRequests, shouldSkip)
 }

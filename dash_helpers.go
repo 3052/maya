@@ -56,7 +56,7 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    if keyID == nil {
       return nil, nil
    }
-
+   log.Printf("key ID from manifest: %x", keyID)
    // If we found a key ID, return the protection info.
    return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
 }
@@ -82,16 +82,15 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
    return requests, nil
 }
 
-// getMiddleBitrate calculates the bitrate of the middle segment and updates the Representation.
+// getMiddleBitrate calculates an accurate bitrate for a representation.
 func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
    log.Println("update", rep.Id)
-   var segs []segment
-   var err error
 
+   // SIDX Path: Calculate true average bitrate from all segments in sidx.
    if rep.SegmentBase != nil {
-      baseUrl, err_base := rep.ResolveBaseUrl()
-      if err_base != nil {
-         return err_base
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
       }
       cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
       sidxData, exists := sidxCache[cacheKey]
@@ -104,11 +103,33 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
          }
          sidxCache[cacheKey] = sidxData
       }
-      segs, err = generateSegmentsFromSidx(rep, sidxData)
-   } else {
-      segs, err = generateSegments(rep)
+
+      segs, err := generateSegmentsFromSidx(rep, sidxData)
+      if err != nil {
+         return err
+      }
+      if len(segs) == 0 {
+         rep.Bandwidth = 0
+         return nil
+      }
+
+      var totalSizeBits uint64 = 0
+      var totalDuration float64 = 0
+      for _, seg := range segs {
+         totalSizeBits += seg.sizeBits
+         totalDuration += seg.duration
+      }
+
+      if totalDuration <= 0 {
+         return errors.New("invalid total duration from sidx for bitrate calculation")
+      }
+
+      rep.Bandwidth = int(float64(totalSizeBits) / totalDuration)
+      return nil
    }
 
+   // SegmentTemplate/List Path: Sample middle segment as manifest Bandwidth is unreliable.
+   segs, err := generateSegments(rep)
    if err != nil {
       return err
    }
@@ -118,14 +139,11 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
    }
    mid := segs[len(segs)/2]
 
-   sizeBits := mid.sizeBits
-   if sizeBits == 0 {
-      data, err_get := getSegment(mid.url, mid.header)
-      if err_get != nil {
-         return err_get
-      }
-      sizeBits = uint64(len(data)) * 8
+   data, err := getSegment(mid.url, mid.header)
+   if err != nil {
+      return err
    }
+   sizeBits := uint64(len(data)) * 8
 
    if mid.duration <= 0 {
       return errors.New("invalid duration for bitrate calculation")

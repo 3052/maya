@@ -1,6 +1,7 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine" // ADDED
    "41.neocities.org/sofia"
    "crypto/aes"
    "encoding/hex"
@@ -63,50 +64,52 @@ func (c *Config) executeDownload(requests []mediaRequest, key []byte, remux *sof
    return <-doneChan
 }
 
-// initializeRemuxer handles the logic of setting up the remuxer if needed.
-func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte, media *mediaFile) (*sofia.Remuxer, error) {
-   var remux *sofia.Remuxer
-   if isFMP4 {
-      var err error
-      remux, err = media.initializeWriter(file, firstData)
-      if err != nil {
-         return nil, err
-      }
-   } else {
+// initializeRemuxer handles remuxer setup and now returns DRM info found in the init segment.
+func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Remuxer, *protectionInfo, error) {
+   if !isFMP4 {
       if _, err := file.Write(firstData); err != nil {
-         return nil, err
+         return nil, nil, err
       }
+      return nil, nil, nil
    }
-   return remux, nil
+
+   remux, initProtection, err := initializeWriter(file, firstData)
+   if err != nil {
+      return nil, nil, err
+   }
+   return remux, initProtection, nil
 }
 
-func (m *mediaFile) initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, error) {
+func initializeWriter(file *os.File, initData []byte) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
-   if len(initData) > 0 {
-      if err := remux.Initialize(initData); err != nil {
-         return nil, err
-      }
-      // If we haven't found a key ID from the manifest, try to find it in the PSSH
-      // data from the init segment. This is common in HLS.
-      if m.key_id == nil {
-         wvIDBytes, err := hex.DecodeString(widevineSystemId)
-         if err != nil {
-            panic("failed to decode hardcoded widevine system id")
-         }
-         // Try to find a Widevine PSSH box.
-         if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
-            // This will attempt to extract both content_id and key_id.
-            if err := m.ingestWidevinePssh(wvBox.Data); err != nil {
-               return nil, err
-            }
-         }
-         // NOTE: PlayReady PSSH parsing from the init segment is not implemented here.
-         // It would require finding the PlayReady PSSH box and parsing it to get the KID.
-      }
-      remux.Moov.RemovePssh()
+   if len(initData) == 0 {
+      return &remux, nil, nil
    }
-   return &remux, nil
+
+   if err := remux.Initialize(initData); err != nil {
+      return nil, nil, err
+   }
+
+   // Now that init data is parsed, check for PSSH boxes for DRM info.
+   var initProtection *protectionInfo
+   wvIDBytes, err := hex.DecodeString(widevineSystemId)
+   if err != nil {
+      panic("failed to decode hardcoded widevine system id")
+   }
+   if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
+      var psshData widevine.PsshData
+      if err := psshData.Unmarshal(wvBox.Data); err == nil {
+         if len(psshData.KeyIds) > 0 {
+            initProtection = &protectionInfo{KeyID: psshData.KeyIds[0]}
+         }
+      }
+   }
+   // NOTE: PlayReady PSSH parsing from the init segment is not implemented here.
+
+   // Clean the PSSH boxes from the output file.
+   remux.Moov.RemovePssh()
+   return &remux, initProtection, nil
 }
 
 func processAndWriteSegments(
@@ -169,7 +172,6 @@ func processAndWriteSegments(
 }
 
 // --- Progress Tracking Utility ---
-
 // progress tracks and logs the status of a multi-threaded download.
 type progress struct {
    total     int

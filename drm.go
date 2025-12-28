@@ -3,7 +3,6 @@ package maya
 import (
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
-   "41.neocities.org/sofia"
    "bytes"
    "errors"
    "log"
@@ -20,95 +19,55 @@ var (
    errKeyMismatch = errors.New("key ID mismatch")
 )
 
-// protectionInfo holds standardized DRM data extracted from a manifest.
+// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
    Pssh  []byte
    KeyID []byte
 }
 
-type mediaFile struct {
-   key_id     []byte
-   content_id []byte
+// WidevineConfig holds the specific credentials for Widevine license requests.
+type WidevineConfig struct {
+   ClientID   string
+   PrivateKey string
 }
 
-// drmConfig holds the credentials for a single download action. The DRM system
-// is inferred from which fields are populated.
-type drmConfig struct {
+// PlayReadyConfig holds the specific credentials for PlayReady license requests.
+type PlayReadyConfig struct {
    CertificateChain string
    EncryptSignKey   string
-   ClientId         string
-   PrivateKey       string
 }
 
-// ingestWidevinePssh parses Widevine PSSH data and sets the ContentId and KeyID.
-func (m *mediaFile) ingestWidevinePssh(data []byte) error {
-   var pssh_data widevine.PsshData
-   if err := pssh_data.Unmarshal(data); err != nil {
-      return err
-   }
-   if pssh_data.ContentId != nil {
-      m.content_id = pssh_data.ContentId
-      log.Printf("content ID %x", m.content_id)
-   }
-   // If Key ID isn't set yet (e.g. from manifest) and PSSH has one, use it.
-   if m.key_id == nil && len(pssh_data.KeyIds) > 0 {
-      m.key_id = pssh_data.KeyIds[0]
-      log.Printf("key ID from PSSH: %x", m.key_id)
-   }
-   return nil
-}
-
-// configureProtection copies the necessary data from the manifest into the mediaFile.
-func (m *mediaFile) configureProtection(protection *protectionInfo) error {
-   if len(protection.Pssh) > 0 {
-      var pssh_box sofia.PsshBox
-      if err := pssh_box.Parse(protection.Pssh); err == nil {
-         if err := m.ingestWidevinePssh(pssh_box.Data); err != nil {
-            return err
-         }
-      }
-   }
-   if len(protection.KeyID) > 0 {
-      m.key_id = protection.KeyID
-      log.Printf("key ID %x", m.key_id)
-   }
-   return nil
-}
-
-// fetchKey dispatches to the correct DRM key function. It is a method on Config to access the Send func.
-func (c *Config) fetchKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
-   if drmCfg == nil || media.key_id == nil {
-      return nil, nil // No DRM or unencrypted.
+// fetchKey dispatches to the correct DRM key function based on the provided configuration.
+func (c *Config) fetchKey(keyID []byte, contentID []byte) ([]byte, error) {
+   if (c.Widevine == nil && c.PlayReady == nil) || keyID == nil {
+      return nil, nil // No DRM config or no Key ID found.
    }
 
-   // Infer DRM scheme from which credentials are set.
-   isWidevine := drmCfg.ClientId != "" && drmCfg.PrivateKey != ""
-   isPlayReady := drmCfg.CertificateChain != "" && drmCfg.EncryptSignKey != ""
-
-   if isWidevine {
-      return c.widevineKey(drmCfg, media)
-   } else if isPlayReady {
-      return c.playReadyKey(drmCfg, media)
+   if c.Widevine != nil {
+      return c.widevineKey(c.Widevine, keyID, contentID)
+   }
+   if c.PlayReady != nil {
+      return c.playReadyKey(c.PlayReady, keyID)
    }
 
    return nil, nil // No valid DRM config found
 }
 
-func (c *Config) widevineKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
-   if drmCfg.ClientId == "" || drmCfg.PrivateKey == "" {
-      return nil, errors.New("widevine requires ClientId and PrivateKey paths")
+func (c *Config) widevineKey(wvCfg *WidevineConfig, keyID []byte, contentID []byte) ([]byte, error) {
+   if wvCfg.ClientID == "" || wvCfg.PrivateKey == "" {
+      return nil, errors.New("widevine requires ClientID and PrivateKey paths")
    }
-   client_id, err := os.ReadFile(drmCfg.ClientId)
+   client_id, err := os.ReadFile(wvCfg.ClientID)
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(drmCfg.PrivateKey)
+   pemBytes, err := os.ReadFile(wvCfg.PrivateKey)
    if err != nil {
       return nil, err
    }
    var pssh widevine.PsshData
-   pssh.ContentId = media.content_id
-   pssh.KeyIds = [][]byte{media.key_id}
+   pssh.ContentId = contentID
+   pssh.KeyIds = [][]byte{keyID}
    req_bytes, err := pssh.BuildLicenseRequest(client_id)
    if err != nil {
       return nil, err
@@ -129,7 +88,7 @@ func (c *Config) widevineKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error
    if err != nil {
       return nil, err
    }
-   foundKey, ok := widevine.GetKey(keys, media.key_id)
+   foundKey, ok := widevine.GetKey(keys, keyID)
    if !ok {
       return nil, errors.New("GetKey: key not found in response")
    }
@@ -141,11 +100,11 @@ func (c *Config) widevineKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error
    return foundKey, nil
 }
 
-func (c *Config) playReadyKey(drmCfg *drmConfig, media *mediaFile) ([]byte, error) {
-   if drmCfg.CertificateChain == "" || drmCfg.EncryptSignKey == "" {
+func (c *Config) playReadyKey(prCfg *PlayReadyConfig, keyID []byte) ([]byte, error) {
+   if prCfg.CertificateChain == "" || prCfg.EncryptSignKey == "" {
       return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
    }
-   chainData, err := os.ReadFile(drmCfg.CertificateChain)
+   chainData, err := os.ReadFile(prCfg.CertificateChain)
    if err != nil {
       return nil, err
    }
@@ -153,13 +112,13 @@ func (c *Config) playReadyKey(drmCfg *drmConfig, media *mediaFile) ([]byte, erro
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-   signKeyData, err := os.ReadFile(drmCfg.EncryptSignKey)
+   signKeyData, err := os.ReadFile(prCfg.EncryptSignKey)
    if err != nil {
       return nil, err
    }
    encryptSignKey := new(big.Int).SetBytes(signKeyData)
-   playReady.UuidOrGuid(media.key_id)
-   body, err := chain.RequestBody(media.key_id, encryptSignKey)
+   playReady.UuidOrGuid(keyID)
+   body, err := chain.RequestBody(keyID, encryptSignKey)
    if err != nil {
       return nil, err
    }
@@ -172,7 +131,7 @@ func (c *Config) playReadyKey(drmCfg *drmConfig, media *mediaFile) ([]byte, erro
    if err != nil {
       return nil, err
    }
-   if !bytes.Equal(license.ContentKey.KeyId[:], media.key_id) {
+   if !bytes.Equal(license.ContentKey.KeyId[:], keyID) {
       return nil, errKeyMismatch
    }
    key := coord.Key()
