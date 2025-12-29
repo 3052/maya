@@ -51,17 +51,30 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
 }
 
-// getDashMediaRequests generates the full list of media segments for a DASH group.
+// getDashMediaRequests generates the full list of media segments for a DASH representation group.
 func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]mediaRequest, error) {
+   if len(group) == 0 {
+      return nil, nil
+   }
+
+   // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
+   if group[0].SegmentBase != nil {
+      segs, err := generateSegmentsFromSidx(group[0], sidxData)
+      if err != nil {
+         return nil, err
+      }
+      requests := make([]mediaRequest, len(segs))
+      for i, seg := range segs {
+         requests[i] = mediaRequest{url: seg.url, header: seg.header}
+      }
+      return requests, nil
+   }
+
+   // For other types (SegmentTemplate, SegmentList), iterate through each Period's
+   // Representation to build the full list. This logic was correct.
    var requests []mediaRequest
    for _, rep := range group {
-      var segs []segment
-      var err error
-      if rep.SegmentBase != nil {
-         segs, err = generateSegmentsFromSidx(rep, sidxData)
-      } else {
-         segs, err = generateSegments(rep)
-      }
+      segs, err := generateSegments(rep)
       if err != nil {
          return nil, err
       }
