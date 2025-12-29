@@ -11,7 +11,6 @@ import (
    "net/http"
    "net/url"
    "os"
-   "strconv"
 )
 
 // manifestType is an enum to distinguish between DASH and HLS.
@@ -41,14 +40,11 @@ func runDownload(
       }
       return downloadDash(manifest, threads, streamId, fetchKey)
    }
-   // For HLS or clear streams (where type is unknown), try HLS first.
    playlist, err := parseHls(body, baseURL)
    if err != nil {
-      // If HLS fails, and it was supposed to be HLS, error out.
       if mType == hlsManifest {
          return err
       }
-      // If it was a clear stream, try DASH as a fallback.
       manifest, err2 := parseDash(body, baseURL)
       if err2 != nil {
          return fmt.Errorf("failed to parse manifest as HLS or DASH")
@@ -68,6 +64,12 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return fmt.Errorf("representation group is empty")
    }
    rep := dashGroup[0]
+
+   typeInfo, err := DetectDashType(rep)
+   if err != nil {
+      return err
+   }
+
    var sidxData []byte
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
@@ -81,7 +83,8 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }
    }
-   var firstData []byte
+
+   var firstData []byte // This is the init segment for FMP4
    isInitSegmentBased := rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil
    if isInitSegmentBased {
       baseUrl, err := rep.ResolveBaseUrl()
@@ -93,7 +96,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       if err != nil {
          return err
       }
-   } else {
+   } else if !typeInfo.IsFMP4 { // For non-FMP4, get the first actual segment
       segs, err := getDashMediaRequests(dashGroup, sidxData)
       if err != nil {
          return err
@@ -105,6 +108,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          }
       }
    }
+
    allRequests, err := getDashMediaRequests(dashGroup, sidxData)
    if err != nil {
       return err
@@ -113,34 +117,18 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    if err != nil {
       return err
    }
-   shouldSkip := !isInitSegmentBased
-   return execute(firstData, rep.Id, protection, allRequests, shouldSkip, threads, fetchKey)
+
+   shouldSkip := !isInitSegmentBased && typeInfo.IsFMP4
+   return execute(firstData, rep.Id, typeInfo, protection, allRequests, shouldSkip, threads, fetchKey)
 }
 
 // downloadHls prepares all HLS-specific data and passes it to the engine.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
-   keyInt, err := strconv.Atoi(streamId)
+   typeInfo, targetURI, err := DetectHlsType(playlist, streamId)
    if err != nil {
-      return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", streamId)
+      return err
    }
-   var targetURI *url.URL
-   for _, variant := range playlist.Streams {
-      if variant.ID == keyInt {
-         targetURI = variant.URI
-         break
-      }
-   }
-   if targetURI == nil {
-      for _, rendition := range playlist.Medias {
-         if rendition.ID == keyInt {
-            targetURI = rendition.URI
-            break
-         }
-      }
-   }
-   if targetURI == nil {
-      return fmt.Errorf("stream with ID not found: %d", keyInt)
-   }
+
    mediaPl, err := fetchMediaPlaylist(targetURI)
    if err != nil {
       return err
@@ -149,13 +137,16 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
+
    var firstData []byte
    if len(hlsSegs) > 0 {
+      // For HLS, firstData is either the init segment (if EXT-X-MAP exists) or the first media segment.
       firstData, err = getSegment(hlsSegs[0].url, hlsSegs[0].header)
       if err != nil {
          return fmt.Errorf("failed to get initial HLS data: %w", err)
       }
    }
+
    allRequests := make([]mediaRequest, len(hlsSegs))
    for i, segment := range hlsSegs {
       allRequests[i] = mediaRequest{url: segment.url, header: segment.header}
@@ -164,38 +155,39 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
-   return execute(firstData, streamId, protection, allRequests, true, threads, fetchKey)
+
+   return execute(firstData, streamId, typeInfo, protection, allRequests, true, threads, fetchKey)
 }
 
 // execute takes the prepared data, fetches keys, and starts the download engine.
 func execute(
    firstData []byte,
    streamID string,
+   typeInfo *TypeInfo,
    manifestProtection *protectionInfo,
    allRequests []mediaRequest,
    skipFirst bool,
    threads int,
    fetchKey keyFetcher,
 ) error {
-   if firstData == nil {
+   if len(allRequests) == 0 && firstData == nil {
       log.Println("Stream contains no data.")
       return nil
    }
-   detection := detectContentType(firstData)
-   if detection.Extension == "" {
-      return fmt.Errorf("could not determine file type for stream %s", streamID)
-   }
-   fileName := streamID + detection.Extension
+
+   fileName := streamID + typeInfo.Extension
    log.Println("Create", fileName)
    file, err := os.Create(fileName)
    if err != nil {
       return err
    }
    defer file.Close()
-   remux, initProtection, err := initializeRemuxer(detection.IsFMP4, file, firstData)
+
+   remux, initProtection, err := initializeRemuxer(typeInfo.IsFMP4, file, firstData)
    if err != nil {
       return err
    }
+
    var key []byte
    if fetchKey != nil {
       var keyID, contentID []byte
@@ -223,6 +215,7 @@ func execute(
          return fmt.Errorf("failed to fetch decryption key: %w", err)
       }
    }
+
    remainingRequests := allRequests
    if skipFirst && len(allRequests) > 0 {
       remainingRequests = allRequests[1:]
@@ -232,32 +225,37 @@ func execute(
 
 func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Remuxer, *protectionInfo, error) {
    if !isFMP4 {
-      if _, err := file.Write(firstData); err != nil {
-         return nil, nil, err
+      if firstData != nil {
+         if _, err := file.Write(firstData); err != nil {
+            return nil, nil, err
+         }
       }
       return nil, nil, nil
    }
+
    var remux sofia.Remuxer
    remux.Writer = file
-   if len(firstData) == 0 {
-      return &remux, nil, nil
+   if len(firstData) > 0 {
+      if err := remux.Initialize(firstData); err != nil {
+         return nil, nil, err
+      }
    }
-   if err := remux.Initialize(firstData); err != nil {
-      return nil, nil, err
-   }
+
    var initProtection *protectionInfo
    wvIDBytes, err := hex.DecodeString(widevineSystemId)
    if err != nil {
       panic("failed to decode hardcoded widevine system id")
    }
-   if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
-      var psshData widevine.PsshData
-      if err := psshData.Unmarshal(wvBox.Data); err == nil {
-         if len(psshData.KeyIds) > 0 {
-            initProtection = &protectionInfo{KeyID: psshData.KeyIds[0]}
+   if remux.Moov != nil {
+      if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
+         var psshData widevine.PsshData
+         if err := psshData.Unmarshal(wvBox.Data); err == nil {
+            if len(psshData.KeyIds) > 0 {
+               initProtection = &protectionInfo{KeyID: psshData.KeyIds[0]}
+            }
          }
       }
+      remux.Moov.RemovePssh()
    }
-   remux.Moov.RemovePssh()
    return &remux, initProtection, nil
 }
