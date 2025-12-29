@@ -63,6 +63,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    if len(dashGroup) == 0 {
       return fmt.Errorf("representation group is empty")
    }
+   // Use the first representation in the group as a template for common properties.
    rep := dashGroup[0]
 
    typeInfo, err := DetectDashType(rep)
@@ -97,6 +98,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          return err
       }
    } else if !typeInfo.IsFMP4 { // For non-FMP4, get the first actual segment
+      // IMPORTANT: Get segments for the whole group to find the true first segment.
       segs, err := getDashMediaRequests(dashGroup, sidxData)
       if err != nil {
          return err
@@ -109,6 +111,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       }
    }
 
+   // Generate the full list of requests from all periods in the group.
    allRequests, err := getDashMediaRequests(dashGroup, sidxData)
    if err != nil {
       return err
