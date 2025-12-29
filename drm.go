@@ -26,6 +26,9 @@ type protectionInfo struct {
 }
 
 func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error) {
+   if j.Send == nil {
+      return nil, errors.New("WidevineJob.Send function is not set")
+   }
    if j.ClientID == "" || j.PrivateKey == "" {
       return nil, errors.New("widevine requires ClientID and PrivateKey paths")
    }
@@ -73,6 +76,9 @@ func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error
 }
 
 func (j *PlayReadyJob) playReadyKey(keyID []byte) ([]byte, error) {
+   if j.Send == nil {
+      return nil, errors.New("PlayReadyJob.Send function is not set")
+   }
    if j.CertificateChain == "" || j.EncryptSignKey == "" {
       return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
    }

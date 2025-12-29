@@ -140,7 +140,7 @@ func listStreamsHls(playlist *hls.MasterPlaylist) error {
       fmt.Println(rendition)
       fmt.Println()
    }
-   for _, variant := range playlist.Streams {
+   for _, variant := range playlist.StreamInfs {
       fmt.Println(variant)
       fmt.Println()
    }

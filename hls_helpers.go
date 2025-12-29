@@ -1,7 +1,9 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine"
    "41.neocities.org/luna/hls"
+   "41.neocities.org/sofia"
    "fmt"
    "io"
    "net/http"
@@ -35,7 +37,7 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    return mediaPl, nil
 }
 
-// getHlsProtection extracts the Widevine PSSH from an HLS manifest.
+// getHlsProtection extracts the Widevine PSSH and Key ID from an HLS manifest.
 func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
    for _, key := range mediaPl.Keys {
       if key.KeyFormat == widevineURN && key.URI != nil && key.URI.Scheme == "data" {
@@ -43,6 +45,24 @@ func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
          if err != nil {
             return nil, fmt.Errorf("failed to decode Widevine PSSH data from HLS manifest: %w", err)
          }
+
+         // The decoded data is a PSSH box; parse it to get the Key ID.
+         var psshBox sofia.PsshBox
+         if err := psshBox.Parse(psshData); err != nil {
+            return nil, fmt.Errorf("failed to parse PSSH box from HLS manifest: %w", err)
+         }
+
+         var wvData widevine.PsshData
+         if err := wvData.Unmarshal(psshBox.Data); err != nil {
+            return nil, fmt.Errorf("failed to unmarshal Widevine data from HLS PSSH: %w", err)
+         }
+
+         if len(wvData.KeyIds) > 0 {
+            keyID := wvData.KeyIds[0]
+            return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
+         }
+
+         // Return PSSH data even if no Key ID was found inside.
          return &protectionInfo{Pssh: psshData}, nil
       }
    }
