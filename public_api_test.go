@@ -22,13 +22,7 @@ func TestDash(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-
-   mpd, err := ParseDash(data, address)
-   if err != nil {
-      t.Fatal(err)
-   }
-
-   err = ListStreamsDash(mpd)
+   err = ListDash(data, address)
    if err != nil {
       t.Fatal(err)
    }
@@ -43,11 +37,7 @@ func TestHls(t *testing.T) {
    if err != nil {
       t.Fatal(err)
    }
-   playlist, err := ParseHls(data, address)
-   if err != nil {
-      t.Fatal(err)
-   }
-   err = ListStreamsHls(playlist)
+   err = ListHls(data, address)
    if err != nil {
       t.Fatal(err)
    }

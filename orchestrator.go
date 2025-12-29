@@ -14,27 +14,51 @@ import (
    "strconv"
 )
 
+// manifestType is an enum to distinguish between DASH and HLS.
+type manifestType int
+
+const (
+   dashManifest manifestType = iota
+   hlsManifest
+)
+
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
 type keyFetcher func(keyID, contentID []byte) ([]byte, error)
 
-// runDownload is the central, shared entry point for all job types.
+// runDownload is the central, shared entry point that orchestrates the entire download.
 func runDownload(
-   manifest *dash.Mpd,
-   playlist *hls.MasterPlaylist,
+   body []byte,
+   baseURL *url.URL,
    threads int,
    streamId string,
+   mType manifestType,
    fetchKey keyFetcher,
 ) error {
-   if manifest != nil {
+   if mType == dashManifest {
+      manifest, err := parseDash(body, baseURL)
+      if err != nil {
+         return err
+      }
       return downloadDash(manifest, threads, streamId, fetchKey)
    }
-   if playlist != nil {
-      return downloadHls(playlist, threads, streamId, fetchKey)
+   // For HLS or clear streams (where type is unknown), try HLS first.
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      // If HLS fails, and it was supposed to be HLS, error out.
+      if mType == hlsManifest {
+         return err
+      }
+      // If it was a clear stream, try DASH as a fallback.
+      manifest, err2 := parseDash(body, baseURL)
+      if err2 != nil {
+         return fmt.Errorf("failed to parse manifest as HLS or DASH")
+      }
+      return downloadDash(manifest, threads, streamId, fetchKey)
    }
-   return fmt.Errorf("no valid manifest or playlist provided")
+   return downloadHls(playlist, threads, streamId, fetchKey)
 }
 
-// downloadDash prepares all DASH-specific data and passes it to the shared execution logic.
+// downloadDash prepares all DASH-specific data and passes it to the engine.
 func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := manifest.GetRepresentations()[streamId]
    if !ok {
@@ -44,7 +68,6 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return fmt.Errorf("representation group is empty")
    }
    rep := dashGroup[0]
-   // 1. Prepare DASH-specific info
    var sidxData []byte
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
@@ -58,7 +81,6 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }
    }
-   // 2. Prepare inputs for the shared downloader
    var firstData []byte
    isInitSegmentBased := rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil
    if isInitSegmentBased {
@@ -92,17 +114,15 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return err
    }
    shouldSkip := !isInitSegmentBased
-   // 3. Call the shared execution logic
    return execute(firstData, rep.Id, protection, allRequests, shouldSkip, threads, fetchKey)
 }
 
-// downloadHls prepares all HLS-specific data and passes it to the shared execution logic.
+// downloadHls prepares all HLS-specific data and passes it to the engine.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
    keyInt, err := strconv.Atoi(streamId)
    if err != nil {
       return fmt.Errorf("invalid HLS variant StreamId, must be an integer: %q", streamId)
    }
-   // 1. Prepare HLS-specific info
    var targetURI *url.URL
    for _, variant := range playlist.Streams {
       if variant.ID == keyInt {
@@ -129,7 +149,6 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
-   // 2. Prepare inputs for the shared downloader
    var firstData []byte
    if len(hlsSegs) > 0 {
       firstData, err = getSegment(hlsSegs[0].url, hlsSegs[0].header)
@@ -145,12 +164,10 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
-   shouldSkip := true
-   // 3. Call the shared execution logic
-   return execute(firstData, streamId, protection, allRequests, shouldSkip, threads, fetchKey)
+   return execute(firstData, streamId, protection, allRequests, true, threads, fetchKey)
 }
 
-// execute takes the prepared, format-specific data and runs the download.
+// execute takes the prepared data, fetches keys, and starts the download engine.
 func execute(
    firstData []byte,
    streamID string,
@@ -164,7 +181,6 @@ func execute(
       log.Println("Stream contains no data.")
       return nil
    }
-   // Step 1: Detect type and create file.
    detection := detectContentType(firstData)
    if detection.Extension == "" {
       return fmt.Errorf("could not determine file type for stream %s", streamID)
@@ -176,16 +192,13 @@ func execute(
       return err
    }
    defer file.Close()
-   // Step 2: Prepare remuxer and get DRM info from init segment.
    remux, initProtection, err := initializeRemuxer(detection.IsFMP4, file, firstData)
    if err != nil {
       return err
    }
-   // Step 3: Assemble final DRM info and fetch key.
    var key []byte
    if fetchKey != nil {
       var keyID, contentID []byte
-      // Start with info from the manifest (DASH/HLS).
       if manifestProtection != nil {
          keyID = manifestProtection.KeyID
          if len(manifestProtection.Pssh) > 0 {
@@ -198,7 +211,6 @@ func execute(
             }
          }
       }
-      // The init segment can also contain a PSSH box with a KeyID.
       if keyID == nil && initProtection != nil {
          keyID = initProtection.KeyID
          log.Printf("key ID from PSSH: %x", keyID)
@@ -211,7 +223,6 @@ func execute(
          return fmt.Errorf("failed to fetch decryption key: %w", err)
       }
    }
-   // Step 4: Execute the download using the worker pool engine.
    remainingRequests := allRequests
    if skipFirst && len(allRequests) > 0 {
       remainingRequests = allRequests[1:]

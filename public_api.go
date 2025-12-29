@@ -7,8 +7,91 @@ import (
    "net/url"
 )
 
-// ParseDash parses a DASH manifest (MPD).
-func ParseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
+// ListDash parses a DASH manifest and lists the available streams.
+func ListDash(body []byte, baseURL *url.URL) error {
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return listStreamsDash(manifest)
+}
+
+// ListHls parses an HLS playlist and lists the available streams.
+func ListHls(body []byte, baseURL *url.URL) error {
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return listStreamsHls(playlist)
+}
+
+// Job holds configuration for an unencrypted download.
+type Job struct {
+   Threads int
+}
+
+// DownloadDash parses and downloads a clear DASH stream.
+func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
+   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, nil)
+}
+
+// DownloadHls parses and downloads a clear HLS stream.
+func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
+   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, nil)
+}
+
+// PlayReadyJob holds configuration for a PlayReady encrypted download.
+type PlayReadyJob struct {
+   Threads          int
+   CertificateChain string
+   EncryptSignKey   string
+   Send             func([]byte) ([]byte, error)
+}
+
+// DownloadDash parses and downloads a PlayReady-encrypted DASH stream.
+func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.playReadyKey(keyID)
+   }
+   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
+}
+
+// DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
+func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.playReadyKey(keyID)
+   }
+   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
+}
+
+// WidevineJob holds configuration for a Widevine encrypted download.
+type WidevineJob struct {
+   Threads    int
+   ClientID   string
+   PrivateKey string
+   Send       func([]byte) ([]byte, error)
+}
+
+// DownloadDash parses and downloads a Widevine-encrypted DASH stream.
+func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.widevineKey(keyID, contentID)
+   }
+   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
+}
+
+// DownloadHls parses and downloads a Widevine-encrypted HLS stream.
+func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
+   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
+      return j.widevineKey(keyID, contentID)
+   }
+   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
+}
+
+// --- Internal Helpers ---
+
+// parseDash is an internal helper to parse a DASH manifest.
+func parseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    manifest, err := dash.Parse(body)
    if err != nil {
       return nil, fmt.Errorf("failed to parse DASH manifest: %w", err)
@@ -17,8 +100,8 @@ func ParseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    return manifest, nil
 }
 
-// ParseHls parses an HLS master or media playlist.
-func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
+// parseHls is an internal helper to parse an HLS master playlist.
+func parseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    bodyStr := string(body)
    master, err := hls.DecodeMaster(bodyStr)
    if err != nil {
@@ -28,58 +111,10 @@ func ParseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    return master, nil
 }
 
-// --- Job Structs and Download Methods ---
-
-// Job handles the core, non-DRM parameters for a download.
-type Job struct {
-   DASH    *dash.Mpd
-   HLS     *hls.MasterPlaylist
-   Threads int
-}
-
-// Download executes an unencrypted (clear) stream download.
-func (j *Job) Download(streamId string) error {
-   return runDownload(j.DASH, j.HLS, j.Threads, streamId, nil)
-}
-
-// PlayReadyJob handles PlayReady encrypted downloads.
-type PlayReadyJob struct {
-   Job              Job
-   CertificateChain string
-   EncryptSignKey   string
-   Send             func([]byte) ([]byte, error)
-}
-
-// Download executes the download for a PlayReady encrypted stream.
-func (j *PlayReadyJob) Download(streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.playReadyKey(keyID)
-   }
-   return runDownload(j.Job.DASH, j.Job.HLS, j.Job.Threads, streamId, keyFetcher)
-}
-
-// WidevineJob handles Widevine encrypted downloads.
-type WidevineJob struct {
-   Job        Job
-   ClientID   string
-   PrivateKey string
-   Send       func([]byte) ([]byte, error)
-}
-
-// Download executes the download for a Widevine encrypted stream.
-func (j *WidevineJob) Download(streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.widevineKey(keyID, contentID)
-   }
-   return runDownload(j.Job.DASH, j.Job.HLS, j.Job.Threads, streamId, keyFetcher)
-}
-
-// --- List Functions ---
-
-func ListStreamsDash(manifest *dash.Mpd) error {
+// listStreamsDash is an internal helper to print streams from a parsed manifest.
+func listStreamsDash(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
    groups := manifest.GetRepresentations()
-   // 1. Collect a representative from each group and calculate missing bitrates.
    repsForSorting := make([]*dash.Representation, 0, len(groups))
    for _, group := range groups {
       representation := group[len(group)/2]
@@ -91,7 +126,6 @@ func ListStreamsDash(manifest *dash.Mpd) error {
       repsForSorting = append(repsForSorting, representation)
    }
    dash.SortByBandwidth(repsForSorting)
-   // 3. Print the sorted list.
    for _, representation := range repsForSorting {
       fmt.Println(representation)
       fmt.Println()
@@ -99,7 +133,8 @@ func ListStreamsDash(manifest *dash.Mpd) error {
    return nil
 }
 
-func ListStreamsHls(playlist *hls.MasterPlaylist) error {
+// listStreamsHls is an internal helper to print streams from a parsed playlist.
+func listStreamsHls(playlist *hls.MasterPlaylist) error {
    playlist.Sort()
    for _, rendition := range playlist.Medias {
       fmt.Println(rendition)
