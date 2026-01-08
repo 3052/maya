@@ -134,10 +134,10 @@ func newProgress(total int, numWorkers int) *progress {
    }
 }
 
-func (p *progress) update(workerID int) {
+func (p *progress) update(workerId int) {
    p.processed++
-   if workerID >= 0 && workerID < len(p.counts) {
-      p.counts[workerID]++
+   if workerId >= 0 && workerId < len(p.counts) {
+      p.counts[workerId]++
    }
    now := time.Now()
    if now.Sub(p.lastLog) > time.Second {

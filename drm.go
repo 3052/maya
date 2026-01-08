@@ -22,17 +22,17 @@ var (
 // protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
    Pssh  []byte
-   KeyID []byte
+   KeyId []byte
 }
 
-func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error) {
+func (j *WidevineJob) widevineKey(keyId []byte, contentId []byte) ([]byte, error) {
    if j.Send == nil {
       return nil, errors.New("WidevineJob.Send function is not set")
    }
-   if j.ClientID == "" || j.PrivateKey == "" {
-      return nil, errors.New("widevine requires ClientID and PrivateKey paths")
+   if j.ClientId == "" || j.PrivateKey == "" {
+      return nil, errors.New("widevine requires ClientId and PrivateKey paths")
    }
-   client_id, err := os.ReadFile(j.ClientID)
+   client_id, err := os.ReadFile(j.ClientId)
    if err != nil {
       return nil, err
    }
@@ -41,8 +41,8 @@ func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error
       return nil, err
    }
    var pssh widevine.PsshData
-   pssh.ContentId = contentID
-   pssh.KeyIds = [][]byte{keyID}
+   pssh.ContentId = contentId
+   pssh.KeyIds = [][]byte{keyId}
    req_bytes, err := pssh.BuildLicenseRequest(client_id)
    if err != nil {
       return nil, err
@@ -63,7 +63,7 @@ func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error
    if err != nil {
       return nil, err
    }
-   foundKey, ok := widevine.GetKey(keys, keyID)
+   foundKey, ok := widevine.GetKey(keys, keyId)
    if !ok {
       return nil, errors.New("GetKey: key not found in response")
    }
@@ -75,7 +75,7 @@ func (j *WidevineJob) widevineKey(keyID []byte, contentID []byte) ([]byte, error
    return foundKey, nil
 }
 
-func (j *PlayReadyJob) playReadyKey(keyID []byte) ([]byte, error) {
+func (j *PlayReadyJob) playReadyKey(keyId []byte) ([]byte, error) {
    if j.Send == nil {
       return nil, errors.New("PlayReadyJob.Send function is not set")
    }
@@ -95,8 +95,8 @@ func (j *PlayReadyJob) playReadyKey(keyID []byte) ([]byte, error) {
       return nil, err
    }
    encryptSignKey := new(big.Int).SetBytes(signKeyData)
-   playReady.UuidOrGuid(keyID)
-   body, err := chain.RequestBody(keyID, encryptSignKey)
+   playReady.UuidOrGuid(keyId)
+   body, err := chain.RequestBody(keyId, encryptSignKey)
    if err != nil {
       return nil, err
    }
@@ -109,7 +109,7 @@ func (j *PlayReadyJob) playReadyKey(keyID []byte) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   if !bytes.Equal(license.ContentKey.KeyId[:], keyID) {
+   if !bytes.Equal(license.ContentKey.KeyId[:], keyId) {
       return nil, errKeyMismatch
    }
    key := coord.Key()
