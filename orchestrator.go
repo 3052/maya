@@ -22,7 +22,7 @@ const (
 )
 
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
-type keyFetcher func(keyID, contentID []byte) ([]byte, error)
+type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 // runDownload is the central, shared entry point that orchestrates the entire download.
 func runDownload(
@@ -65,12 +65,10 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    }
    // Use the first representation in the group as a template for common properties.
    rep := dashGroup[0]
-
-   typeInfo, err := DetectDashType(rep)
+   typeInfo, err := detectDashType(rep)
    if err != nil {
       return err
    }
-
    var sidxData []byte
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
@@ -84,7 +82,6 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }
    }
-
    var firstData []byte // This is the init segment for FMP4
    isInitSegmentBased := rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil
    if isInitSegmentBased {
@@ -110,7 +107,6 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
          }
       }
    }
-
    // Generate the full list of requests from all periods in the group.
    allRequests, err := getDashMediaRequests(dashGroup, sidxData)
    if err != nil {
@@ -120,18 +116,16 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    if err != nil {
       return err
    }
-
    shouldSkip := !isInitSegmentBased && typeInfo.IsFMP4
    return execute(firstData, rep.Id, typeInfo, protection, allRequests, shouldSkip, threads, fetchKey)
 }
 
 // downloadHls prepares all HLS-specific data and passes it to the engine.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
-   typeInfo, targetURI, err := DetectHlsType(playlist, streamId)
+   typeInfo, targetURI, err := detectHlsType(playlist, streamId)
    if err != nil {
       return err
    }
-
    mediaPl, err := fetchMediaPlaylist(targetURI)
    if err != nil {
       return err
@@ -140,10 +134,8 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
-
    var firstData []byte
    var skipFirst bool
-
    // Correctly handle the initialization segment (EXT-X-MAP).
    if typeInfo.IsFMP4 && mediaPl.Map != nil {
       // FMP4 with a separate init segment. This is our firstData.
@@ -162,7 +154,6 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
       // The worker pool must skip this first segment since we've already handled it.
       skipFirst = true
    }
-
    allRequests := make([]mediaRequest, len(hlsSegs))
    for i, segment := range hlsSegs {
       allRequests[i] = mediaRequest{url: segment.url, header: segment.header}
@@ -171,15 +162,14 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    if err != nil {
       return err
    }
-
    return execute(firstData, streamId, typeInfo, protection, allRequests, skipFirst, threads, fetchKey)
 }
 
 // execute takes the prepared data, fetches keys, and starts the download engine.
 func execute(
    firstData []byte,
-   streamID string,
-   typeInfo *TypeInfo,
+   streamId string,
+   typeInfo *typeInfo,
    manifestProtection *protectionInfo,
    allRequests []mediaRequest,
    skipFirst bool,
@@ -190,48 +180,44 @@ func execute(
       log.Println("Stream contains no data.")
       return nil
    }
-
-   fileName := streamID + typeInfo.Extension
+   fileName := streamId + typeInfo.Extension
    log.Println("Create", fileName)
    file, err := os.Create(fileName)
    if err != nil {
       return err
    }
    defer file.Close()
-
    remux, initProtection, err := initializeRemuxer(typeInfo.IsFMP4, file, firstData)
    if err != nil {
       return err
    }
-
    var key []byte
    if fetchKey != nil {
-      var keyID, contentID []byte
+      var keyId, contentId []byte
       if manifestProtection != nil {
-         keyID = manifestProtection.KeyID
+         keyId = manifestProtection.KeyId
          if len(manifestProtection.Pssh) > 0 {
             var wvData widevine.PsshData
             psshBox := sofia.PsshBox{}
             if err := psshBox.Parse(manifestProtection.Pssh); err == nil {
                if err := wvData.Unmarshal(psshBox.Data); err == nil {
-                  contentID = wvData.ContentId
+                  contentId = wvData.ContentId
                }
             }
          }
       }
-      if keyID == nil && initProtection != nil {
-         keyID = initProtection.KeyID
-         log.Printf("key ID from PSSH: %x", keyID)
+      if keyId == nil && initProtection != nil {
+         keyId = initProtection.KeyId
+         log.Printf("key ID from PSSH: %x", keyId)
       }
-      if keyID == nil {
+      if keyId == nil {
          return fmt.Errorf("no key ID found for protected stream")
       }
-      key, err = fetchKey(keyID, contentID)
+      key, err = fetchKey(keyId, contentId)
       if err != nil {
          return fmt.Errorf("failed to fetch decryption key: %w", err)
       }
    }
-
    remainingRequests := allRequests
    if skipFirst && len(allRequests) > 0 {
       remainingRequests = allRequests[1:]
@@ -248,7 +234,6 @@ func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Rem
       }
       return nil, nil, nil
    }
-
    var remux sofia.Remuxer
    remux.Writer = file
    if len(firstData) > 0 {
@@ -256,18 +241,17 @@ func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Rem
          return nil, nil, err
       }
    }
-
    var initProtection *protectionInfo
-   wvIDBytes, err := hex.DecodeString(widevineSystemId)
+   wvIdBytes, err := hex.DecodeString(widevineSystemId)
    if err != nil {
       panic("failed to decode hardcoded widevine system id")
    }
    if remux.Moov != nil {
-      if wvBox, ok := remux.Moov.FindPssh(wvIDBytes); ok {
+      if wvBox, ok := remux.Moov.FindPssh(wvIdBytes); ok {
          var psshData widevine.PsshData
          if err := psshData.Unmarshal(wvBox.Data); err == nil {
             if len(psshData.KeyIds) > 0 {
-               initProtection = &protectionInfo{KeyID: psshData.KeyIds[0]}
+               initProtection = &protectionInfo{KeyId: psshData.KeyIds[0]}
             }
          }
       }

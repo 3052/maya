@@ -23,15 +23,15 @@ type segment struct {
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
    var psshData []byte
-   var keyID []byte
+   var keyId []byte
    for _, contentProtection := range rep.GetContentProtection() {
-      if keyID == nil {
+      if keyId == nil {
          kid, err := contentProtection.GetDefaultKid()
          if err != nil {
             return nil, fmt.Errorf("could not parse default_KID: %w", err)
          }
          if kid != nil {
-            keyID = kid
+            keyId = kid
          }
       }
       if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
@@ -44,11 +44,11 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
          }
       }
    }
-   if keyID == nil {
+   if keyId == nil {
       return nil, nil
    }
-   log.Printf("key ID from manifest: %x", keyID)
-   return &protectionInfo{Pssh: psshData, KeyID: keyID}, nil
+   log.Printf("key ID from manifest: %x", keyId)
+   return &protectionInfo{Pssh: psshData, KeyId: keyId}, nil
 }
 
 // getDashMediaRequests generates the full list of media segments for a DASH representation group.
@@ -56,7 +56,6 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
    if len(group) == 0 {
       return nil, nil
    }
-
    // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
    if group[0].SegmentBase != nil {
       segs, err := generateSegmentsFromSidx(group[0], sidxData)
@@ -69,7 +68,6 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
       }
       return requests, nil
    }
-
    // For other types (SegmentTemplate, SegmentList), iterate through each Period's
    // Representation to build the full list. This logic was correct.
    var requests []mediaRequest
