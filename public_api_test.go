@@ -43,7 +43,7 @@ func TestHls(t *testing.T) {
       t.Fatal(err)
    }
    job_item := WidevineJob{
-      ClientID:   cache + "/L3/client_id.bin",
+      ClientId:   cache + "/L3/client_id.bin",
       PrivateKey: cache + "/L3/private_key.pem",
    }
    err = job_item.DownloadHls(data, address, "12")

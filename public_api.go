@@ -50,16 +50,16 @@ type PlayReadyJob struct {
 
 // DownloadDash parses and downloads a PlayReady-encrypted DASH stream.
 func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.playReadyKey(keyID)
+   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
+      return j.playReadyKey(keyId)
    }
    return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
 }
 
 // DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
 func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.playReadyKey(keyID)
+   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
+      return j.playReadyKey(keyId)
    }
    return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
 }
@@ -67,29 +67,28 @@ func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId strin
 // WidevineJob holds configuration for a Widevine encrypted download.
 type WidevineJob struct {
    Threads    int
-   ClientID   string
+   ClientId   string
    PrivateKey string
    Send       func([]byte) ([]byte, error)
 }
 
 // DownloadDash parses and downloads a Widevine-encrypted DASH stream.
 func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.widevineKey(keyID, contentID)
+   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
+      return j.widevineKey(keyId, contentId)
    }
    return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
 }
 
 // DownloadHls parses and downloads a Widevine-encrypted HLS stream.
 func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
-   keyFetcher := func(keyID, contentID []byte) ([]byte, error) {
-      return j.widevineKey(keyID, contentID)
+   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
+      return j.widevineKey(keyId, contentId)
    }
    return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
 }
 
 // --- Internal Helpers ---
-
 // parseDash is an internal helper to parse a DASH manifest.
 func parseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    manifest, err := dash.Parse(body)
