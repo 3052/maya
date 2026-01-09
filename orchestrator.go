@@ -115,8 +115,8 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
    if !typeInfo.IsFMP4 {
       return nil, nil
    }
-   isInitSegmentBased := rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil
-   if isInitSegmentBased {
+   // Case 1: Initialization defined in SegmentBase
+   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
       baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {
          return nil, err
@@ -124,10 +124,19 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
       return getSegment(baseUrl, header)
    }
+   // Case 2: Initialization defined in SegmentTemplate
    if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
       initUrl, err := template.ResolveInitialization(rep)
       if err != nil {
-         return nil, fmt.Errorf("failed to resolve DASH initialization URL: %w", err)
+         return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
+      }
+      return getSegment(initUrl, nil)
+   }
+   // Case 3: Initialization defined in SegmentList
+   if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
+      initUrl, err := sl.Initialization.ResolveSourceUrl()
+      if err != nil {
+         return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
       return getSegment(initUrl, nil)
    }
