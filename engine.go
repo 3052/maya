@@ -32,6 +32,17 @@ type result struct {
    err      error
 }
 
+// clamp ensures a value stays within a specified range.
+func clamp(value, low, high int) int {
+   if value < low {
+      return low
+   }
+   if value > high {
+      return high
+   }
+   return value
+}
+
 // executeDownload runs the concurrent worker pool to download all segments.
 func executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
    if len(requests) == 0 {
@@ -40,7 +51,7 @@ func executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, 
       }
       return nil
    }
-   numWorkers := max(threads, 1)
+   numWorkers := clamp(threads, 1, 9)
    workQueue := make(chan workItem, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
