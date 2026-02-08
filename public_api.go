@@ -8,15 +8,19 @@ import (
    "net/url"
 )
 
-func Usage(names ...string) {
-   for _, name := range names {
-      look := flag.Lookup(name)
-      fmt.Printf("-%v %v\n", look.Name, look.Usage)
-      if look.DefValue != "" {
-         fmt.Printf("\tdefault %v\n", look.DefValue)
+func Usage(groups ...[]string) {
+   for i, group := range groups {
+      if i >= 1 {
+         fmt.Println()
+      }
+      for _, name := range group {
+         look := flag.Lookup(name)
+         fmt.Printf("-%v %v\n", look.Name, look.Usage)
+         if look.DefValue != "" {
+            fmt.Printf("\tdefault %v\n", look.DefValue)
+         }
       }
    }
-   fmt.Println()
 }
 
 // ListDash parses a DASH manifest and lists the available streams.
