@@ -3,20 +3,49 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "encoding/xml"
    "flag"
    "fmt"
+   "log"
    "net/url"
+   "os"
 )
 
-func Usage(names ...string) {
-   for _, name := range names {
-      look := flag.Lookup(name)
-      fmt.Printf("-%v %v\n", look.Name, look.Usage)
-      if look.DefValue != "" {
-         fmt.Printf("\tdefault %v\n", look.DefValue)
+func Read[T any](name string) (*T, error) {
+   data, err := os.ReadFile(name)
+   if err != nil {
+      return nil, err
+   }
+   var value T
+   err = xml.Unmarshal(data, &value)
+   if err != nil {
+      return nil, err
+   }
+   return &value, nil
+}
+
+func Write(name string, value any) error {
+   data, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   log.Println("WriteFile", name)
+   return os.WriteFile(name, data, os.ModePerm)
+}
+
+func Usage(groups [][]string) {
+   for i, group := range groups {
+      if i >= 1 {
+         fmt.Println()
+      }
+      for _, name := range group {
+         look := flag.Lookup(name)
+         fmt.Printf("-%v %v\n", look.Name, look.Usage)
+         if look.DefValue != "" {
+            fmt.Printf("\tdefault %v\n", look.DefValue)
+         }
       }
    }
-   fmt.Println()
 }
 
 // ListDash parses a DASH manifest and lists the available streams.
