@@ -11,7 +11,37 @@ import (
    "net/http"
    "net/url"
    "os"
+   "strings"
 )
+
+// orchestrateDownload contains the shared, high-level logic for executing any download job.
+func orchestrateDownload(job *downloadJob) error {
+   fileName := strings.ReplaceAll(job.streamId, "/", "_")
+   fileName += job.typeInfo.Extension
+   log.Println("Create", fileName)
+   file, err := os.Create(fileName)
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+   if !job.typeInfo.IsFMP4 {
+      // Non-FMP4 streams (e.g., VTT): download all segments and concatenate them directly.
+      return executeDownload(job.allRequests, nil, nil, file, job.threads)
+   }
+   // FMP4 streams: require an initialization segment and a remuxer.
+   remux, initProtection, err := initializeRemuxer(true, file, job.initSegmentData)
+   if err != nil {
+      return err
+   }
+   var key []byte
+   if job.fetchKey != nil {
+      key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
+      if err != nil {
+         return err
+      }
+   }
+   return executeDownload(job.allRequests, key, remux, file, job.threads)
+}
 
 // manifestType is an enum to distinguish between DASH and HLS.
 type manifestType int
@@ -184,34 +214,6 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    return orchestrateDownload(job)
 }
 
-// orchestrateDownload contains the shared, high-level logic for executing any download job.
-func orchestrateDownload(job *downloadJob) error {
-   fileName := job.streamId + job.typeInfo.Extension
-   log.Println("Create", fileName)
-   file, err := os.Create(fileName)
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-   if !job.typeInfo.IsFMP4 {
-      // Non-FMP4 streams (e.g., VTT): download all segments and concatenate them directly.
-      return executeDownload(job.allRequests, nil, nil, file, job.threads)
-   }
-   // FMP4 streams: require an initialization segment and a remuxer.
-   remux, initProtection, err := initializeRemuxer(true, file, job.initSegmentData)
-   if err != nil {
-      return err
-   }
-   var key []byte
-   if job.fetchKey != nil {
-      key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
-      if err != nil {
-         return err
-      }
-   }
-   return executeDownload(job.allRequests, key, remux, file, job.threads)
-}
-
 // getKeyForStream determines the correct key ID to use and fetches the key.
 func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
@@ -240,6 +242,7 @@ func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *pr
    }
    return key, nil
 }
+
 func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Remuxer, *protectionInfo, error) {
    if !isFMP4 {
       return nil, nil, nil

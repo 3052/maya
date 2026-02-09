@@ -11,6 +11,21 @@ import (
    "os"
 )
 
+func Usage(groups [][]string) {
+   for i, group := range groups {
+      if i >= 1 {
+         fmt.Println()
+      }
+      for _, name := range group {
+         look := flag.Lookup(name)
+         fmt.Printf("-%v %v\n", look.Name, look.Usage)
+         if look.DefValue != "" {
+            fmt.Printf("\tdefault %v\n", look.DefValue)
+         }
+      }
+   }
+}
+
 func Read[T any](name string) (*T, error) {
    data, err := os.ReadFile(name)
    if err != nil {
@@ -31,21 +46,6 @@ func Write(name string, value any) error {
    }
    log.Println("WriteFile", name)
    return os.WriteFile(name, data, os.ModePerm)
-}
-
-func Usage(groups [][]string) {
-   for i, group := range groups {
-      if i >= 1 {
-         fmt.Println()
-      }
-      for _, name := range group {
-         look := flag.Lookup(name)
-         fmt.Printf("-%v %v\n", look.Name, look.Usage)
-         if look.DefValue != "" {
-            fmt.Printf("\tdefault %v\n", look.DefValue)
-         }
-      }
-   }
 }
 
 // ListDash parses a DASH manifest and lists the available streams.
