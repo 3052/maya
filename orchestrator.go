@@ -16,10 +16,11 @@ import (
 
 // orchestrateDownload contains the shared, high-level logic for executing any download job.
 func orchestrateDownload(job *downloadJob) error {
-   fileName := strings.ReplaceAll(job.streamId, "/", "_")
-   fileName += job.typeInfo.Extension
-   log.Println("Create", fileName)
-   file, err := os.Create(fileName)
+   var name strings.Builder
+   name.WriteString(strings.ReplaceAll(job.streamId, "/", "_"))
+   name.WriteString(job.typeInfo.Extension)
+   log.Println("Create", &name)
+   file, err := os.Create(name.String())
    if err != nil {
       return err
    }
