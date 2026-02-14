@@ -11,19 +11,25 @@ import (
    "os"
 )
 
-func Usage(groups [][]string) {
+// Usage prints a usage message documenting all defined command-line flags.
+// It returns an error if any of the specified flag names are not found.
+func Usage(groups [][]string) error {
    for i, group := range groups {
       if i >= 1 {
          fmt.Println()
       }
       for _, name := range group {
          look := flag.Lookup(name)
+         if look == nil {
+            return fmt.Errorf("flag provided but not defined: -%s", name)
+         }
          fmt.Printf("-%v %v\n", look.Name, look.Usage)
          if look.DefValue != "" {
             fmt.Printf("\tdefault %v\n", look.DefValue)
          }
       }
    }
+   return nil
 }
 
 func Read[T any](name string) (*T, error) {
