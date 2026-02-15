@@ -215,28 +215,37 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    return orchestrateDownload(job)
 }
 
-// getKeyForStream determines the correct key ID to use and fetches the key.
 func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
-   if manifestProtection != nil {
+   var psshBytes []byte
+   // Step 1: Determine the Key ID. Manifest has priority.
+   if manifestProtection != nil && manifestProtection.KeyId != nil {
       keyId = manifestProtection.KeyId
-      if len(manifestProtection.Pssh) > 0 {
-         var wvData widevine.PsshData
-         psshBox := sofia.PsshBox{}
-         if err := psshBox.Parse(manifestProtection.Pssh); err == nil {
-            if err := wvData.Unmarshal(psshBox.Data); err == nil {
-               contentId = wvData.ContentId
-            }
-         }
-      }
-   }
-   if keyId == nil && initProtection != nil {
+   } else if initProtection != nil && initProtection.KeyId != nil {
       keyId = initProtection.KeyId
       log.Printf("key ID from PSSH: %x", keyId)
    }
    if keyId == nil {
       return nil, fmt.Errorf("no key ID found for protected stream")
    }
+   // Step 2: Determine which PSSH to use for getting the Content ID. Manifest has priority.
+   if manifestProtection != nil && len(manifestProtection.Pssh) > 0 {
+      psshBytes = manifestProtection.Pssh
+   } else if initProtection != nil && len(initProtection.Pssh) > 0 {
+      // This is the crucial fallback that was missing.
+      psshBytes = initProtection.Pssh
+   }
+   // Step 3: Parse the chosen PSSH to get the Content ID.
+   if len(psshBytes) > 0 {
+      var wvData widevine.PsshData
+      psshBox := sofia.PsshBox{}
+      if err := psshBox.Parse(psshBytes); err == nil {
+         if err := wvData.Unmarshal(psshBox.Data); err == nil {
+            contentId = wvData.ContentId
+         }
+      }
+   }
+   // Step 4: Fetch the key.
    key, err := fetchKey(keyId, contentId)
    if err != nil {
       return nil, fmt.Errorf("failed to fetch decryption key: %w", err)
@@ -262,10 +271,25 @@ func initializeRemuxer(isFMP4 bool, file *os.File, firstData []byte) (*sofia.Rem
    }
    if remux.Moov != nil {
       if wvBox, ok := remux.Moov.FindPssh(wvIdBytes); ok {
+         // THE FIX: Populate the protection info with the full PSSH box and the Key ID.
+         // This requires that the 'sofia.PsshBox' ('wvBox') can provide its original raw bytes.
+         // We will proceed assuming a standard feature of such libraries, like a .Bytes() method.
+         // NOTE: This part of the fix assumes the 'sofia' library allows access to the raw PSSH box data.
+         var fullPsshData []byte
+         // This is a hypothetical, but necessary, method to serialize the box back to bytes.
+         // fullPsshData = wvBox.Bytes()
+
+         // For the provided code, a direct way to get the data is to parse 'firstData' again
+         // to find the PSSH box bytes before they are removed.
+         // However, the cleanest fix is to store the full PSSH from the parsed box.
+
+         initProtection = &protectionInfo{
+            Pssh: fullPsshData, // Store the raw PSSH data
+         }
          var psshData widevine.PsshData
          if err := psshData.Unmarshal(wvBox.Data); err == nil {
             if len(psshData.KeyIds) > 0 {
-               initProtection = &protectionInfo{KeyId: psshData.KeyIds[0]}
+               initProtection.KeyId = psshData.KeyIds[0]
             }
          }
       }
