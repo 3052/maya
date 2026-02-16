@@ -9,21 +9,11 @@ import (
    "strings"
 )
 
-// getDashProtection extracts Widevine PSSH and the default Key ID from a representation.
+// getDashProtection extracts Widevine PSSH data from a representation.
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
    var psshData []byte
-   var keyId []byte
    for _, contentProtection := range rep.GetContentProtection() {
-      if keyId == nil {
-         kid, err := contentProtection.GetDefaultKid()
-         if err != nil {
-            return nil, fmt.Errorf("could not parse default_KID: %w", err)
-         }
-         if kid != nil {
-            keyId = kid
-         }
-      }
       if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
          pssh, err := contentProtection.GetPssh()
          if err != nil {
@@ -34,11 +24,12 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
          }
       }
    }
-   if keyId == nil {
+
+   if psshData == nil {
       return nil, nil
    }
-   log.Printf("key ID from MPD: %x", keyId)
-   return &protectionInfo{Pssh: psshData, KeyId: keyId}, nil
+   // The KeyId field is explicitly set to nil, as it must only come from the MP4.
+   return &protectionInfo{Pssh: psshData, KeyId: nil}, nil
 }
 
 // getMiddleBitrate calculates an accurate bitrate for a representation.

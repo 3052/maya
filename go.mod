@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	41.neocities.org/drm v1.7.9
 	41.neocities.org/luna v1.33.0
-	41.neocities.org/sofia v1.13.4
+	41.neocities.org/sofia v1.13.5
 )
 
 require (

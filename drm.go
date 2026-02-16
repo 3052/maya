@@ -124,38 +124,44 @@ func (j *PlayReadyJob) playReadyKey(keyId []byte) ([]byte, error) {
 
 func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
-   var psshBytes []byte
-   // Step 1: Determine the Key ID. Manifest has priority.
-   if manifestProtection != nil && manifestProtection.KeyId != nil {
-      keyId = manifestProtection.KeyId
-   } else if initProtection != nil && initProtection.KeyId != nil {
-      keyId = initProtection.KeyId
-      log.Printf("key ID from MP4: %x", keyId)
-   }
-   if keyId == nil {
-      return nil, fmt.Errorf("no key ID found for protected stream")
-   }
-   // Step 2: Determine which PSSH to use for getting the Content ID. Manifest has priority.
+
+   // Priority 1: Get Content ID from manifest's PSSH.
    if manifestProtection != nil && len(manifestProtection.Pssh) > 0 {
-      psshBytes = manifestProtection.Pssh
-   } else if initProtection != nil && len(initProtection.Pssh) > 0 {
-      // This is the crucial fallback that was missing.
-      psshBytes = initProtection.Pssh
-   }
-   // Step 3: Parse the chosen PSSH to get the Content ID.
-   if len(psshBytes) > 0 {
-      var wvData widevine.PsshData
-      psshBox := sofia.PsshBox{}
-      if err := psshBox.Parse(psshBytes); err == nil {
-         if err := wvData.Unmarshal(psshBox.Data); err == nil {
-            if len(wvData.ContentId) > 0 {
-               contentId = wvData.ContentId
-               log.Printf("content ID: %s", contentId)
-            }
+      var psshBox sofia.PsshBox
+      if err := psshBox.Parse(manifestProtection.Pssh); err == nil {
+         var wvData widevine.PsshData
+         if err := wvData.Unmarshal(psshBox.Data); err == nil && len(wvData.ContentId) > 0 {
+            contentId = wvData.ContentId
+            log.Printf("content ID from manifest: %s", contentId)
          }
       }
    }
-   // Step 4: Fetch the key.
+
+   // Priority 2: Get Content ID from MP4's PSSH (if not found in manifest).
+   if contentId == nil && initProtection != nil && len(initProtection.Pssh) > 0 {
+      var psshBox sofia.PsshBox
+      if err := psshBox.Parse(initProtection.Pssh); err == nil {
+         var wvData widevine.PsshData
+         if err := wvData.Unmarshal(psshBox.Data); err == nil && len(wvData.ContentId) > 0 {
+            contentId = wvData.ContentId
+            log.Printf("content ID from MP4: %s", contentId)
+         }
+      }
+   }
+
+   // Get Key ID ONLY from the MP4 'tenc' box. The manifest is ignored for Key ID.
+   if initProtection != nil && initProtection.KeyId != nil {
+      // This KeyId is guaranteed to have been sourced EXCLUSIVELY from the 'tenc' box
+      // by the logic in initializeRemuxer.
+      keyId = initProtection.KeyId
+      log.Printf("key ID from MP4 tenc: %x", keyId)
+   }
+
+   if keyId == nil {
+      return nil, errors.New("could not determine key ID from MP4 tenc box")
+   }
+
+   // Finally, fetch the key.
    key, err := fetchKey(keyId, contentId)
    if err != nil {
       return nil, fmt.Errorf("failed to fetch decryption key: %w", err)

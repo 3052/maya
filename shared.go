@@ -3,9 +3,14 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "errors"
    "fmt"
+   "io"
+   "log"
+   "net/http"
    "net/url"
    "strconv"
+   "strings"
 )
 
 // typeInfo holds the determined properties of a media stream.
@@ -29,21 +34,17 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
 }
 
 // detectHlsType finds the correct stream in an HLS playlist by its ID and determines its type.
-// It returns the type info, the target URI for the media playlist, and any error.
 func detectHlsType(playlist *hls.MasterPlaylist, streamId string) (*typeInfo, *url.URL, error) {
    keyInt, err := strconv.Atoi(streamId)
    if err != nil {
       return nil, nil, fmt.Errorf("invalid HLS StreamId, must be an integer: %q", streamId)
    }
-   // Check variant streams (multiplexed video/audio)
    for _, variant := range playlist.StreamInfs {
       if variant.ID == keyInt {
-         // Variant streams are treated as primary MP4 content.
          info := &typeInfo{Extension: ".mp4", IsFMP4: true}
          return info, variant.URI, nil
       }
    }
-   // Check media renditions (audio-only, subtitles)
    for _, rendition := range playlist.Medias {
       if rendition.ID == keyInt {
          var info *typeInfo
@@ -59,4 +60,43 @@ func detectHlsType(playlist *hls.MasterPlaylist, streamId string) (*typeInfo, *u
       }
    }
    return nil, nil, fmt.Errorf("stream with ID not found: %d", keyInt)
+}
+
+// Transport configures the default HTTP transport for logging and proxy support.
+func Transport(policy func(*http.Request) string) {
+   http.DefaultTransport = &http.Transport{
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         flags := policy(req)
+         if strings.ContainsRune(flags, 'L') {
+            method := req.Method
+            if method == "" {
+               method = http.MethodGet
+            }
+            log.Println(method, req.URL)
+         }
+         if strings.ContainsRune(flags, 'P') {
+            return http.ProxyFromEnvironment(req)
+         }
+         return nil, nil
+      },
+   }
+}
+
+// getSegment performs an HTTP GET request for a segment and returns its body.
+func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
+   req := http.Request{URL: targetUrl}
+   if header != nil {
+      req.Header = header
+   } else {
+      req.Header = http.Header{}
+   }
+   resp, err := http.DefaultClient.Do(&req)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+      return nil, errors.New(resp.Status)
+   }
+   return io.ReadAll(resp.Body)
 }
