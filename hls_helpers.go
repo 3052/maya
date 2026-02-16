@@ -73,3 +73,44 @@ func hlsSegments(mediaPl *hls.MediaPlaylist) ([]segment, error) {
    }
    return segments, nil
 }
+
+// downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
+func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
+   typeInfo, targetURI, err := detectHlsType(playlist, streamId)
+   if err != nil {
+      return err
+   }
+   mediaPl, err := fetchMediaPlaylist(targetURI)
+   if err != nil {
+      return err
+   }
+   hlsSegs, err := hlsSegments(mediaPl)
+   if err != nil {
+      return err
+   }
+   allRequests := make([]mediaRequest, len(hlsSegs))
+   for i, seg := range hlsSegs {
+      allRequests[i] = mediaRequest{url: seg.url, header: seg.header}
+   }
+   var initData []byte
+   if typeInfo.IsFMP4 && mediaPl.Map != nil {
+      initData, err = getSegment(mediaPl.Map, nil)
+      if err != nil {
+         return fmt.Errorf("failed to get HLS initialization segment: %w", err)
+      }
+   }
+   protection, err := getHlsProtection(mediaPl)
+   if err != nil {
+      return err
+   }
+   job := &downloadJob{
+      streamId:           streamId,
+      typeInfo:           typeInfo,
+      allRequests:        allRequests,
+      initSegmentData:    initData,
+      manifestProtection: protection,
+      threads:            threads,
+      fetchKey:           fetchKey,
+   }
+   return orchestrateDownload(job)
+}

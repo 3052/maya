@@ -11,6 +11,14 @@ import (
    "os"
 )
 
+// manifestType is an enum to distinguish between DASH and HLS.
+type manifestType int
+
+const (
+   dashManifest manifestType = iota
+   hlsManifest
+)
+
 // Usage prints a usage message documenting all defined command-line flags.
 // It returns an error if any of the specified flag names are not found.
 func Usage(groups [][]string) error {
@@ -136,6 +144,31 @@ func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId string
 }
 
 // --- Internal Helpers ---
+
+// runDownload is the main entry point that dispatches to the correct manifest-specific download logic.
+func runDownload(
+   body []byte,
+   baseURL *url.URL,
+   threads int,
+   streamId string,
+   mType manifestType,
+   fetchKey keyFetcher,
+) error {
+   if mType == dashManifest {
+      manifest, err := parseDash(body, baseURL)
+      if err != nil {
+         return err
+      }
+      return downloadDash(manifest, threads, streamId, fetchKey)
+   }
+   // Default to HLS if not DASH
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadHls(playlist, threads, streamId, fetchKey)
+}
+
 // parseDash is an internal helper to parse a DASH manifest.
 func parseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
    manifest, err := dash.Parse(body)

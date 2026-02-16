@@ -2,22 +2,12 @@ package maya
 
 import (
    "41.neocities.org/luna/dash"
-   "41.neocities.org/sofia"
    "errors"
    "fmt"
    "log"
    "net/http"
-   "net/url"
    "strings"
 )
-
-// Internal segment representation, primarily for DASH's detailed view.
-type segment struct {
-   url      *url.URL
-   header   http.Header
-   duration float64
-   sizeBits uint64
-}
 
 // getDashProtection extracts Widevine PSSH and the default Key ID from a representation.
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
@@ -47,40 +37,8 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    if keyId == nil {
       return nil, nil
    }
-   log.Printf("key ID from manifest: %x", keyId)
+   log.Printf("key ID from MPD: %x", keyId)
    return &protectionInfo{Pssh: psshData, KeyId: keyId}, nil
-}
-
-// getDashMediaRequests generates the full list of media segments for a DASH representation group.
-func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]mediaRequest, error) {
-   if len(group) == 0 {
-      return nil, nil
-   }
-   // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
-   if group[0].SegmentBase != nil {
-      segs, err := generateSegmentsFromSidx(group[0], sidxData)
-      if err != nil {
-         return nil, err
-      }
-      requests := make([]mediaRequest, len(segs))
-      for i, seg := range segs {
-         requests[i] = mediaRequest{url: seg.url, header: seg.header}
-      }
-      return requests, nil
-   }
-   // For other types (SegmentTemplate, SegmentList), iterate through each Period's
-   // Representation to build the full list. This logic was correct.
-   var requests []mediaRequest
-   for _, rep := range group {
-      segs, err := generateSegments(rep)
-      if err != nil {
-         return nil, err
-      }
-      for _, seg := range segs {
-         requests = append(requests, mediaRequest{url: seg.url, header: seg.header})
-      }
-   }
-   return requests, nil
 }
 
 // getMiddleBitrate calculates an accurate bitrate for a representation.
@@ -143,99 +101,86 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
    return nil
 }
 
-// generateSegmentsFromSidx parses a pre-fetched sidx box to generate segments.
-func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segment, error) {
-   baseUrl, err := rep.ResolveBaseUrl()
-   if err != nil {
-      return nil, err
-   }
-   parsed, err := sofia.Parse(sidxData)
-   if err != nil {
-      return nil, err
-   }
-   sidx, ok := sofia.FindSidx(parsed)
+// downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
+func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
+   dashGroup, ok := manifest.GetRepresentations()[streamId]
    if !ok {
-      return nil, errors.New("box 'sidx' not found")
+      return fmt.Errorf("representation group not found %v", streamId)
    }
-   _, end, err := dash.ParseRange(rep.SegmentBase.IndexRange)
+   if len(dashGroup) == 0 {
+      return fmt.Errorf("representation group is empty")
+   }
+   rep := dashGroup[0]
+   typeInfo, err := detectDashType(rep)
    if err != nil {
-      return nil, err
+      return err
    }
-   currentOffset := end + 1
-   segments := make([]segment, len(sidx.References))
-   for refIdx, ref := range sidx.References {
-      endOffset := currentOffset + uint64(ref.ReferencedSize) - 1
-      header := make(http.Header)
-      header.Set("range", "bytes="+dash.FormatRange(currentOffset, endOffset))
-      segments[refIdx] = segment{
-         url:      baseUrl,
-         header:   header,
-         duration: float64(ref.SubsegmentDuration) / float64(sidx.Timescale),
-         sizeBits: uint64(ref.ReferencedSize) * 8,
+   var sidxData []byte
+   if rep.SegmentBase != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
       }
-      currentOffset += uint64(ref.ReferencedSize)
+      header := http.Header{}
+      header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
+      sidxData, err = getSegment(baseUrl, header)
+      if err != nil {
+         return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
+      }
    }
-   return segments, nil
+   allRequests, err := getDashMediaRequests(dashGroup, sidxData)
+   if err != nil {
+      return err
+   }
+   initData, err := getDashInitSegment(rep, typeInfo)
+   if err != nil {
+      return err
+   }
+   protection, err := getDashProtection(rep)
+   if err != nil {
+      return err
+   }
+   job := &downloadJob{
+      streamId:           rep.Id,
+      typeInfo:           typeInfo,
+      allRequests:        allRequests,
+      initSegmentData:    initData,
+      manifestProtection: protection,
+      threads:            threads,
+      fetchKey:           fetchKey,
+   }
+   return orchestrateDownload(job)
 }
 
-// generateSegments centralizes the logic to produce a list of segments.
-func generateSegments(rep *dash.Representation) ([]segment, error) {
-   baseUrl, err := rep.ResolveBaseUrl()
-   if err != nil {
-      return nil, err
+// getDashInitSegment locates and fetches the initialization segment for a DASH representation.
+func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
+   if !typeInfo.IsFMP4 {
+      return nil, nil
    }
-   if template := rep.GetSegmentTemplate(); template != nil {
-      urls, err := template.GetSegmentUrls(rep)
+   // Case 1: Initialization defined in SegmentBase
+   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {
          return nil, err
       }
-      segments := make([]segment, len(urls))
-      timescale := float64(template.GetTimescale())
-      if template.SegmentTimeline != nil {
-         currentIdx := 0
-         for _, entry := range template.SegmentTimeline.S {
-            count := 1
-            if entry.R > 0 {
-               count += entry.R
-            }
-            dur := float64(entry.D) / timescale
-            for repeatIdx := 0; repeatIdx < count; repeatIdx++ {
-               if currentIdx < len(segments) {
-                  segments[currentIdx].url = urls[currentIdx]
-                  segments[currentIdx].duration = dur
-               }
-               currentIdx++
-            }
-         }
-      } else {
-         dur := float64(template.Duration) / timescale
-         for segIdx := range segments {
-            segments[segIdx].url = urls[segIdx]
-            segments[segIdx].duration = dur
-         }
-      }
-      return segments, nil
+      header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
+      return getSegment(baseUrl, header)
    }
-   if segmentList := rep.SegmentList; segmentList != nil {
-      segments := make([]segment, 0, len(segmentList.SegmentUrls))
-      dur := float64(segmentList.Duration) / float64(segmentList.GetTimescale())
-      for _, seg := range segmentList.SegmentUrls {
-         mediaURL, err := seg.ResolveMedia()
-         if err != nil {
-            return nil, err
-         }
-         segments = append(segments, segment{
-            url:      mediaURL,
-            duration: dur,
-         })
+   // Case 2: Initialization defined in SegmentTemplate
+   if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
+      initUrl, err := template.ResolveInitialization(rep)
+      if err != nil {
+         return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
       }
-      return segments, nil
+      return getSegment(initUrl, nil)
    }
-   var duration float64
-   if rep.Parent != nil && rep.Parent.Parent != nil {
-      if periodDuration, err := rep.Parent.Parent.GetDuration(); err == nil {
-         duration = periodDuration.Seconds()
+   // Case 3: Initialization defined in SegmentList
+   if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
+      initUrl, err := sl.Initialization.ResolveSourceUrl()
+      if err != nil {
+         return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
+      return getSegment(initUrl, nil)
    }
-   return []segment{{url: baseUrl, duration: duration}}, nil
+   return nil, nil
 }

@@ -3,8 +3,10 @@ package maya
 import (
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
+   "41.neocities.org/sofia"
    "bytes"
    "errors"
+   "fmt"
    "log"
    "math/big"
    "os"
@@ -24,6 +26,9 @@ type protectionInfo struct {
    Pssh  []byte
    KeyId []byte
 }
+
+// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
+type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func (j *WidevineJob) widevineKey(keyId []byte, contentId []byte) ([]byte, error) {
    if j.Send == nil {
@@ -63,9 +68,9 @@ func (j *WidevineJob) widevineKey(keyId []byte, contentId []byte) ([]byte, error
    if err != nil {
       return nil, err
    }
-   foundKey, ok := widevine.GetKey(keys, keyId)
-   if !ok {
-      return nil, errors.New("GetKey: key not found in response")
+   foundKey, err := widevine.GetKey(keys, keyId)
+   if err != nil {
+      return nil, err
    }
    var zero [16]byte
    if bytes.Equal(foundKey, zero[:]) {
@@ -114,5 +119,46 @@ func (j *PlayReadyJob) playReadyKey(keyId []byte) ([]byte, error) {
    }
    key := coord.Key()
    log.Printf("key %x", key)
+   return key, nil
+}
+
+func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
+   var keyId, contentId []byte
+   var psshBytes []byte
+   // Step 1: Determine the Key ID. Manifest has priority.
+   if manifestProtection != nil && manifestProtection.KeyId != nil {
+      keyId = manifestProtection.KeyId
+   } else if initProtection != nil && initProtection.KeyId != nil {
+      keyId = initProtection.KeyId
+      log.Printf("key ID from MP4: %x", keyId)
+   }
+   if keyId == nil {
+      return nil, fmt.Errorf("no key ID found for protected stream")
+   }
+   // Step 2: Determine which PSSH to use for getting the Content ID. Manifest has priority.
+   if manifestProtection != nil && len(manifestProtection.Pssh) > 0 {
+      psshBytes = manifestProtection.Pssh
+   } else if initProtection != nil && len(initProtection.Pssh) > 0 {
+      // This is the crucial fallback that was missing.
+      psshBytes = initProtection.Pssh
+   }
+   // Step 3: Parse the chosen PSSH to get the Content ID.
+   if len(psshBytes) > 0 {
+      var wvData widevine.PsshData
+      psshBox := sofia.PsshBox{}
+      if err := psshBox.Parse(psshBytes); err == nil {
+         if err := wvData.Unmarshal(psshBox.Data); err == nil {
+            if len(wvData.ContentId) > 0 {
+               contentId = wvData.ContentId
+               log.Printf("content ID: %s", contentId)
+            }
+         }
+      }
+   }
+   // Step 4: Fetch the key.
+   key, err := fetchKey(keyId, contentId)
+   if err != nil {
+      return nil, fmt.Errorf("failed to fetch decryption key: %w", err)
+   }
    return key, nil
 }
