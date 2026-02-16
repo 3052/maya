@@ -1,7 +1,9 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine"
    "41.neocities.org/luna/dash"
+   "41.neocities.org/sofia"
    "errors"
    "fmt"
    "log"
@@ -17,10 +19,11 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
       if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
          pssh, err := contentProtection.GetPssh()
          if err != nil {
-            return nil, fmt.Errorf("could not parse widevine pssh: %w", err)
+            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
          }
          if pssh != nil {
             psshData = pssh
+            break // Found it
          }
       }
    }
@@ -28,8 +31,20 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    if psshData == nil {
       return nil, nil
    }
+
+   var psshBox sofia.PsshBox
+   if err := psshBox.Parse(psshData); err != nil {
+      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
+   }
+
+   var wvData widevine.PsshData
+   if err := wvData.Unmarshal(psshBox.Data); err != nil {
+      // Not a fatal error, might just be a PSSH without a content ID
+      return &protectionInfo{ContentId: nil, KeyId: nil}, nil
+   }
+
    // The KeyId field is explicitly set to nil, as it must only come from the MP4.
-   return &protectionInfo{Pssh: psshData, KeyId: nil}, nil
+   return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
 }
 
 // getMiddleBitrate calculates an accurate bitrate for a representation.

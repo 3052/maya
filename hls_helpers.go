@@ -1,7 +1,9 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine"
    "41.neocities.org/luna/hls"
+   "41.neocities.org/sofia"
    "fmt"
    "io"
    "net/http"
@@ -43,8 +45,17 @@ func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
          if err != nil {
             return nil, fmt.Errorf("failed to decode Widevine PSSH data from HLS manifest: %w", err)
          }
-         // ONLY return the PSSH data. The KeyId field is explicitly set to nil.
-         return &protectionInfo{Pssh: psshData, KeyId: nil}, nil
+         var psshBox sofia.PsshBox
+         if err := psshBox.Parse(psshData); err != nil {
+            return nil, fmt.Errorf("failed to parse pssh box from HLS manifest: %w", err)
+         }
+         var wvData widevine.PsshData
+         if err := wvData.Unmarshal(psshBox.Data); err != nil {
+            // Not fatal, continue in case there's another key tag
+            continue
+         }
+         // ONLY return the Content ID. The KeyId field is explicitly set to nil for manifest data.
+         return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
       }
    }
    return nil, nil // No Widevine PSSH data found.

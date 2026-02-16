@@ -3,7 +3,6 @@ package maya
 import (
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
-   "41.neocities.org/sofia"
    "bytes"
    "errors"
    "fmt"
@@ -23,8 +22,8 @@ var (
 
 // protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
-   Pssh  []byte
-   KeyId []byte
+   ContentId []byte
+   KeyId     []byte
 }
 
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
@@ -122,37 +121,20 @@ func (j *PlayReadyJob) playReadyKey(keyId []byte) ([]byte, error) {
    return key, nil
 }
 
-func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
+func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
 
-   // Priority 1: Get Content ID from manifest's PSSH.
-   if manifestProtection != nil && len(manifestProtection.Pssh) > 0 {
-      var psshBox sofia.PsshBox
-      if err := psshBox.Parse(manifestProtection.Pssh); err == nil {
-         var wvData widevine.PsshData
-         if err := wvData.Unmarshal(psshBox.Data); err == nil && len(wvData.ContentId) > 0 {
-            contentId = wvData.ContentId
-            log.Printf("content ID from manifest: %s", contentId)
-         }
-      }
+   // Priority for Content ID is: Manifest -> Init Segment
+   if manifestProtection != nil && len(manifestProtection.ContentId) > 0 {
+      contentId = manifestProtection.ContentId
+      log.Printf("content ID from manifest: %s", contentId)
+   } else if initProtection != nil && len(initProtection.ContentId) > 0 {
+      contentId = initProtection.ContentId
+      log.Printf("content ID from MP4: %s", contentId)
    }
 
-   // Priority 2: Get Content ID from MP4's PSSH (if not found in manifest).
-   if contentId == nil && initProtection != nil && len(initProtection.Pssh) > 0 {
-      var psshBox sofia.PsshBox
-      if err := psshBox.Parse(initProtection.Pssh); err == nil {
-         var wvData widevine.PsshData
-         if err := wvData.Unmarshal(psshBox.Data); err == nil && len(wvData.ContentId) > 0 {
-            contentId = wvData.ContentId
-            log.Printf("content ID from MP4: %s", contentId)
-         }
-      }
-   }
-
-   // Get Key ID ONLY from the MP4 'tenc' box. The manifest is ignored for Key ID.
+   // Key ID MUST come from the init segment ('tenc' box).
    if initProtection != nil && initProtection.KeyId != nil {
-      // This KeyId is guaranteed to have been sourced EXCLUSIVELY from the 'tenc' box
-      // by the logic in initializeRemuxer.
       keyId = initProtection.KeyId
       log.Printf("key ID from MP4 tenc: %x", keyId)
    }
@@ -162,7 +144,7 @@ func getKeyForStream(fetchKey keyFetcher, manifestProtection, initProtection *pr
    }
 
    // Finally, fetch the key.
-   key, err := fetchKey(keyId, contentId)
+   key, err := fetcher(keyId, contentId)
    if err != nil {
       return nil, fmt.Errorf("failed to fetch decryption key: %w", err)
    }

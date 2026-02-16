@@ -1,9 +1,9 @@
 package maya
 
 import (
+   "41.neocities.org/drm/widevine"
    "41.neocities.org/sofia"
    "bytes"
-   "encoding/binary"
    "encoding/hex"
    "net/http"
    "net/url"
@@ -60,66 +60,6 @@ func orchestrateDownload(job *downloadJob) error {
    return executeDownload(job.allRequests, key, remux, file, job.threads)
 }
 
-// findOuterBox locates the raw byte slice of a top-level box in a stream.
-func findOuterBox(data []byte, outerBoxType [4]byte) ([]byte, bool) {
-   offset := 0
-   for offset < len(data) {
-      if offset+8 > len(data) {
-         return nil, false
-      }
-      size := binary.BigEndian.Uint32(data[offset:])
-      if bytes.Equal(data[offset+4:offset+8], outerBoxType[:]) {
-         if size == 0 {
-            return data[offset:], true
-         }
-         if offset+int(size) > len(data) {
-            return nil, false // Invalid size
-         }
-         return data[offset : offset+int(size)], true
-      }
-      if size == 0 {
-         return nil, false
-      }
-      if size < 8 {
-         return nil, false // Invalid size
-      }
-      offset += int(size)
-   }
-   return nil, false
-}
-
-// findInnerPssh locates the raw byte slice for a PSSH box inside a container box's payload.
-func findInnerPssh(containerPayload []byte, systemID []byte) []byte {
-   offset := 0
-   for offset < len(containerPayload) {
-      if offset+8 > len(containerPayload) {
-         return nil
-      }
-      size := binary.BigEndian.Uint32(containerPayload[offset:])
-      boxType := containerPayload[offset+4 : offset+8]
-
-      if string(boxType) == "pssh" {
-         if offset+28 <= len(containerPayload) {
-            psshSysID := containerPayload[offset+12 : offset+28]
-            if bytes.Equal(psshSysID, systemID) {
-               if size == 0 {
-                  size = uint32(len(containerPayload) - offset)
-               }
-               if offset+int(size) > len(containerPayload) {
-                  return nil // Invalid size
-               }
-               return containerPayload[offset : offset+int(size)]
-            }
-         }
-      }
-      if size == 0 || size < 8 {
-         return nil
-      }
-      offset += int(size)
-   }
-   return nil
-}
-
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
@@ -137,15 +77,15 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
          panic("failed to decode hardcoded widevine system id")
       }
 
-      // 1. Get raw PSSH bytes for Content ID lookup
-      if moovData, ok := findOuterBox(firstData, [4]byte{'m', 'o', 'o', 'v'}); ok {
-         moovPayload := moovData[8:] // Search within the moov payload
-         if rawPssh := findInnerPssh(moovPayload, wvIdBytes); rawPssh != nil {
-            initProtection.Pssh = rawPssh
+      // 1. Get Content ID from the PSSH box in the init segment.
+      if pssh, ok := remux.Moov.FindPssh(wvIdBytes); ok {
+         var wvData widevine.PsshData
+         if err := wvData.Unmarshal(pssh.Data); err == nil {
+            initProtection.ContentId = wvData.ContentId
          }
       }
 
-      // 2. Get key ID ONLY from MP4 'tenc' box.
+      // 2. Get key ID ONLY from the 'tenc' box.
       if len(remux.Moov.Trak) > 0 {
          trak := remux.Moov.Trak[0]
          if trak.Mdia != nil && trak.Mdia.Minf != nil && trak.Mdia.Minf.Stbl != nil && trak.Mdia.Minf.Stbl.Stsd != nil {
