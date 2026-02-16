@@ -84,17 +84,22 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
             initProtection.ContentId = wvData.ContentId
          }
       }
-
       // 2. Get key ID ONLY from the 'tenc' box.
       if len(remux.Moov.Trak) > 0 {
          trak := remux.Moov.Trak[0]
-         if trak.Mdia != nil && trak.Mdia.Minf != nil && trak.Mdia.Minf.Stbl != nil && trak.Mdia.Minf.Stbl.Stsd != nil {
-            for _, enc := range trak.Mdia.Minf.Stbl.Stsd.EncChildren {
-               if enc.Sinf != nil && enc.Sinf.Tenc != nil {
-                  var zeroKid [16]byte
-                  if !bytes.Equal(enc.Sinf.Tenc.DefaultKID[:], zeroKid[:]) {
-                     initProtection.KeyId = enc.Sinf.Tenc.DefaultKID[:]
-                     break
+         if trak.Mdia != nil {
+            if trak.Mdia.Minf != nil {
+               if trak.Mdia.Minf.Stbl != nil {
+                  if trak.Mdia.Minf.Stbl.Stsd != nil {
+                     for _, enc := range trak.Mdia.Minf.Stbl.Stsd.EncChildren {
+                        if enc.Sinf != nil && enc.Sinf.Schi != nil && enc.Sinf.Schi.Tenc != nil {
+                           var zeroKid [16]byte
+                           if !bytes.Equal(enc.Sinf.Schi.Tenc.DefaultKID[:], zeroKid[:]) {
+                              initProtection.KeyId = enc.Sinf.Schi.Tenc.DefaultKID[:]
+                              break
+                           }
+                        }
+                     }
                   }
                }
             }

@@ -11,6 +11,58 @@ import (
    "os"
 )
 
+// listStreamsDash is an internal helper to print streams from a parsed manifest.
+func listStreamsDash(manifest *dash.Mpd) error {
+   sidxCache := make(map[string][]byte)
+   groups := manifest.GetRepresentations()
+   repsForSorting := make([]*dash.Representation, 0, len(groups))
+   for _, group := range groups {
+      representation := group[len(group)/2]
+      if representation.GetMimeType() == "video/mp4" {
+         if err := getMiddleBitrate(representation, sidxCache); err != nil {
+            return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
+         }
+      }
+      repsForSorting = append(repsForSorting, representation)
+   }
+   dash.SortByBandwidth(repsForSorting)
+
+   for i, representation := range repsForSorting {
+      if i > 0 {
+         fmt.Println()
+      }
+      fmt.Println(representation)
+   }
+   return nil
+}
+
+// listStreamsHls is an internal helper to print streams from a parsed playlist.
+func listStreamsHls(playlist *hls.MasterPlaylist) error {
+   playlist.Sort()
+
+   var firstItemPrinted bool
+
+   for _, rendition := range playlist.Medias {
+      if firstItemPrinted {
+         fmt.Println()
+      } else {
+         firstItemPrinted = true
+      }
+      fmt.Println(rendition)
+   }
+
+   for _, variant := range playlist.StreamInfs {
+      if firstItemPrinted {
+         fmt.Println()
+      } else {
+         firstItemPrinted = true
+      }
+      fmt.Println(variant)
+   }
+
+   return nil
+}
+
 // manifestType is an enum to distinguish between DASH and HLS.
 type manifestType int
 
@@ -188,40 +240,4 @@ func parseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    }
    master.ResolveURIs(baseURL)
    return master, nil
-}
-
-// listStreamsDash is an internal helper to print streams from a parsed manifest.
-func listStreamsDash(manifest *dash.Mpd) error {
-   sidxCache := make(map[string][]byte)
-   groups := manifest.GetRepresentations()
-   repsForSorting := make([]*dash.Representation, 0, len(groups))
-   for _, group := range groups {
-      representation := group[len(group)/2]
-      if representation.GetMimeType() == "video/mp4" {
-         if err := getMiddleBitrate(representation, sidxCache); err != nil {
-            return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
-         }
-      }
-      repsForSorting = append(repsForSorting, representation)
-   }
-   dash.SortByBandwidth(repsForSorting)
-   for _, representation := range repsForSorting {
-      fmt.Println(representation)
-      fmt.Println()
-   }
-   return nil
-}
-
-// listStreamsHls is an internal helper to print streams from a parsed playlist.
-func listStreamsHls(playlist *hls.MasterPlaylist) error {
-   playlist.Sort()
-   for _, rendition := range playlist.Medias {
-      fmt.Println(rendition)
-      fmt.Println()
-   }
-   for _, variant := range playlist.StreamInfs {
-      fmt.Println(variant)
-      fmt.Println()
-   }
-   return nil
 }
