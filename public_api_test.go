@@ -13,11 +13,8 @@ import (
 
 func TestDash(t *testing.T) {
    log.SetFlags(log.Ltime)
-   Transport(func(req *http.Request) string {
-      if path.Ext(req.URL.Path) == ".mp4" {
-         return ""
-      }
-      return "L"
+   SetTransport(func(req *http.Request) (string, bool) {
+      return "", path.Ext(req.URL.Path) != ".mp4"
    })
    address, data, err := get(dash_test)
    if err != nil {
@@ -31,8 +28,8 @@ func TestDash(t *testing.T) {
 
 func TestHls(t *testing.T) {
    log.SetFlags(log.Ltime)
-   Transport(func(req *http.Request) string {
-      return "L"
+   SetTransport(func(*http.Request) (string, bool) {
+      return "", true
    })
    address, data, err := get(hls_test)
    if err != nil {
@@ -58,11 +55,9 @@ func get(raw_url string) (*url.URL, []byte, error) {
       return nil, nil, err
    }
    defer resp.Body.Close()
-
    if resp.StatusCode != http.StatusOK {
       return nil, nil, fmt.Errorf("bad status: %s", resp.Status)
    }
-
    data, err := io.ReadAll(resp.Body)
    if err != nil {
       return nil, nil, err
