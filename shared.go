@@ -13,6 +13,26 @@ import (
    "strings"
 )
 
+// Transport configures the default HTTP transport for logging and proxy support.
+func Transport(policy func(*http.Request) string) {
+   http.DefaultTransport = &http.Transport{
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         flags := policy(req)
+         if strings.ContainsRune(flags, 'L') {
+            method := req.Method
+            if method == "" {
+               method = http.MethodGet
+            }
+            log.Println(method, req.URL)
+         }
+         if strings.ContainsRune(flags, 'P') {
+            return http.ProxyFromEnvironment(req)
+         }
+         return nil, nil
+      },
+   }
+}
+
 // typeInfo holds the determined properties of a media stream.
 type typeInfo struct {
    Extension string
@@ -60,26 +80,6 @@ func detectHlsType(playlist *hls.MasterPlaylist, streamId string) (*typeInfo, *u
       }
    }
    return nil, nil, fmt.Errorf("stream with ID not found: %d", keyInt)
-}
-
-// Transport configures the default HTTP transport for logging and proxy support.
-func Transport(policy func(*http.Request) string) {
-   http.DefaultTransport = &http.Transport{
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         flags := policy(req)
-         if strings.ContainsRune(flags, 'L') {
-            method := req.Method
-            if method == "" {
-               method = http.MethodGet
-            }
-            log.Println(method, req.URL)
-         }
-         if strings.ContainsRune(flags, 'P') {
-            return http.ProxyFromEnvironment(req)
-         }
-         return nil, nil
-      },
-   }
 }
 
 // getSegment performs an HTTP GET request for a segment and returns its body.
