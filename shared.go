@@ -10,23 +10,22 @@ import (
    "net/http"
    "net/url"
    "strconv"
-   "strings"
 )
 
-// Transport configures the default HTTP transport for logging and proxy support.
-func Transport(policy func(*http.Request) string) {
+func SetTransport(resolve func(*http.Request) (string, bool)) {
+   log.SetFlags(log.Ltime)
    http.DefaultTransport = &http.Transport{
+      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
       Proxy: func(req *http.Request) (*url.URL, error) {
-         flags := policy(req)
-         if strings.ContainsRune(flags, 'L') {
-            method := req.Method
-            if method == "" {
-               method = http.MethodGet
+         proxy, shouldLog := resolve(req)
+         if shouldLog {
+            if req.Method == "" {
+               req.Method = http.MethodGet
             }
-            log.Println(method, req.URL)
+            log.Println(req.Method, req.URL)
          }
-         if strings.ContainsRune(flags, 'P') {
-            return http.ProxyFromEnvironment(req)
+         if proxy != "" {
+            return url.Parse(proxy)
          }
          return nil, nil
       },
