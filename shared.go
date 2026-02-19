@@ -12,7 +12,7 @@ import (
    "strconv"
 )
 
-func SetTransport(resolve func(*http.Request) (string, bool)) {
+func SetProxy(resolve func(*http.Request) (string, bool)) {
    log.SetFlags(log.Ltime)
    http.DefaultTransport = &http.Transport{
       Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793

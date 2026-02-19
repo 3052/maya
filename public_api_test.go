@@ -11,7 +11,7 @@ import (
 )
 
 func TestDash(t *testing.T) {
-   SetTransport(func(req *http.Request) (string, bool) {
+   SetProxy(func(req *http.Request) (string, bool) {
       return "", path.Ext(req.URL.Path) != ".mp4"
    })
    address, data, err := get(dash_test)
@@ -25,7 +25,7 @@ func TestDash(t *testing.T) {
 }
 
 func TestHls(t *testing.T) {
-   SetTransport(func(*http.Request) (string, bool) {
+   SetProxy(func(*http.Request) (string, bool) {
       return "", true
    })
    address, data, err := get(hls_test)
