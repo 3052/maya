@@ -11,14 +11,39 @@ import (
    "os"
 )
 
-const (
-   // widevineSystemId is the UUID for the Widevine DRM system.
-   widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
-)
+func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
+   var keyId, contentId []byte
+   // Priority for Content ID is: Manifest -> Init Segment
+   if manifestProtection != nil && len(manifestProtection.ContentId) > 0 {
+      contentId = manifestProtection.ContentId
+      log.Printf("content ID from manifest: %s", contentId)
+   } else if initProtection != nil && len(initProtection.ContentId) > 0 {
+      contentId = initProtection.ContentId
+      log.Printf("content ID from MP4: %s", contentId)
+   }
+   // Key ID MUST come from the init segment ('tenc' box).
+   if initProtection != nil && initProtection.KeyId != nil {
+      keyId = initProtection.KeyId
+      log.Printf("key ID from MP4 tenc: %x", keyId)
+   }
+   if keyId == nil {
+      // If no Key ID is found, we assume the stream is not encrypted and
+      // return nil for the key, which will cause the downloader to skip decryption.
+      log.Println("No key ID found in MP4 'tenc' box; assuming stream is not encrypted.")
+      return nil, nil
+   }
+   // Finally, fetch the key.
+   key, err := fetcher(keyId, contentId)
+   if err != nil {
+      return nil, fmt.Errorf("failed to fetch decryption key: %w", err)
+   }
+   return key, nil
+}
 
-var (
-   errKeyMismatch = errors.New("key ID mismatch")
-)
+// widevineSystemId is the UUID for the Widevine DRM system.
+const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
+
+var errKeyMismatch = errors.New("key ID mismatch")
 
 // protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
@@ -118,35 +143,5 @@ func (j *PlayReadyJob) playReadyKey(keyId []byte) ([]byte, error) {
    }
    key := coord.Key()
    log.Printf("key %x", key)
-   return key, nil
-}
-
-func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
-   var keyId, contentId []byte
-
-   // Priority for Content ID is: Manifest -> Init Segment
-   if manifestProtection != nil && len(manifestProtection.ContentId) > 0 {
-      contentId = manifestProtection.ContentId
-      log.Printf("content ID from manifest: %s", contentId)
-   } else if initProtection != nil && len(initProtection.ContentId) > 0 {
-      contentId = initProtection.ContentId
-      log.Printf("content ID from MP4: %s", contentId)
-   }
-
-   // Key ID MUST come from the init segment ('tenc' box).
-   if initProtection != nil && initProtection.KeyId != nil {
-      keyId = initProtection.KeyId
-      log.Printf("key ID from MP4 tenc: %x", keyId)
-   }
-
-   if keyId == nil {
-      return nil, errors.New("could not determine key ID from MP4 tenc box")
-   }
-
-   // Finally, fetch the key.
-   key, err := fetcher(keyId, contentId)
-   if err != nil {
-      return nil, fmt.Errorf("failed to fetch decryption key: %w", err)
-   }
    return key, nil
 }
