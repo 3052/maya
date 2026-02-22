@@ -11,6 +11,65 @@ import (
    "strings"
 )
 
+// getMiddleBitrate calculates an accurate bitrate for a representation and
+// stores it in MedianBandwidth
+func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
+   log.Println("update", rep.Id)
+   if rep.SegmentBase != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
+      }
+      cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
+      sidxData, exists := sidxCache[cacheKey]
+      if !exists {
+         header := http.Header{}
+         header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
+         sidxData, err = getSegment(baseUrl, header)
+         if err != nil {
+            return err
+         }
+         sidxCache[cacheKey] = sidxData
+      }
+      segs, err := generateSegmentsFromSidx(rep, sidxData)
+      if err != nil {
+         return err
+      }
+      if len(segs) == 0 {
+         return nil
+      }
+      var totalSizeBits uint64 = 0
+      var totalDuration float64 = 0
+      for _, seg := range segs {
+         totalSizeBits += seg.sizeBits
+         totalDuration += seg.duration
+      }
+      if totalDuration <= 0 {
+         return errors.New("invalid total duration from sidx for bitrate calculation")
+      }
+      rep.MedianBandwidth = int(float64(totalSizeBits) / totalDuration)
+      return nil
+   }
+   segs, err := generateSegments(rep)
+   if err != nil {
+      return err
+   }
+   if len(segs) == 0 {
+      return nil
+   }
+   mid := segs[len(segs)/2]
+   data, err := getSegment(mid.url, mid.header)
+   if err != nil {
+      return err
+   }
+   sizeBits := uint64(len(data)) * 8
+   if mid.duration <= 0 {
+      return errors.New("invalid duration for bitrate calculation")
+   }
+   rep.MedianBandwidth = int(float64(sizeBits) / mid.duration)
+   return nil
+}
+
 // getDashInitSegment locates and fetches the initialization segment for a DASH representation.
 func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
    if !typeInfo.IsFMP4 {
@@ -79,66 +138,6 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
 
    // The KeyId field is explicitly set to nil, as it must only come from the MP4.
    return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
-}
-
-// getMiddleBitrate calculates an accurate bitrate for a representation.
-func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
-   log.Println("update", rep.Id)
-   if rep.SegmentBase != nil {
-      baseUrl, err := rep.ResolveBaseUrl()
-      if err != nil {
-         return err
-      }
-      cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
-      sidxData, exists := sidxCache[cacheKey]
-      if !exists {
-         header := http.Header{}
-         header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
-         sidxData, err = getSegment(baseUrl, header)
-         if err != nil {
-            return err
-         }
-         sidxCache[cacheKey] = sidxData
-      }
-      segs, err := generateSegmentsFromSidx(rep, sidxData)
-      if err != nil {
-         return err
-      }
-      if len(segs) == 0 {
-         rep.Bandwidth = 0
-         return nil
-      }
-      var totalSizeBits uint64 = 0
-      var totalDuration float64 = 0
-      for _, seg := range segs {
-         totalSizeBits += seg.sizeBits
-         totalDuration += seg.duration
-      }
-      if totalDuration <= 0 {
-         return errors.New("invalid total duration from sidx for bitrate calculation")
-      }
-      rep.Bandwidth = int(float64(totalSizeBits) / totalDuration)
-      return nil
-   }
-   segs, err := generateSegments(rep)
-   if err != nil {
-      return err
-   }
-   if len(segs) == 0 {
-      rep.Bandwidth = 0
-      return nil
-   }
-   mid := segs[len(segs)/2]
-   data, err := getSegment(mid.url, mid.header)
-   if err != nil {
-      return err
-   }
-   sizeBits := uint64(len(data)) * 8
-   if mid.duration <= 0 {
-      return errors.New("invalid duration for bitrate calculation")
-   }
-   rep.Bandwidth = int(float64(sizeBits) / mid.duration)
-   return nil
 }
 
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.

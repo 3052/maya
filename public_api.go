@@ -9,20 +9,35 @@ import (
    "log"
    "net/url"
    "os"
+   "slices"
 )
 
-// The generic runDownload function has been removed.
+// listStreamsHls is an internal helper to print streams from a parsed playlist
+func listStreamsHls(playlist *hls.MasterPlaylist) error {
+   slices.SortFunc(playlist.Medias, hls.GroupId)
+   slices.SortFunc(playlist.StreamInfs, hls.Bandwidth)
 
-// DownloadHls parses and downloads a clear HLS stream.
-func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
+   var firstItemPrinted bool
+   for _, rendition := range playlist.Medias {
+      if firstItemPrinted {
+         fmt.Println()
+      } else {
+         firstItemPrinted = true
+      }
+      fmt.Println(rendition)
    }
-   return downloadHls(playlist, j.Threads, streamId, nil)
+   for _, variant := range playlist.StreamInfs {
+      if firstItemPrinted {
+         fmt.Println()
+      } else {
+         firstItemPrinted = true
+      }
+      fmt.Println(variant)
+   }
+   return nil
 }
 
-// listStreamsDash is an internal helper to print streams from a parsed manifest.
+// listStreamsDash is an internal helper to print streams from a parsed manifest
 func listStreamsDash(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
    groups := manifest.GetRepresentations()
@@ -36,8 +51,7 @@ func listStreamsDash(manifest *dash.Mpd) error {
       }
       repsForSorting = append(repsForSorting, representation)
    }
-   dash.SortByBandwidth(repsForSorting)
-
+   slices.SortFunc(repsForSorting, dash.Bandwidth)
    for i, representation := range repsForSorting {
       if i > 0 {
          fmt.Println()
@@ -47,31 +61,13 @@ func listStreamsDash(manifest *dash.Mpd) error {
    return nil
 }
 
-// listStreamsHls is an internal helper to print streams from a parsed playlist.
-func listStreamsHls(playlist *hls.MasterPlaylist) error {
-   playlist.Sort()
-
-   var firstItemPrinted bool
-
-   for _, rendition := range playlist.Medias {
-      if firstItemPrinted {
-         fmt.Println()
-      } else {
-         firstItemPrinted = true
-      }
-      fmt.Println(rendition)
+// DownloadHls parses and downloads a clear HLS stream.
+func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
    }
-
-   for _, variant := range playlist.StreamInfs {
-      if firstItemPrinted {
-         fmt.Println()
-      } else {
-         firstItemPrinted = true
-      }
-      fmt.Println(variant)
-   }
-
-   return nil
+   return downloadHls(playlist, j.Threads, streamId, nil)
 }
 
 // Usage prints a usage message documenting all defined command-line flags.
@@ -230,6 +226,6 @@ func parseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
    if err != nil {
       return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
    }
-   master.ResolveURIs(baseURL)
+   master.ResolveUris(baseURL)
    return master, nil
 }
