@@ -11,6 +11,40 @@ import (
    "strings"
 )
 
+// getDashInitSegment locates and fetches the initialization segment for a DASH representation.
+func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
+   if !typeInfo.IsFMP4 {
+      return nil, nil
+   }
+   // Case 1: Initialization defined in SegmentBase
+   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return nil, err
+      }
+      header := http.Header{}
+      header.Set("range", "bytes="+rep.SegmentBase.Initialization.Range)
+      return getSegment(baseUrl, header)
+   }
+   // Case 2: Initialization defined in SegmentTemplate
+   if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
+      initUrl, err := template.ResolveInitialization(rep)
+      if err != nil {
+         return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
+      }
+      return getSegment(initUrl, nil)
+   }
+   // Case 3: Initialization defined in SegmentList
+   if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
+      initUrl, err := sl.Initialization.ResolveSourceUrl()
+      if err != nil {
+         return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
+      }
+      return getSegment(initUrl, nil)
+   }
+   return nil, nil
+}
+
 // getDashProtection extracts Widevine PSSH data from a representation.
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
@@ -59,7 +93,7 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
       sidxData, exists := sidxCache[cacheKey]
       if !exists {
          header := http.Header{}
-         header.Set("Range", "bytes="+rep.SegmentBase.IndexRange)
+         header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
          sidxData, err = getSegment(baseUrl, header)
          if err != nil {
             return err
@@ -147,7 +181,8 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return err
    }
    job := &downloadJob{
-      streamId:           rep.Id,
+      // MOVED sanitization logic here.
+      outputFileNameBase: strings.ReplaceAll(rep.Id, "/", "_"),
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,
@@ -156,37 +191,4 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       fetchKey:           fetchKey,
    }
    return orchestrateDownload(job)
-}
-
-// getDashInitSegment locates and fetches the initialization segment for a DASH representation.
-func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
-   if !typeInfo.IsFMP4 {
-      return nil, nil
-   }
-   // Case 1: Initialization defined in SegmentBase
-   if rep.SegmentBase != nil && rep.SegmentBase.Initialization != nil {
-      baseUrl, err := rep.ResolveBaseUrl()
-      if err != nil {
-         return nil, err
-      }
-      header := http.Header{"Range": []string{"bytes=" + rep.SegmentBase.Initialization.Range}}
-      return getSegment(baseUrl, header)
-   }
-   // Case 2: Initialization defined in SegmentTemplate
-   if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
-      initUrl, err := template.ResolveInitialization(rep)
-      if err != nil {
-         return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
-      }
-      return getSegment(initUrl, nil)
-   }
-   // Case 3: Initialization defined in SegmentList
-   if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
-      initUrl, err := sl.Initialization.ResolveSourceUrl()
-      if err != nil {
-         return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
-      }
-      return getSegment(initUrl, nil)
-   }
-   return nil, nil
 }

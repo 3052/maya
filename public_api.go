@@ -11,6 +11,17 @@ import (
    "os"
 )
 
+// The generic runDownload function has been removed.
+
+// DownloadHls parses and downloads a clear HLS stream.
+func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadHls(playlist, j.Threads, streamId, nil)
+}
+
 // listStreamsDash is an internal helper to print streams from a parsed manifest.
 func listStreamsDash(manifest *dash.Mpd) error {
    sidxCache := make(map[string][]byte)
@@ -62,14 +73,6 @@ func listStreamsHls(playlist *hls.MasterPlaylist) error {
 
    return nil
 }
-
-// manifestType is an enum to distinguish between DASH and HLS.
-type manifestType int
-
-const (
-   dashManifest manifestType = iota
-   hlsManifest
-)
 
 // Usage prints a usage message documenting all defined command-line flags.
 // It returns an error if any of the specified flag names are not found.
@@ -139,12 +142,11 @@ type Job struct {
 
 // DownloadDash parses and downloads a clear DASH stream.
 func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
-   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, nil)
-}
-
-// DownloadHls parses and downloads a clear HLS stream.
-func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
-   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, nil)
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadDash(manifest, j.Threads, streamId, nil)
 }
 
 // PlayReadyJob holds configuration for a PlayReady encrypted download.
@@ -160,15 +162,23 @@ func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId stri
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.playReadyKey(keyId)
    }
-   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadDash(manifest, j.Threads, streamId, keyFetcher)
 }
 
 // DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
-func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
+func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.playReadyKey(keyId)
    }
-   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadHls(playlist, j.Threads, streamId, keyFetcher)
 }
 
 // WidevineJob holds configuration for a Widevine encrypted download.
@@ -184,41 +194,23 @@ func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId strin
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.widevineKey(keyId, contentId)
    }
-   return runDownload(body, baseURL, j.Threads, streamId, dashManifest, keyFetcher)
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return err
+   }
+   return downloadDash(manifest, j.Threads, streamId, keyFetcher)
 }
 
 // DownloadHls parses and downloads a Widevine-encrypted HLS stream.
-func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId string) error {
+func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.widevineKey(keyId, contentId)
    }
-   return runDownload(body, baseURL, j.Threads, streamId, hlsManifest, keyFetcher)
-}
-
-// --- Internal Helpers ---
-
-// runDownload is the main entry point that dispatches to the correct manifest-specific download logic.
-func runDownload(
-   body []byte,
-   baseURL *url.URL,
-   threads int,
-   streamId string,
-   mType manifestType,
-   fetchKey keyFetcher,
-) error {
-   if mType == dashManifest {
-      manifest, err := parseDash(body, baseURL)
-      if err != nil {
-         return err
-      }
-      return downloadDash(manifest, threads, streamId, fetchKey)
-   }
-   // Default to HLS if not DASH
    playlist, err := parseHls(body, baseURL)
    if err != nil {
       return err
    }
-   return downloadHls(playlist, threads, streamId, fetchKey)
+   return downloadHls(playlist, j.Threads, streamId, keyFetcher)
 }
 
 // parseDash is an internal helper to parse a DASH manifest.

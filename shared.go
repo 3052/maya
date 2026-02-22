@@ -9,7 +9,6 @@ import (
    "log"
    "net/http"
    "net/url"
-   "strconv"
 )
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
@@ -32,12 +31,6 @@ func SetProxy(resolve func(*http.Request) (string, bool)) {
    }
 }
 
-// typeInfo holds the determined properties of a media stream.
-type typeInfo struct {
-   Extension string
-   IsFMP4    bool
-}
-
 // detectDashType determines the file extension and container type from a DASH Representation's metadata.
 func detectDashType(rep *dash.Representation) (*typeInfo, error) {
    switch rep.GetMimeType() {
@@ -53,19 +46,16 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
 }
 
 // detectHlsType finds the correct stream in an HLS playlist by its ID and determines its type.
-func detectHlsType(playlist *hls.MasterPlaylist, streamId string) (*typeInfo, *url.URL, error) {
-   keyInt, err := strconv.Atoi(streamId)
-   if err != nil {
-      return nil, nil, fmt.Errorf("invalid HLS StreamId, must be an integer: %q", streamId)
-   }
+func detectHlsType(playlist *hls.MasterPlaylist, streamId int) (*typeInfo, *url.URL, error) {
+   // The string-to-int conversion is GONE.
    for _, variant := range playlist.StreamInfs {
-      if variant.ID == keyInt {
+      if variant.ID == streamId {
          info := &typeInfo{Extension: ".mp4", IsFMP4: true}
          return info, variant.URI, nil
       }
    }
    for _, rendition := range playlist.Medias {
-      if rendition.ID == keyInt {
+      if rendition.ID == streamId {
          var info *typeInfo
          switch rendition.Type {
          case "AUDIO":
@@ -78,7 +68,13 @@ func detectHlsType(playlist *hls.MasterPlaylist, streamId string) (*typeInfo, *u
          return info, rendition.URI, nil
       }
    }
-   return nil, nil, fmt.Errorf("stream with ID not found: %d", keyInt)
+   return nil, nil, fmt.Errorf("stream with ID not found: %d", streamId)
+}
+
+// typeInfo holds the determined properties of a media stream.
+type typeInfo struct {
+   Extension string
+   IsFMP4    bool
 }
 
 // getSegment performs an HTTP GET request for a segment and returns its body.
