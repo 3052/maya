@@ -11,10 +11,8 @@ import (
    "strconv"
 )
 
-const (
-   // widevineURN is the standard URN identifying the Widevine DRM system in manifests.
-   widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-)
+// widevineURN is the standard URN identifying the Widevine DRM system in manifests.
+const widevineUrn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
@@ -34,14 +32,14 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
-   mediaPl.ResolveURIs(mediaURL)
+   mediaPl.ResolveUris(mediaURL)
    return mediaPl, nil
 }
 
 // getHlsProtection extracts Widevine PSSH data from an HLS manifest.
 func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
    for _, key := range mediaPl.Keys {
-      if key.KeyFormat == widevineURN && key.URI != nil && key.URI.Scheme == "data" {
+      if key.KeyFormat == widevineUrn && key.Uri != nil && key.Uri.Scheme == "data" {
          psshData, err := key.DecodeData()
          if err != nil {
             return nil, fmt.Errorf("failed to decode Widevine PSSH data from HLS manifest: %w", err)
@@ -66,7 +64,7 @@ func getHlsProtection(mediaPl *hls.MediaPlaylist) (*protectionInfo, error) {
 func hlsSegments(mediaPl *hls.MediaPlaylist) ([]segment, error) {
    var segments []segment
    for _, hlsSeg := range mediaPl.Segments {
-      segments = append(segments, segment{url: hlsSeg.URI, header: nil})
+      segments = append(segments, segment{url: hlsSeg.Uri, header: nil})
    }
    return segments, nil
 }

@@ -13,8 +13,9 @@ import (
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
    log.SetFlags(log.Ltime)
+   var protocol http.Protocols
    http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
+      Protocols: &protocol, // github.com/golang/go/issues/25793
       Proxy: func(req *http.Request) (*url.URL, error) {
          proxy, shouldLog := resolve(req)
          if shouldLog {
@@ -49,13 +50,13 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
 func detectHlsType(playlist *hls.MasterPlaylist, streamId int) (*typeInfo, *url.URL, error) {
    // The string-to-int conversion is GONE.
    for _, variant := range playlist.StreamInfs {
-      if variant.ID == streamId {
+      if variant.Id == streamId {
          info := &typeInfo{Extension: ".mp4", IsFMP4: true}
-         return info, variant.URI, nil
+         return info, variant.Uri, nil
       }
    }
    for _, rendition := range playlist.Medias {
-      if rendition.ID == streamId {
+      if rendition.Id == streamId {
          var info *typeInfo
          switch rendition.Type {
          case "AUDIO":
@@ -65,7 +66,7 @@ func detectHlsType(playlist *hls.MasterPlaylist, streamId int) (*typeInfo, *url.
          default:
             return nil, nil, fmt.Errorf("unsupported HLS media type: %s", rendition.Type)
          }
-         return info, rendition.URI, nil
+         return info, rendition.Uri, nil
       }
    }
    return nil, nil, fmt.Errorf("stream with ID not found: %d", streamId)
