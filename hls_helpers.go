@@ -8,6 +8,7 @@ import (
    "io"
    "net/http"
    "net/url"
+   "strconv"
 )
 
 const (
@@ -71,7 +72,7 @@ func hlsSegments(mediaPl *hls.MediaPlaylist) ([]segment, error) {
 }
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
+func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchKey keyFetcher) error {
    typeInfo, targetURI, err := detectHlsType(playlist, streamId)
    if err != nil {
       return err
@@ -100,7 +101,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
       return err
    }
    job := &downloadJob{
-      streamId:           streamId,
+      outputFileNameBase: strconv.Itoa(streamId), // Use new field name
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,

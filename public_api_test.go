@@ -40,7 +40,7 @@ func TestHls(t *testing.T) {
       ClientId:   cache + "/L3/client_id.bin",
       PrivateKey: cache + "/L3/private_key.pem",
    }
-   err = job_item.DownloadHls(data, address, "12")
+   err = job_item.DownloadHls(data, address, 12)
    if err != nil {
       t.Fatal(err)
    }

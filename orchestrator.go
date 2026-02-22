@@ -19,7 +19,7 @@ type mediaRequest struct {
 
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
 type downloadJob struct {
-   streamId           string
+   outputFileNameBase string // RENAMED from streamId
    typeInfo           *typeInfo
    allRequests        []mediaRequest
    initSegmentData    []byte
@@ -31,7 +31,8 @@ type downloadJob struct {
 // orchestrateDownload contains the shared, high-level logic for executing any download job.
 func orchestrateDownload(job *downloadJob) error {
    var name strings.Builder
-   name.WriteString(strings.ReplaceAll(job.streamId, "/", "_"))
+   // REMOVED strings.ReplaceAll call.
+   name.WriteString(job.outputFileNameBase)
    name.WriteString(job.typeInfo.Extension)
    file, err := os.Create(name.String())
    if err != nil {
