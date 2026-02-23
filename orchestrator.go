@@ -34,7 +34,9 @@ func orchestrateDownload(job *downloadJob) error {
    // REMOVED strings.ReplaceAll call.
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.typeInfo.Extension)
-   file, err := os.Create(name.String())
+
+   // CHANGED: Use shared createFile to handle directories
+   file, err := createFile(name.String())
    if err != nil {
       return err
    }

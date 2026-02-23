@@ -6,11 +6,38 @@ import (
    "encoding/xml"
    "flag"
    "fmt"
-   "log"
    "net/url"
    "os"
    "slices"
 )
+
+func Read[T any](name string) (*T, error) {
+   data, err := os.ReadFile(name)
+   if err != nil {
+      return nil, err
+   }
+   var value T
+   err = xml.Unmarshal(data, &value)
+   if err != nil {
+      return nil, err
+   }
+   return &value, nil
+}
+
+func Write(name string, value any) error {
+   data, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   // CHANGED: Use shared createFile to handle directories
+   f, err := createFile(name)
+   if err != nil {
+      return err
+   }
+   defer f.Close()
+   _, err = f.Write(data)
+   return err
+}
 
 // listStreamsHls is an internal helper to print streams from a parsed playlist
 func listStreamsHls(playlist *hls.MasterPlaylist) error {
@@ -89,28 +116,6 @@ func Usage(groups [][]string) error {
       }
    }
    return nil
-}
-
-func Read[T any](name string) (*T, error) {
-   data, err := os.ReadFile(name)
-   if err != nil {
-      return nil, err
-   }
-   var value T
-   err = xml.Unmarshal(data, &value)
-   if err != nil {
-      return nil, err
-   }
-   return &value, nil
-}
-
-func Write(name string, value any) error {
-   data, err := xml.Marshal(value)
-   if err != nil {
-      return err
-   }
-   log.Println("WriteFile", name)
-   return os.WriteFile(name, data, os.ModePerm)
 }
 
 // ListDash parses a DASH manifest and lists the available streams.
