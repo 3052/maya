@@ -31,10 +31,11 @@ type downloadJob struct {
 // orchestrateDownload contains the shared, high-level logic for executing any download job.
 func orchestrateDownload(job *downloadJob) error {
    var name strings.Builder
-   // REMOVED strings.ReplaceAll call.
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.typeInfo.Extension)
-   file, err := os.Create(name.String())
+
+   // CHANGED: Use shared createFile to handle directories
+   file, err := createFile(name.String())
    if err != nil {
       return err
    }

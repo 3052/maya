@@ -180,8 +180,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return err
    }
    job := &downloadJob{
-      // MOVED sanitization logic here.
-      outputFileNameBase: strings.ReplaceAll(rep.Id, "/", "_"),
+      outputFileNameBase: rep.Id,
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,
