@@ -3,6 +3,7 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "encoding/xml"
    "errors"
    "fmt"
    "io"
@@ -12,6 +13,53 @@ import (
    "os"
    "path/filepath"
 )
+
+// Cache handles file-system based storage using XML encoding.
+type Cache struct {
+   dir string
+}
+
+// Init sets up the cache in the system's user cache directory
+// joined with the provided appName (e.g., ~/.cache/appName).
+func (c *Cache) Init(appName string) error {
+   baseDir, err := os.UserCacheDir()
+   if err != nil {
+      return err
+   }
+   c.dir = filepath.Join(baseDir, appName)
+   return os.MkdirAll(c.dir, os.ModePerm)
+}
+
+// Set marshals the value to XML, logs the path, and writes it to a file named by the key.
+func (c *Cache) Set(key string, value any) error {
+   data, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   path := filepath.Join(c.dir, key)
+   log.Printf("Writing cache file: %s", path)
+   return os.WriteFile(path, data, os.ModePerm)
+}
+
+// Get reads the file named by the key and unmarshals the XML into dest.
+// dest must be a pointer.
+func (c *Cache) Get(key string, dest any) error {
+   path := filepath.Join(c.dir, key)
+   data, err := os.ReadFile(path)
+   if err != nil {
+      return err
+   }
+   return xml.Unmarshal(data, dest)
+}
+
+func createFile(name string) (*os.File, error) {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
+   if err != nil {
+      return nil, err
+   }
+   log.Println("Creating file:", name)
+   return os.Create(name)
+}
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
    log.SetFlags(log.Ltime)
@@ -101,13 +149,4 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
       return nil, errors.New(resp.Status)
    }
    return io.ReadAll(resp.Body)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
 }
