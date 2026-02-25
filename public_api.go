@@ -30,12 +30,12 @@ func Write(name string, value any) error {
       return err
    }
    // CHANGED: Use shared createFile to handle directories
-   f, err := createFile(name)
+   file, err := createFile(name)
    if err != nil {
       return err
    }
-   defer f.Close()
-   _, err = f.Write(data)
+   defer file.Close()
+   _, err = file.Write(data)
    return err
 }
 
