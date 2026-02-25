@@ -15,16 +15,20 @@ import (
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
    log.SetFlags(log.Ltime)
-   var protocol http.Protocols
    http.DefaultTransport = &http.Transport{
-      Protocols: &protocol, // github.com/golang/go/issues/25793
+      Protocols: &http.Protocols{},
       Proxy: func(req *http.Request) (*url.URL, error) {
          proxy, shouldLog := resolve(req)
          if shouldLog {
             if req.Method == "" {
                req.Method = http.MethodGet
             }
-            log.Println(req.Method, req.URL)
+            if proxy != "" {
+               log.Println("proxy", req.Method, req.URL)
+            } else {
+               // Log normally for direct connections
+               log.Println(req.Method, req.URL)
+            }
          }
          if proxy != "" {
             return url.Parse(proxy)
