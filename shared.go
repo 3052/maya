@@ -9,8 +9,6 @@ import (
    "log"
    "net/http"
    "net/url"
-   "os"
-   "path/filepath"
 )
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
@@ -101,13 +99,4 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
       return nil, errors.New(resp.Status)
    }
    return io.ReadAll(resp.Body)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
 }

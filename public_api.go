@@ -6,22 +6,28 @@ import (
    "encoding/xml"
    "flag"
    "fmt"
+   "log"
    "net/url"
    "os"
+   "path/filepath"
    "slices"
 )
 
-func Read[T any](name string) (*T, error) {
+func Read(name string, value any) error {
    data, err := os.ReadFile(name)
    if err != nil {
-      return nil, err
+      return err
    }
-   var value T
-   err = xml.Unmarshal(data, &value)
+   return xml.Unmarshal(data, value)
+}
+
+func writeFile(name string, data []byte) error {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
    if err != nil {
-      return nil, err
+      return err
    }
-   return &value, nil
+   log.Println("Creating file:", name)
+   return os.WriteFile(name, data, os.ModePerm)
 }
 
 func Write(name string, value any) error {
@@ -29,14 +35,16 @@ func Write(name string, value any) error {
    if err != nil {
       return err
    }
-   // CHANGED: Use shared createFile to handle directories
-   f, err := createFile(name)
+   return writeFile(name, data)
+}
+
+func createFile(name string) (*os.File, error) {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
    if err != nil {
-      return err
+      return nil, err
    }
-   defer f.Close()
-   _, err = f.Write(data)
-   return err
+   log.Println("Creating file:", name)
+   return os.Create(name)
 }
 
 // listStreamsHls is an internal helper to print streams from a parsed playlist
