@@ -9,6 +9,39 @@ import (
    "slices"
 )
 
+func Usage(groups [][]string) error {
+   seen := make(map[string]bool)
+   // 1. Print usage and mark flags as seen
+   for i, group := range groups {
+      if i >= 1 {
+         fmt.Println()
+      }
+      for _, name := range group {
+         look := flag.Lookup(name)
+         if look == nil {
+            return fmt.Errorf("flag provided but not defined: -%s", name)
+         }
+         seen[look.Name] = true
+         fmt.Printf("-%v %v\n", look.Name, look.Usage)
+         if look.DefValue != "" {
+            fmt.Printf("\tdefault %v\n", look.DefValue)
+         }
+      }
+   }
+   // 2. Check for missing flags
+   // We allow 'missing' to be overwritten; checking the last one found is sufficient.
+   var missing string
+   flag.VisitAll(func(f *flag.Flag) {
+      if !seen[f.Name] {
+         missing = f.Name
+      }
+   })
+   if missing != "" {
+      return fmt.Errorf("defined flag missing in groups: -%s", missing)
+   }
+   return nil
+}
+
 // listStreamsHls is an internal helper to print streams from a parsed playlist
 func listStreamsHls(playlist *hls.MasterPlaylist) error {
    slices.SortFunc(playlist.Medias, hls.GroupId)
@@ -65,27 +98,6 @@ func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
       return err
    }
    return downloadHls(playlist, j.Threads, streamId, nil)
-}
-
-// Usage prints a usage message documenting all defined command-line flags.
-// It returns an error if any of the specified flag names are not found.
-func Usage(groups [][]string) error {
-   for i, group := range groups {
-      if i >= 1 {
-         fmt.Println()
-      }
-      for _, name := range group {
-         look := flag.Lookup(name)
-         if look == nil {
-            return fmt.Errorf("flag provided but not defined: -%s", name)
-         }
-         fmt.Printf("-%v %v\n", look.Name, look.Usage)
-         if look.DefValue != "" {
-            fmt.Printf("\tdefault %v\n", look.DefValue)
-         }
-      }
-   }
-   return nil
 }
 
 // ListDash parses a DASH manifest and lists the available streams.

@@ -14,38 +14,43 @@ import (
    "path/filepath"
 )
 
-// Cache handles file-system based storage using XML encoding.
 type Cache struct {
    dir string
 }
 
-// Init sets up the cache in the system's user cache directory
-// joined with the provided appName (e.g., ~/.cache/appName).
 func (c *Cache) Init(appName string) error {
    baseDir, err := os.UserCacheDir()
    if err != nil {
       return err
    }
    c.dir = filepath.Join(baseDir, appName)
-   return os.MkdirAll(c.dir, os.ModePerm)
+   return nil
 }
 
-// Set marshals the value to XML, logs the path, and writes it to a file named by the key.
+// Join returns the full path by joining the cache directory with the provided
+// key
+func (c *Cache) Join(key string) string {
+   return filepath.Join(c.dir, key)
+}
+
 func (c *Cache) Set(key string, value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   path := filepath.Join(c.dir, key)
-   log.Printf("Writing cache file: %s", path)
+   path := c.Join(key)
+   // create the directory path based on the file location
+   // filepath.Dir(path) ensures that if key is "nested/folder/file.xml",
+   // the full folder structure is created.
+   if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+      return err
+   }
+   log.Println("Saved:", path)
    return os.WriteFile(path, data, os.ModePerm)
 }
 
-// Get reads the file named by the key and unmarshals the XML into dest.
-// dest must be a pointer.
 func (c *Cache) Get(key string, dest any) error {
-   path := filepath.Join(c.dir, key)
-   data, err := os.ReadFile(path)
+   data, err := os.ReadFile(c.Join(key))
    if err != nil {
       return err
    }
