@@ -12,58 +12,46 @@ import (
    "net/url"
    "os"
    "path/filepath"
+   "strconv"
 )
 
 type Cache struct {
-   dir string
+   // Path holds the resolved absolute path.
+   path string
 }
 
-func (c *Cache) Init(appName string) error {
+// Init resolves a path relative to the UserCacheDir.
+func (c *Cache) Init(segment string) (string, error) {
    baseDir, err := os.UserCacheDir()
    if err != nil {
-      return err
+      return "", err
    }
-   c.dir = filepath.Join(baseDir, appName)
-   return nil
+   // We simply join the cache dir with the provided segment
+   c.path = filepath.Join(baseDir, segment)
+   return c.path, nil
 }
 
-// Join returns the full path by joining the cache directory with the provided
-// key
-func (c *Cache) Join(key string) string {
-   return filepath.Join(c.dir, key)
-}
-
-func (c *Cache) Set(key string, value any) error {
+func (c *Cache) Set(key int, value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   path := c.Join(key)
-   // create the directory path based on the file location
-   // filepath.Dir(path) ensures that if key is "nested/folder/file.xml",
-   // the full folder structure is created.
-   if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+   // Helper joins the stored path with the key
+   finalPath := filepath.Join(c.path, strconv.Itoa(key))
+   if err := os.MkdirAll(filepath.Dir(finalPath), os.ModePerm); err != nil {
       return err
    }
-   log.Println("Saved:", path)
-   return os.WriteFile(path, data, os.ModePerm)
+   log.Println("Saved:", finalPath)
+   return os.WriteFile(finalPath, data, os.ModePerm)
 }
 
-func (c *Cache) Get(key string, dest any) error {
-   data, err := os.ReadFile(c.Join(key))
+func (c *Cache) Get(key int, value any) error {
+   finalPath := filepath.Join(c.path, strconv.Itoa(key))
+   data, err := os.ReadFile(finalPath)
    if err != nil {
       return err
    }
-   return xml.Unmarshal(data, dest)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
+   return xml.Unmarshal(data, value)
 }
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
