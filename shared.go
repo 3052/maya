@@ -15,55 +15,55 @@ import (
 )
 
 type Cache struct {
-   dir string
+   path string
 }
 
-func (c *Cache) Init(appName string) error {
-   baseDir, err := os.UserCacheDir()
+// Init takes a relative path, resolves it to the user cache dir, and creates the folder structure.
+func (c *Cache) Init(path string) error {
+   var err error
+   c.path, err = ResolveCache(path)
    if err != nil {
       return err
    }
-   c.dir = filepath.Join(baseDir, appName)
-   return nil
+   return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
 }
 
-// Join returns the full path by joining the cache directory with the provided
-// key
-func (c *Cache) Join(key string) string {
-   return filepath.Join(c.dir, key)
+// ResolveCache joins the user cache directory with the provided path.
+func ResolveCache(path string) (string, error) {
+   baseDir, err := os.UserCacheDir()
+   if err != nil {
+      return "", err
+   }
+   return filepath.Join(baseDir, path), nil
 }
 
-func (c *Cache) Set(key string, value any) error {
+// Set writes the value to the file at c.path
+func (c *Cache) Set(value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   path := c.Join(key)
-   // create the directory path based on the file location
-   // filepath.Dir(path) ensures that if key is "nested/folder/file.xml",
-   // the full folder structure is created.
-   if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
-      return err
-   }
-   log.Println("Saved:", path)
-   return os.WriteFile(path, data, os.ModePerm)
+   log.Println("Saved:", c.path)
+   return os.WriteFile(c.path, data, os.ModePerm)
 }
 
-func (c *Cache) Get(key string, dest any) error {
-   data, err := os.ReadFile(c.Join(key))
+// Get reads from the file at c.path into value
+func (c *Cache) Get(value any) error {
+   data, err := os.ReadFile(c.path)
    if err != nil {
       return err
    }
-   return xml.Unmarshal(data, dest)
+   return xml.Unmarshal(data, value)
 }
 
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
+// Update reads the file, runs the editor, and writes it back.
+// If Get returns an error, Update returns that error immediately.
+func (c *Cache) Update(value any, editor func()) error {
+   if err := c.Get(value); err != nil {
+      return err
    }
-   log.Println("Creating file:", name)
-   return os.Create(name)
+   editor()
+   return c.Set(value)
 }
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
