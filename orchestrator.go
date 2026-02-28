@@ -5,11 +5,22 @@ import (
    "41.neocities.org/sofia"
    "bytes"
    "encoding/hex"
+   "log"
    "net/http"
    "net/url"
    "os"
+   "path/filepath"
    "strings"
 )
+
+func createFile(name string) (*os.File, error) {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
+   if err != nil {
+      return nil, err
+   }
+   log.Println("Creating file:", name)
+   return os.Create(name)
+}
 
 // mediaRequest represents a single segment to be downloaded.
 type mediaRequest struct {

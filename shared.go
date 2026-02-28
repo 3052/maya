@@ -49,21 +49,12 @@ func (c *Cache) Set(key string, value any) error {
    return os.WriteFile(path, data, os.ModePerm)
 }
 
-func (c *Cache) Get(key string, dest any) error {
+func (c *Cache) Get(key string, value any) error {
    data, err := os.ReadFile(c.Join(key))
    if err != nil {
       return err
    }
-   return xml.Unmarshal(data, dest)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
+   return xml.Unmarshal(data, value)
 }
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
