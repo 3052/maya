@@ -12,7 +12,18 @@ import (
    "net/url"
    "os"
    "path/filepath"
+   "strconv" // Import added for int to string conversion
 )
+
+// Join returns the full path by joining the cache directory with the provided
+// key (converted to string)
+func (c *Cache) Join(key int) string {
+   // Convert the int key to a string
+   filename := strconv.Itoa(key)
+   // Optional: You might want to add an extension explicitly
+   // filename := strconv.Itoa(key) + ".xml"
+   return filepath.Join(c.dir, filename)
+}
 
 type Cache struct {
    dir string
@@ -27,21 +38,14 @@ func (c *Cache) Init(appName string) error {
    return nil
 }
 
-// Join returns the full path by joining the cache directory with the provided
-// key
-func (c *Cache) Join(key string) string {
-   return filepath.Join(c.dir, key)
-}
-
-func (c *Cache) Set(key string, value any) error {
+// Set now accepts 'int' for the key
+func (c *Cache) Set(key int, value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
+   // Pass the int key to Join
    path := c.Join(key)
-   // create the directory path based on the file location
-   // filepath.Dir(path) ensures that if key is "nested/folder/file.xml",
-   // the full folder structure is created.
    if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
       return err
    }
@@ -49,21 +53,14 @@ func (c *Cache) Set(key string, value any) error {
    return os.WriteFile(path, data, os.ModePerm)
 }
 
-func (c *Cache) Get(key string, dest any) error {
+// Get now accepts 'int' for the key
+func (c *Cache) Get(key int, dest any) error {
+   // Pass the int key to Join
    data, err := os.ReadFile(c.Join(key))
    if err != nil {
       return err
    }
    return xml.Unmarshal(data, dest)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
 }
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
