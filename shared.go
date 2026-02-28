@@ -12,10 +12,11 @@ import (
    "net/url"
    "os"
    "path/filepath"
+   "strconv"
 )
 
 type Cache struct {
-   dir string
+   Path string
 }
 
 func (c *Cache) Init(appName string) error {
@@ -23,47 +24,30 @@ func (c *Cache) Init(appName string) error {
    if err != nil {
       return err
    }
-   c.dir = filepath.Join(baseDir, appName)
+   c.Path = filepath.Join(baseDir, appName)
    return nil
 }
 
-// Join returns the full path by joining the cache directory with the provided
-// key
-func (c *Cache) Join(key string) string {
-   return filepath.Join(c.dir, key)
-}
-
-func (c *Cache) Set(key string, value any) error {
+func (c *Cache) Set(key int, value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   path := c.Join(key)
-   // create the directory path based on the file location
-   // filepath.Dir(path) ensures that if key is "nested/folder/file.xml",
-   // the full folder structure is created.
-   if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+   filePath := filepath.Join(c.Path, strconv.Itoa(key))
+   if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
       return err
    }
-   log.Println("Saved:", path)
-   return os.WriteFile(path, data, os.ModePerm)
+   log.Println("Saved:", filePath)
+   return os.WriteFile(filePath, data, os.ModePerm)
 }
 
-func (c *Cache) Get(key string, dest any) error {
-   data, err := os.ReadFile(c.Join(key))
+func (c *Cache) Get(key int, dest any) error {
+   filePath := filepath.Join(c.Path, strconv.Itoa(key))
+   data, err := os.ReadFile(filePath)
    if err != nil {
       return err
    }
    return xml.Unmarshal(data, dest)
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
 }
 
 func SetProxy(resolve func(*http.Request) (string, bool)) {
