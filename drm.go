@@ -16,10 +16,10 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
    // Priority for Content ID is: Manifest -> Init Segment
    if manifestProtection != nil && len(manifestProtection.ContentId) > 0 {
       contentId = manifestProtection.ContentId
-      log.Printf("content ID from manifest: %s", contentId)
+      log.Printf("content ID from manifest: %x", contentId)
    } else if initProtection != nil && len(initProtection.ContentId) > 0 {
       contentId = initProtection.ContentId
-      log.Printf("content ID from MP4: %s", contentId)
+      log.Printf("content ID from MP4: %x", contentId)
    }
    // Key ID MUST come from the init segment ('tenc' box).
    if initProtection != nil && initProtection.KeyId != nil {
