@@ -15,20 +15,23 @@ import (
 )
 
 type Cache struct {
-   path string
+   Optional bool // Public field, can be set directly
+   path     string
 }
 
-// Init takes a relative path, resolves it to the user cache dir, and creates the folder structure.
+// Init only handles path resolution and directory creation.
+// It relies on the struct's state for configuration.
 func (c *Cache) Init(path string) error {
    var err error
    c.path, err = ResolveCache(path)
    if err != nil {
       return err
    }
+   // Create the directory immediately
    return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
 }
 
-// ResolveCache joins the user cache directory with the provided path.
+// ResolveCache joins the user cache directory with the provided path
 func ResolveCache(path string) (string, error) {
    baseDir, err := os.UserCacheDir()
    if err != nil {
@@ -37,7 +40,6 @@ func ResolveCache(path string) (string, error) {
    return filepath.Join(baseDir, path), nil
 }
 
-// Set writes the value to the file at c.path
 func (c *Cache) Set(value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
@@ -47,21 +49,25 @@ func (c *Cache) Set(value any) error {
    return os.WriteFile(c.path, data, os.ModePerm)
 }
 
-// Get reads from the file at c.path into value
+// Get reads the file.
+// It checks c.Optional directly to decide how to handle errors.
 func (c *Cache) Get(value any) error {
    data, err := os.ReadFile(c.path)
    if err != nil {
+      // Check the struct field
+      if c.Optional {
+         return nil
+      }
       return err
    }
    return xml.Unmarshal(data, value)
 }
 
-// If Get returns an error, Update returns that error immediately
-func (c *Cache) Update(value any, edit func() error) error {
+func (c *Cache) Update(value any, fn func() error) error {
    if err := c.Get(value); err != nil {
       return err
    }
-   if err := edit(); err != nil {
+   if err := fn(); err != nil {
       return err
    }
    return c.Set(value)
