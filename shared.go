@@ -11,8 +11,54 @@ import (
    "net/http"
    "net/url"
    "os"
+   "path"
    "path/filepath"
+   "strings"
 )
+
+func SetProxy(proxyUrlStr, excludePatternsStr string) error {
+   var parsedProxy *url.URL
+   if proxyUrlStr != "" {
+      var err error
+      parsedProxy, err = url.Parse(proxyUrlStr)
+      if err != nil {
+         return err
+      }
+   }
+   // Split patterns by comma
+   patterns := strings.Split(excludePatternsStr, ",")
+   // Assign directly to the global DefaultTransport.
+   // We ignore any existing values in the previous DefaultTransport.
+   http.DefaultTransport = &http.Transport{
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         fileName := path.Base(req.URL.Path)
+         // Check exclusion patterns
+         for _, pattern := range patterns {
+            matched, err := path.Match(pattern, fileName)
+            if err != nil {
+               return nil, err
+            }
+            if matched {
+               // Pattern matched: Bypass proxy, do not log.
+               return nil, nil
+            }
+         }
+         // Pattern did NOT match.
+         // Handle empty method (Empty implies "GET" in Go http.Request)
+         if req.Method == "" {
+            req.Method = "GET"
+         }
+         if parsedProxy != nil {
+            log.Println("proxy", req.Method, req.URL)
+            return parsedProxy, nil
+         }
+         // No proxy configured, but not excluded.
+         log.Println(req.Method, req.URL)
+         return nil, nil
+      },
+   }
+   return nil
+}
 
 func (c *Cache) Set(value any) error {
    data, err := xml.Marshal(value)
@@ -71,30 +117,6 @@ func (c *Cache) Init(path string) error {
    }
    // Create the directory immediately
    return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
-}
-
-func SetProxy(resolve func(*http.Request) (string, bool)) {
-   http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{},
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         proxy, shouldLog := resolve(req)
-         if shouldLog {
-            if req.Method == "" {
-               req.Method = http.MethodGet
-            }
-            if proxy != "" {
-               log.Println("proxy", req.Method, req.URL)
-            } else {
-               // Log normally for direct connections
-               log.Println(req.Method, req.URL)
-            }
-         }
-         if proxy != "" {
-            return url.Parse(proxy)
-         }
-         return nil, nil
-      },
-   }
 }
 
 // detectDashType determines the file extension and container type from a DASH Representation's metadata.
