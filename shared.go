@@ -14,6 +14,30 @@ import (
    "path/filepath"
 )
 
+func SetProxy(resolve func(*http.Request) (string, bool)) {
+   http.DefaultTransport = &http.Transport{
+      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         proxy, shouldLog := resolve(req)
+         if shouldLog {
+            if req.Method == "" {
+               req.Method = http.MethodGet
+            }
+            if proxy != "" {
+               log.Println("proxy", req.Method, req.URL)
+            } else {
+               // Log normally for direct connections
+               log.Println(req.Method, req.URL)
+            }
+         }
+         if proxy != "" {
+            return url.Parse(proxy)
+         }
+         return nil, nil
+      },
+   }
+}
+
 func (c *Cache) Set(value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
@@ -71,30 +95,6 @@ func (c *Cache) Init(path string) error {
    }
    // Create the directory immediately
    return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
-}
-
-func SetProxy(resolve func(*http.Request) (string, bool)) {
-   http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{},
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         proxy, shouldLog := resolve(req)
-         if shouldLog {
-            if req.Method == "" {
-               req.Method = http.MethodGet
-            }
-            if proxy != "" {
-               log.Println("proxy", req.Method, req.URL)
-            } else {
-               // Log normally for direct connections
-               log.Println(req.Method, req.URL)
-            }
-         }
-         if proxy != "" {
-            return url.Parse(proxy)
-         }
-         return nil, nil
-      },
-   }
 }
 
 // detectDashType determines the file extension and container type from a DASH Representation's metadata.
