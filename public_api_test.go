@@ -5,14 +5,14 @@ import (
    "io"
    "net/http"
    "net/url"
-   "path"
    "testing"
 )
 
 func TestDash(t *testing.T) {
-   SetProxy(func(req *http.Request) (string, bool) {
-      return "", path.Ext(req.URL.Path) != ".mp4"
-   })
+   err := SetProxy("", ".mp4")
+   if err != nil {
+      t.Fatal(err)
+   }
    address, data, err := get(dash_test)
    if err != nil {
       t.Fatal(err)
