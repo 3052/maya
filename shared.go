@@ -11,8 +11,42 @@ import (
    "net/http"
    "net/url"
    "os"
+   "path"
    "path/filepath"
+   "slices"
+   "strings"
 )
+
+func SetProxy(proxy, noProxy string) error {
+   var proxyURL *url.URL
+   if proxy != "" {
+      var err error
+      proxyURL, err = url.Parse(proxy)
+      if err != nil {
+         return err
+      }
+   }
+   excluded := strings.Split(noProxy, ",")
+   http.DefaultTransport = &http.Transport{
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         ext := path.Ext(req.URL.Path)
+         // 1. Check exclusions using slices.Contains
+         // This replaces the manual for-loop
+         if slices.Contains(excluded, ext) {
+            return nil, nil
+         }
+         // 2. Log request (only if not excluded)
+         if proxyURL != nil {
+            log.Println("proxy", req.Method, req.URL)
+         } else {
+            log.Println(req.Method, req.URL)
+         }
+         // 3. Return proxy (URL or nil)
+         return proxyURL, nil
+      },
+   }
+   return nil
+}
 
 func (c *Cache) Set(value any) error {
    data, err := xml.Marshal(value)
@@ -71,30 +105,6 @@ func (c *Cache) Init(path string) error {
    }
    // Create the directory immediately
    return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
-}
-
-func SetProxy(resolve func(*http.Request) (string, bool)) {
-   http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{},
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         proxy, shouldLog := resolve(req)
-         if shouldLog {
-            if req.Method == "" {
-               req.Method = http.MethodGet
-            }
-            if proxy != "" {
-               log.Println("proxy", req.Method, req.URL)
-            } else {
-               // Log normally for direct connections
-               log.Println(req.Method, req.URL)
-            }
-         }
-         if proxy != "" {
-            return url.Parse(proxy)
-         }
-         return nil, nil
-      },
-   }
 }
 
 // detectDashType determines the file extension and container type from a DASH Representation's metadata.
