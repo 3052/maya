@@ -16,28 +16,51 @@ import (
    "strings"
 )
 
-func (c *Cache) Update(value any, fn func() error) error {
-   if err := c.Get(value); err != nil {
-      return err
-   }
-   if err := fn(); err != nil {
-      return err
-   }
-   return c.Set(value)
+type Cache struct {
+   path string
 }
 
-func (c *Cache) Set(value any) error {
+// Update accepts an optional optionalRead boolean.
+// Usage:
+// c.Update(val, fn)       -> Read is required. Fails if Read fails.
+// c.Update(val, fn, true) -> Read is optional. If Read fails, proceeds with empty value.
+func (c *Cache) Update(value any, update func() error, optionalRead ...bool) error {
+   // Pass the flag specifically to the Read method
+   if err := c.Read(value, optionalRead...); err != nil {
+      return err
+   }
+   // The callback is NOT optional; if it fails, we return the error
+   if err := update(); err != nil {
+      return err
+   }
+   // The Write is NOT optional; if it fails, we return the error
+   return c.Write(value)
+}
+
+func (c *Cache) Write(value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   log.Println("Saved:", c.path)
+   log.Println("Write:", c.path)
    return os.WriteFile(c.path, data, os.ModePerm)
 }
 
-type Cache struct {
-   Optional bool // Public field, can be set directly
-   path     string
+// Read accepts an optional optionalRead boolean.
+func (c *Cache) Read(value any, optionalRead ...bool) error {
+   data, err := os.ReadFile(c.path)
+   if err != nil {
+      // Case 2: Read is optional.
+      // If the file cannot be read (for any reason), we suppress the error
+      // and return nil so the caller can start with a fresh/empty value.
+      if len(optionalRead) > 0 && optionalRead[0] {
+         return nil
+      }
+      // Case 1: Read is required (Default).
+      // Return the error to stop execution.
+      return err
+   }
+   return xml.Unmarshal(data, value)
 }
 
 // ResolveCache joins the user cache directory with the provided path
@@ -49,23 +72,8 @@ func ResolveCache(path string) (string, error) {
    return filepath.Join(baseDir, path), nil
 }
 
-// Get reads the file.
-// It checks c.Optional directly to decide how to handle errors.
-func (c *Cache) Get(value any) error {
-   data, err := os.ReadFile(c.path)
-   if err != nil {
-      // Check the struct field
-      if c.Optional {
-         return nil
-      }
-      return err
-   }
-   return xml.Unmarshal(data, value)
-}
-
-// Init only handles path resolution and directory creation.
 // It relies on the struct's state for configuration.
-func (c *Cache) Init(path string) error {
+func (c *Cache) Setup(path string) error {
    var err error
    c.path, err = ResolveCache(path)
    if err != nil {
