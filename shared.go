@@ -16,28 +16,39 @@ import (
    "strings"
 )
 
-func (c *Cache) Update(value any, fn func() error) error {
-   if err := c.Get(value); err != nil {
-      return err
-   }
-   if err := fn(); err != nil {
-      return err
-   }
-   return c.Set(value)
+type Cache struct {
+   path string
 }
 
-func (c *Cache) Set(value any) error {
+// Read attempts to read the cache file.
+// It returns true and the error if the file does not exist (recoverable state).
+// It returns true and nil if the read/unmarshal is successful (success state).
+// It returns false and the error for any other failure (I/O or XML issues).
+func (c *Cache) Read(value any) (bool, error) {
+   data, err := os.ReadFile(c.path)
+   if err != nil {
+      if os.IsNotExist(err) {
+         // Return true (recoverable) but pass the error back (do not trash it).
+         return true, err
+      }
+      // Return false for permission errors, disk errors, etc.
+      return false, err
+   }
+   if err := xml.Unmarshal(data, value); err != nil {
+      // Return false for data corruption.
+      return false, err
+   }
+   // Final line: Success.
+   return true, nil
+}
+
+func (c *Cache) Write(value any) error {
    data, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   log.Println("Saved:", c.path)
+   log.Println("Write:", c.path)
    return os.WriteFile(c.path, data, os.ModePerm)
-}
-
-type Cache struct {
-   Optional bool // Public field, can be set directly
-   path     string
 }
 
 // ResolveCache joins the user cache directory with the provided path
@@ -49,23 +60,8 @@ func ResolveCache(path string) (string, error) {
    return filepath.Join(baseDir, path), nil
 }
 
-// Get reads the file.
-// It checks c.Optional directly to decide how to handle errors.
-func (c *Cache) Get(value any) error {
-   data, err := os.ReadFile(c.path)
-   if err != nil {
-      // Check the struct field
-      if c.Optional {
-         return nil
-      }
-      return err
-   }
-   return xml.Unmarshal(data, value)
-}
-
-// Init only handles path resolution and directory creation.
 // It relies on the struct's state for configuration.
-func (c *Cache) Init(path string) error {
+func (c *Cache) Setup(path string) error {
    var err error
    c.path, err = ResolveCache(path)
    if err != nil {
