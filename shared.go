@@ -16,6 +16,65 @@ import (
    "strings"
 )
 
+func (c *Cache) Update(value any, fn func() error) error {
+   if err := c.Get(value); err != nil {
+      return err
+   }
+   if err := fn(); err != nil {
+      return err
+   }
+   return c.Set(value)
+}
+
+func (c *Cache) Set(value any) error {
+   data, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   log.Println("Saved:", c.path)
+   return os.WriteFile(c.path, data, os.ModePerm)
+}
+
+type Cache struct {
+   Optional bool // Public field, can be set directly
+   path     string
+}
+
+// ResolveCache joins the user cache directory with the provided path
+func ResolveCache(path string) (string, error) {
+   baseDir, err := os.UserCacheDir()
+   if err != nil {
+      return "", err
+   }
+   return filepath.Join(baseDir, path), nil
+}
+
+// Get reads the file.
+// It checks c.Optional directly to decide how to handle errors.
+func (c *Cache) Get(value any) error {
+   data, err := os.ReadFile(c.path)
+   if err != nil {
+      // Check the struct field
+      if c.Optional {
+         return nil
+      }
+      return err
+   }
+   return xml.Unmarshal(data, value)
+}
+
+// Init only handles path resolution and directory creation.
+// It relies on the struct's state for configuration.
+func (c *Cache) Init(path string) error {
+   var err error
+   c.path, err = ResolveCache(path)
+   if err != nil {
+      return err
+   }
+   // Create the directory immediately
+   return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
+}
+
 func SetProxy(proxyUrlStr, excludePatternsStr string) error {
    var parsedProxy *url.URL
    if proxyUrlStr != "" {
@@ -58,65 +117,6 @@ func SetProxy(proxyUrlStr, excludePatternsStr string) error {
       },
    }
    return nil
-}
-
-func (c *Cache) Set(value any) error {
-   data, err := xml.Marshal(value)
-   if err != nil {
-      return err
-   }
-   log.Println("Saved:", c.path)
-   return os.WriteFile(c.path, data, os.ModePerm)
-}
-
-type Cache struct {
-   Optional bool // Public field, can be set directly
-   path     string
-}
-
-// ResolveCache joins the user cache directory with the provided path
-func ResolveCache(path string) (string, error) {
-   baseDir, err := os.UserCacheDir()
-   if err != nil {
-      return "", err
-   }
-   return filepath.Join(baseDir, path), nil
-}
-
-// Get reads the file.
-// It checks c.Optional directly to decide how to handle errors.
-func (c *Cache) Get(value any) error {
-   data, err := os.ReadFile(c.path)
-   if err != nil {
-      // Check the struct field
-      if c.Optional {
-         return nil
-      }
-      return err
-   }
-   return xml.Unmarshal(data, value)
-}
-
-func (c *Cache) Update(value any, fn func() error) error {
-   if err := c.Get(value); err != nil {
-      return err
-   }
-   if err := fn(); err != nil {
-      return err
-   }
-   return c.Set(value)
-}
-
-// Init only handles path resolution and directory creation.
-// It relies on the struct's state for configuration.
-func (c *Cache) Init(path string) error {
-   var err error
-   c.path, err = ResolveCache(path)
-   if err != nil {
-      return err
-   }
-   // Create the directory immediately
-   return os.MkdirAll(filepath.Dir(c.path), os.ModePerm)
 }
 
 // detectDashType determines the file extension and container type from a DASH Representation's metadata.
