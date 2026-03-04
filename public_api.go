@@ -69,13 +69,12 @@ func listStreamsHls(playlist *hls.MasterPlaylist) error {
 
 // listStreamsDash is an internal helper to print streams from a parsed manifest
 func listStreamsDash(manifest *dash.Mpd) error {
-   sidxCache := make(map[string][]byte)
    groups := manifest.GetRepresentations()
    repsForSorting := make([]*dash.Representation, 0, len(groups))
    for _, group := range groups {
       representation := group[len(group)/2]
       if representation.GetMimeType() == "video/mp4" {
-         if err := getMiddleBitrate(representation, sidxCache); err != nil {
+         if err := getMiddleBitrate(representation); err != nil {
             return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
          }
       }

@@ -13,24 +13,21 @@ import (
 
 // getMiddleBitrate calculates an accurate bitrate for a representation and
 // stores it in MedianBandwidth
-func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) error {
+func getMiddleBitrate(rep *dash.Representation) error {
    log.Println("update", rep.Id)
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {
          return err
       }
-      cacheKey := baseUrl.String() + rep.SegmentBase.IndexRange
-      sidxData, exists := sidxCache[cacheKey]
-      if !exists {
-         header := http.Header{}
-         header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
-         sidxData, err = getSegment(baseUrl, header)
-         if err != nil {
-            return err
-         }
-         sidxCache[cacheKey] = sidxData
+
+      header := http.Header{}
+      header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
+      sidxData, err := getSegment(baseUrl, header)
+      if err != nil {
+         return err
       }
+
       segs, err := generateSegmentsFromSidx(rep, sidxData)
       if err != nil {
          return err
@@ -38,8 +35,10 @@ func getMiddleBitrate(rep *dash.Representation, sidxCache map[string][]byte) err
       if len(segs) == 0 {
          return nil
       }
-      var totalSizeBits uint64 = 0
-      var totalDuration float64 = 0
+      var (
+         totalSizeBits uint64
+         totalDuration float64
+      )
       for _, seg := range segs {
          totalSizeBits += seg.sizeBits
          totalDuration += seg.duration
