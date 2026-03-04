@@ -16,30 +16,42 @@ import (
    "strings"
 )
 
+// Update accepts an optional optionalRead boolean.
+// Usage:
+// c.Update(val, fn)       -> Read is required. Fails if Read fails.
+// c.Update(val, fn, true) -> Read is optional. If Read fails, proceeds with empty value.
+func (c *Cache) Update(value any, update func() error, optionalRead ...bool) error {
+   // Pass the flag specifically to the Read method
+   if err := c.Read(value, optionalRead...); err != nil {
+      return err
+   }
+   // The callback is NOT optional; if it fails, we return the error
+   if err := update(); err != nil {
+      return err
+   }
+   // The Write is NOT optional; if it fails, we return the error
+   return c.Write(value)
+}
+
 type Cache struct {
    path string
 }
 
-// Read attempts to read the cache file.
-// It returns true and the error if the file does not exist (recoverable state).
-// It returns true and nil if the read/unmarshal is successful (success state).
-// It returns false and the error for any other failure (I/O or XML issues).
-func (c *Cache) Read(value any) (bool, error) {
+// Read accepts an optional optionalRead boolean.
+func (c *Cache) Read(value any, optionalRead ...bool) error {
    data, err := os.ReadFile(c.path)
    if err != nil {
-      if os.IsNotExist(err) {
-         // Return true (recoverable) but pass the error back (do not trash it).
-         return true, err
+      // Case 2: Read is optional.
+      // If the file cannot be read (for any reason), we suppress the error
+      // and return nil so the caller can start with a fresh/empty value.
+      if len(optionalRead) > 0 && optionalRead[0] {
+         return nil
       }
-      // Return false for permission errors, disk errors, etc.
-      return false, err
+      // Case 1: Read is required (Default).
+      // Return the error to stop execution.
+      return err
    }
-   if err := xml.Unmarshal(data, value); err != nil {
-      // Return false for data corruption.
-      return false, err
-   }
-   // Final line: Success.
-   return true, nil
+   return xml.Unmarshal(data, value)
 }
 
 func (c *Cache) Write(value any) error {
