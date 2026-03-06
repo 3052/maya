@@ -18,32 +18,62 @@ import (
 
 type Cache struct {
    file string
+   // Memoization state
+   read bool
+   err  error
 }
 
-// Read accepts an optional optionalRead boolean.
-func (c *Cache) Read(value any, optionalRead ...bool) error {
-   data, err := os.ReadFile(c.file)
-   if err != nil {
-      // Case 2: Read is optional.
-      // If the file cannot be read (for any reason), we suppress the error
-      // and return nil so the caller can start with a fresh/empty value.
-      if len(optionalRead) > 0 && optionalRead[0] {
+// Read hits the disk exactly once.
+// allowMissing is optional.
+// - If omitted or false: Strict (Returns error if missing).
+// - If true: Lenient (Returns nil if missing).
+func (c *Cache) Read(value any, allowMissing ...bool) error {
+   // 1. One-time disk access
+   if !c.read {
+      var data []byte
+      // Save file error only
+      data, c.err = os.ReadFile(c.file)
+      c.read = true
+      // If read succeeded, parse immediately
+      if c.err == nil {
+         // XML errors are returned immediately and NOT stored in the struct
+         if err := xml.Unmarshal(data, value); err != nil {
+            return err
+         }
+      }
+   }
+   // 2. Handle File Errors (Cached)
+   if c.err != nil {
+      // Logic: If allowMissing is True, suppress the file error.
+      if len(allowMissing) > 0 && allowMissing[0] {
          return nil
       }
-      // Case 1: Read is required (Default).
-      // Return the error to stop execution.
-      return err
+      // Default strict behavior
+      return c.err
    }
-   return xml.Unmarshal(data, value)
+   return nil
 }
 
 func (c *Cache) Write(value any) error {
-   data, err := xml.Marshal(value)
+   bytes, err := xml.Marshal(value)
    if err != nil {
       return err
    }
-   log.Println("Write:", c.file)
-   return os.WriteFile(c.file, data, os.ModePerm)
+   // Pure write, no state modification
+   return os.WriteFile(c.file, bytes, os.ModePerm)
+}
+
+// Update wrapper.
+// NOTE: 'logic' must come before 'allowMissing' because variadic args must be last.
+func (c *Cache) Update(value any, logic func() error, allowMissing ...bool) error {
+   // Pass the optional bool down to Read
+   if err := c.Read(value, allowMissing...); err != nil {
+      return err
+   }
+   if err := logic(); err != nil {
+      return err
+   }
+   return c.Write(value)
 }
 
 func ResolveCache(name string) (string, error) {
@@ -63,23 +93,6 @@ func (c *Cache) Setup(name string) error {
    }
    // Create the directory immediately
    return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
-}
-
-// Update accepts an optional optionalRead boolean.
-// Usage:
-// c.Update(val, fn)       -> Read is required. Fails if Read fails.
-// c.Update(val, fn, true) -> Read is optional. If Read fails, proceeds with empty value.
-func (c *Cache) Update(value any, update func() error, optionalRead ...bool) error {
-   // Pass the flag specifically to the Read method
-   if err := c.Read(value, optionalRead...); err != nil {
-      return err
-   }
-   // The callback is NOT optional; if it fails, we return the error
-   if err := update(); err != nil {
-      return err
-   }
-   // The Write is NOT optional; if it fails, we return the error
-   return c.Write(value)
 }
 
 func SetProxy(proxyUrlStr, excludePatternsStr string) error {
