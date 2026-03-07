@@ -16,6 +16,15 @@ import (
    "strings"
 )
 
+func (c *Cache) Write(value any) error {
+   bytes, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   log.Println("Write", c.file)
+   return os.WriteFile(c.file, bytes, os.ModePerm)
+}
+
 type Cache struct {
    file string
    // Memoization state
@@ -54,15 +63,6 @@ func (c *Cache) Read(value any, allowMissing ...bool) error {
    return nil
 }
 
-func (c *Cache) Write(value any) error {
-   bytes, err := xml.Marshal(value)
-   if err != nil {
-      return err
-   }
-   // Pure write, no state modification
-   return os.WriteFile(c.file, bytes, os.ModePerm)
-}
-
 // Update wrapper.
 // NOTE: 'logic' must come before 'allowMissing' because variadic args must be last.
 func (c *Cache) Update(value any, logic func() error, allowMissing ...bool) error {
@@ -95,17 +95,17 @@ func (c *Cache) Setup(name string) error {
    return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
 }
 
-func SetProxy(proxyUrlStr, excludePatternsStr string) error {
+func SetProxy(proxyUrl, excludePatterns string) error {
    var parsedProxy *url.URL
-   if proxyUrlStr != "" {
+   if proxyUrl != "" {
       var err error
-      parsedProxy, err = url.Parse(proxyUrlStr)
+      parsedProxy, err = url.Parse(proxyUrl)
       if err != nil {
          return err
       }
    }
    // Split patterns by comma
-   patterns := strings.Split(excludePatternsStr, ",")
+   patterns := strings.Split(excludePatterns, ",")
    // Assign directly to the global DefaultTransport.
    // We ignore any existing values in the previous DefaultTransport.
    http.DefaultTransport = &http.Transport{

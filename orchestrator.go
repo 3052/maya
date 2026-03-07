@@ -13,32 +13,6 @@ import (
    "strings"
 )
 
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("Creating file:", name)
-   return os.Create(name)
-}
-
-// mediaRequest represents a single segment to be downloaded.
-type mediaRequest struct {
-   url    *url.URL
-   header http.Header
-}
-
-// downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
-type downloadJob struct {
-   outputFileNameBase string // RENAMED from streamId
-   typeInfo           *typeInfo
-   allRequests        []mediaRequest
-   initSegmentData    []byte
-   manifestProtection *protectionInfo
-   threads            int
-   fetchKey           keyFetcher
-}
-
 // orchestrateDownload contains the shared, high-level logic for executing any download job.
 func orchestrateDownload(job *downloadJob) error {
    var name strings.Builder
@@ -71,6 +45,32 @@ func orchestrateDownload(job *downloadJob) error {
       }
    }
    return executeDownload(job.allRequests, key, remux, file, job.threads)
+}
+
+func createFile(name string) (*os.File, error) {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
+   if err != nil {
+      return nil, err
+   }
+   log.Println("Creating file:", name)
+   return os.Create(name)
+}
+
+// mediaRequest represents a single segment to be downloaded.
+type mediaRequest struct {
+   url    *url.URL
+   header http.Header
+}
+
+// downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
+type downloadJob struct {
+   outputFileNameBase string // RENAMED from streamId
+   typeInfo           *typeInfo
+   allRequests        []mediaRequest
+   initSegmentData    []byte
+   manifestProtection *protectionInfo
+   threads            int
+   fetchKey           keyFetcher
 }
 
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
