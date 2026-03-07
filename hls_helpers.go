@@ -2,42 +2,36 @@ package maya
 
 import (
    "41.neocities.org/luna/hls"
+   "errors"
    "fmt"
    "io"
    "net/http"
    "net/url"
    "strconv"
+   "strings"
 )
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
-   if mediaURL == nil {
-      return nil, fmt.Errorf("HLS stream has no URI")
-   }
    resp, err := http.Get(mediaURL.String())
    if err != nil {
       return nil, err
    }
    defer resp.Body.Close()
-   body, err := io.ReadAll(resp.Body)
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+   var data strings.Builder
+   _, err = io.Copy(&data, resp.Body)
    if err != nil {
       return nil, err
    }
-   mediaPl, err := hls.DecodeMedia(string(body))
+   mediaPl, err := hls.DecodeMedia(data.String())
    if err != nil {
       return nil, err
    }
    mediaPl.ResolveUris(mediaURL)
    return mediaPl, nil
-}
-
-// hlsSegments generates a list of segments from a media playlist.
-func hlsSegments(mediaPl *hls.MediaPlaylist) ([]segment, error) {
-   var segments []segment
-   for _, hlsSeg := range mediaPl.Segments {
-      segments = append(segments, segment{url: hlsSeg.Uri, header: nil})
-   }
-   return segments, nil
 }
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
@@ -75,4 +69,13 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
       fetchKey:           fetchKey,
    }
    return orchestrateDownload(job)
+}
+
+// hlsSegments generates a list of segments from a media playlist.
+func hlsSegments(mediaPl *hls.MediaPlaylist) ([]segment, error) {
+   var segments []segment
+   for _, hlsSeg := range mediaPl.Segments {
+      segments = append(segments, segment{url: hlsSeg.Uri, header: nil})
+   }
+   return segments, nil
 }
