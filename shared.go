@@ -16,6 +16,17 @@ import (
    "strings"
 )
 
+// It relies on the struct's state for configuration.
+func (c *Cache) Setup(name string) error {
+   var err error
+   c.file, err = os.UserCacheDir()
+   if err != nil {
+      return err
+   }
+   c.file = filepath.Join(c.file, name)
+   return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
+}
+
 func (c *Cache) Write(value any) error {
    bytes, err := xml.Marshal(value)
    if err != nil {
@@ -76,25 +87,6 @@ func (c *Cache) Update(value any, logic func() error, allowMissing ...bool) erro
    return c.Write(value)
 }
 
-func ResolveCache(name string) (string, error) {
-   root, err := os.UserCacheDir()
-   if err != nil {
-      return "", err
-   }
-   return filepath.Join(root, name), nil
-}
-
-// It relies on the struct's state for configuration.
-func (c *Cache) Setup(name string) error {
-   var err error
-   c.file, err = ResolveCache(name)
-   if err != nil {
-      return err
-   }
-   // Create the directory immediately
-   return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
-}
-
 func SetProxy(proxyUrl, excludePatterns string) error {
    var parsedProxy *url.URL
    if proxyUrl != "" {
@@ -109,7 +101,7 @@ func SetProxy(proxyUrl, excludePatterns string) error {
    // Assign directly to the global DefaultTransport.
    // We ignore any existing values in the previous DefaultTransport.
    http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
+      DisableKeepAlives: true, // github.com/golang/go/issues/25793
       Proxy: func(req *http.Request) (*url.URL, error) {
          fileName := path.Base(req.URL.Path)
          // Check exclusion patterns
