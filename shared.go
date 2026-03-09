@@ -16,85 +16,6 @@ import (
    "strings"
 )
 
-func (c *Cache) Write(value any) error {
-   bytes, err := xml.Marshal(value)
-   if err != nil {
-      return err
-   }
-   log.Println("Write", c.file)
-   return os.WriteFile(c.file, bytes, os.ModePerm)
-}
-
-type Cache struct {
-   file string
-   // Memoization state
-   read bool
-   err  error
-}
-
-// Read hits the disk exactly once.
-// allowMissing is optional.
-// - If omitted or false: Strict (Returns error if missing).
-// - If true: Lenient (Returns nil if missing).
-func (c *Cache) Read(value any, allowMissing ...bool) error {
-   // 1. One-time disk access
-   if !c.read {
-      var data []byte
-      // Save file error only
-      data, c.err = os.ReadFile(c.file)
-      c.read = true
-      // If read succeeded, parse immediately
-      if c.err == nil {
-         // XML errors are returned immediately and NOT stored in the struct
-         if err := xml.Unmarshal(data, value); err != nil {
-            return err
-         }
-      }
-   }
-   // 2. Handle File Errors (Cached)
-   if c.err != nil {
-      // Logic: If allowMissing is True, suppress the file error.
-      if len(allowMissing) > 0 && allowMissing[0] {
-         return nil
-      }
-      // Default strict behavior
-      return c.err
-   }
-   return nil
-}
-
-// Update wrapper.
-// NOTE: 'logic' must come before 'allowMissing' because variadic args must be last.
-func (c *Cache) Update(value any, logic func() error, allowMissing ...bool) error {
-   // Pass the optional bool down to Read
-   if err := c.Read(value, allowMissing...); err != nil {
-      return err
-   }
-   if err := logic(); err != nil {
-      return err
-   }
-   return c.Write(value)
-}
-
-func ResolveCache(name string) (string, error) {
-   root, err := os.UserCacheDir()
-   if err != nil {
-      return "", err
-   }
-   return filepath.Join(root, name), nil
-}
-
-// It relies on the struct's state for configuration.
-func (c *Cache) Setup(name string) error {
-   var err error
-   c.file, err = ResolveCache(name)
-   if err != nil {
-      return err
-   }
-   // Create the directory immediately
-   return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
-}
-
 func SetProxy(proxyUrl, excludePatterns string) error {
    var parsedProxy *url.URL
    if proxyUrl != "" {
@@ -109,7 +30,7 @@ func SetProxy(proxyUrl, excludePatterns string) error {
    // Assign directly to the global DefaultTransport.
    // We ignore any existing values in the previous DefaultTransport.
    http.DefaultTransport = &http.Transport{
-      Protocols: &http.Protocols{}, // github.com/golang/go/issues/25793
+      DisableKeepAlives: true, // github.com/golang/go/issues/25793
       Proxy: func(req *http.Request) (*url.URL, error) {
          fileName := path.Base(req.URL.Path)
          // Check exclusion patterns
@@ -203,4 +124,83 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
       return nil, errors.New(resp.Status)
    }
    return io.ReadAll(resp.Body)
+}
+
+func (c *Cache) Write(value any) error {
+   bytes, err := xml.Marshal(value)
+   if err != nil {
+      return err
+   }
+   log.Println("Write", c.file)
+   return os.WriteFile(c.file, bytes, os.ModePerm)
+}
+
+type Cache struct {
+   file string
+   // Memoization state
+   read bool
+   err  error
+}
+
+// Read hits the disk exactly once.
+// allowMissing is optional.
+// - If omitted or false: Strict (Returns error if missing).
+// - If true: Lenient (Returns nil if missing).
+func (c *Cache) Read(value any, allowMissing ...bool) error {
+   // 1. One-time disk access
+   if !c.read {
+      var data []byte
+      // Save file error only
+      data, c.err = os.ReadFile(c.file)
+      c.read = true
+      // If read succeeded, parse immediately
+      if c.err == nil {
+         // XML errors are returned immediately and NOT stored in the struct
+         if err := xml.Unmarshal(data, value); err != nil {
+            return err
+         }
+      }
+   }
+   // 2. Handle File Errors (Cached)
+   if c.err != nil {
+      // Logic: If allowMissing is True, suppress the file error.
+      if len(allowMissing) > 0 && allowMissing[0] {
+         return nil
+      }
+      // Default strict behavior
+      return c.err
+   }
+   return nil
+}
+
+// Update wrapper.
+// NOTE: 'logic' must come before 'allowMissing' because variadic args must be last.
+func (c *Cache) Update(value any, logic func() error, allowMissing ...bool) error {
+   // Pass the optional bool down to Read
+   if err := c.Read(value, allowMissing...); err != nil {
+      return err
+   }
+   if err := logic(); err != nil {
+      return err
+   }
+   return c.Write(value)
+}
+
+func ResolveCache(name string) (string, error) {
+   root, err := os.UserCacheDir()
+   if err != nil {
+      return "", err
+   }
+   return filepath.Join(root, name), nil
+}
+
+// It relies on the struct's state for configuration.
+func (c *Cache) Setup(name string) error {
+   var err error
+   c.file, err = ResolveCache(name)
+   if err != nil {
+      return err
+   }
+   // Create the directory immediately
+   return os.MkdirAll(filepath.Dir(c.file), os.ModePerm)
 }

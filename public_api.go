@@ -9,8 +9,17 @@ import (
    "slices"
 )
 
+func Parse() map[string]bool {
+   flag.Parse()
+   set := map[string]bool{}
+   flag.Visit(func(f *flag.Flag) {
+      set[f.Name] = true
+   })
+   return set
+}
+
 func Usage(groups [][]string) error {
-   seen := make(map[string]bool)
+   seen := map[string]bool{}
    // 1. Print usage and mark flags as seen
    for i, group := range groups {
       if i >= 1 {
