@@ -9,8 +9,17 @@ import (
    "slices"
 )
 
+func Parse() map[string]bool {
+   flag.Parse()
+   set := map[string]bool{}
+   flag.Visit(func(f *flag.Flag) {
+      set[f.Name] = true
+   })
+   return set
+}
+
 func Usage(groups [][]string) error {
-   seen := make(map[string]bool)
+   seen := map[string]bool{}
    // 1. Print usage and mark flags as seen
    for i, group := range groups {
       if i >= 1 {
@@ -131,18 +140,21 @@ func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string) error
    return downloadDash(manifest, j.Threads, streamId, nil)
 }
 
+// Sender encapsulates the process of sending a byte payload (like a signed
+// license request) to a DRM server and returning the response payload.
+type Sender func([]byte) ([]byte, error)
+
 // PlayReadyJob holds configuration for a PlayReady encrypted download.
 type PlayReadyJob struct {
    Threads          int
    CertificateChain string
    EncryptSignKey   string
-   Send             func([]byte) ([]byte, error)
 }
 
 // DownloadDash parses and downloads a PlayReady-encrypted DASH stream.
-func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
+func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.playReadyKey(keyId)
+      return j.playReadyKey(keyId, send)
    }
    manifest, err := parseDash(body, baseURL)
    if err != nil {
@@ -152,9 +164,9 @@ func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId stri
 }
 
 // DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
-func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
+func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.playReadyKey(keyId)
+      return j.playReadyKey(keyId, send)
    }
    playlist, err := parseHls(body, baseURL)
    if err != nil {
@@ -168,13 +180,12 @@ type WidevineJob struct {
    Threads    int
    ClientId   string
    PrivateKey string
-   Send       func([]byte) ([]byte, error)
 }
 
 // DownloadDash parses and downloads a Widevine-encrypted DASH stream.
-func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
+func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.widevineKey(keyId, contentId)
+      return j.widevineKey(keyId, contentId, send)
    }
    manifest, err := parseDash(body, baseURL)
    if err != nil {
@@ -184,9 +195,9 @@ func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId strin
 }
 
 // DownloadHls parses and downloads a Widevine-encrypted HLS stream.
-func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
+func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.widevineKey(keyId, contentId)
+      return j.widevineKey(keyId, contentId, send)
    }
    playlist, err := parseHls(body, baseURL)
    if err != nil {
