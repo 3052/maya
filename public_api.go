@@ -3,6 +3,7 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "errors"
    "flag"
    "fmt"
    "net/url"
@@ -151,8 +152,21 @@ type PlayReadyJob struct {
    EncryptSignKey   string
 }
 
+func (j *PlayReadyJob) validate(send Sender) error {
+   if send == nil {
+      return errors.New("send function cannot be nil")
+   }
+   if j.CertificateChain == "" || j.EncryptSignKey == "" {
+      return errors.New("playready requires CertificateChain and EncryptSignKey paths")
+   }
+   return nil
+}
+
 // DownloadDash parses and downloads a PlayReady-encrypted DASH stream.
 func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
+   if err := j.validate(send); err != nil {
+      return err
+   }
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.playReadyKey(keyId, send)
    }
@@ -165,6 +179,9 @@ func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId stri
 
 // DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
 func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
+   if err := j.validate(send); err != nil {
+      return err
+   }
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.playReadyKey(keyId, send)
    }
@@ -182,8 +199,21 @@ type WidevineJob struct {
    PrivateKey string
 }
 
+func (j *WidevineJob) validate(send Sender) error {
+   if send == nil {
+      return errors.New("send function cannot be nil")
+   }
+   if j.ClientId == "" || j.PrivateKey == "" {
+      return errors.New("widevine requires ClientId and PrivateKey paths")
+   }
+   return nil
+}
+
 // DownloadDash parses and downloads a Widevine-encrypted DASH stream.
 func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
+   if err := j.validate(send); err != nil {
+      return err
+   }
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.widevineKey(keyId, contentId, send)
    }
@@ -196,6 +226,9 @@ func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId strin
 
 // DownloadHls parses and downloads a Widevine-encrypted HLS stream.
 func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
+   if err := j.validate(send); err != nil {
+      return err
+   }
    keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
       return j.widevineKey(keyId, contentId, send)
    }
