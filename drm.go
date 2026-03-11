@@ -54,13 +54,18 @@ type protectionInfo struct {
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
-func (j *WidevineJob) widevineKey(keyId []byte, contentId []byte, send Sender) ([]byte, error) {
-   // Note: Config validation done in public API
-   client_id, err := os.ReadFile(j.ClientId)
+func (w *WidevineJob) widevineKey(keyId []byte, contentId []byte, send Sender) ([]byte, error) {
+   if send == nil {
+      return nil, errors.New("send function cannot be nil")
+   }
+   if w.ClientId == "" || w.PrivateKey == "" {
+      return nil, errors.New("widevine requires ClientId and PrivateKey paths")
+   }
+   client_id, err := os.ReadFile(w.ClientId)
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(j.PrivateKey)
+   pemBytes, err := os.ReadFile(w.PrivateKey)
    if err != nil {
       return nil, err
    }
@@ -99,9 +104,14 @@ func (j *WidevineJob) widevineKey(keyId []byte, contentId []byte, send Sender) (
    return foundKey, nil
 }
 
-func (j *PlayReadyJob) playReadyKey(keyId []byte, send Sender) ([]byte, error) {
-   // Note: Config validation done in public API
-   chainData, err := os.ReadFile(j.CertificateChain)
+func (p *PlayReadyJob) playReadyKey(keyId []byte, send Sender) ([]byte, error) {
+   if send == nil {
+      return nil, errors.New("send function cannot be nil")
+   }
+   if p.CertificateChain == "" || p.EncryptSignKey == "" {
+      return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
+   }
+   chainData, err := os.ReadFile(p.CertificateChain)
    if err != nil {
       return nil, err
    }
@@ -109,7 +119,7 @@ func (j *PlayReadyJob) playReadyKey(keyId []byte, send Sender) ([]byte, error) {
    if err := chain.Decode(chainData); err != nil {
       return nil, err
    }
-   signKeyData, err := os.ReadFile(j.EncryptSignKey)
+   signKeyData, err := os.ReadFile(p.EncryptSignKey)
    if err != nil {
       return nil, err
    }

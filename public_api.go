@@ -3,7 +3,6 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
-   "errors"
    "flag"
    "fmt"
    "net/url"
@@ -39,7 +38,6 @@ func Usage(groups [][]string) error {
       }
    }
    // 2. Check for missing flags
-   // We allow 'missing' to be overwritten; checking the last one found is sufficient.
    var missing string
    flag.VisitAll(func(f *flag.Flag) {
       if !seen[f.Name] {
@@ -100,15 +98,6 @@ func listStreamsDash(manifest *dash.Mpd) error {
    return nil
 }
 
-// DownloadHls parses and downloads a clear HLS stream.
-func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int) error {
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return downloadHls(playlist, j.Threads, streamId, nil)
-}
-
 // ListDash parses a DASH manifest and lists the available streams.
 func ListDash(body []byte, baseURL *url.URL) error {
    manifest, err := parseDash(body, baseURL)
@@ -127,116 +116,84 @@ func ListHls(body []byte, baseURL *url.URL) error {
    return listStreamsHls(playlist)
 }
 
-// Job holds configuration for an unencrypted download.
-type Job struct {
-   Threads int
-}
-
-// DownloadDash parses and downloads a clear DASH stream.
-func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string) error {
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return downloadDash(manifest, j.Threads, streamId, nil)
-}
-
 // Sender encapsulates the process of sending a byte payload (like a signed
 // license request) to a DRM server and returning the response payload.
 type Sender func([]byte) ([]byte, error)
 
-// PlayReadyJob holds configuration for a PlayReady encrypted download.
-type PlayReadyJob struct {
-   Threads          int
-   CertificateChain string
-   EncryptSignKey   string
+// Job holds configuration for downloads.
+// It supports Clear, Widevine, and PlayReady via nested structs.
+type Job struct {
+   Threads   int
+   Widevine  *WidevineJob
+   PlayReady *PlayReadyJob
 }
 
-func (j *PlayReadyJob) validate(send Sender) error {
-   if send == nil {
-      return errors.New("send function cannot be nil")
-   }
-   if j.CertificateChain == "" || j.EncryptSignKey == "" {
-      return errors.New("playready requires CertificateChain and EncryptSignKey paths")
-   }
-   return nil
-}
-
-// DownloadDash parses and downloads a PlayReady-encrypted DASH stream.
-func (j *PlayReadyJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
-   if err := j.validate(send); err != nil {
-      return err
-   }
-   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.playReadyKey(keyId, send)
-   }
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return downloadDash(manifest, j.Threads, streamId, keyFetcher)
-}
-
-// DownloadHls parses and downloads a PlayReady-encrypted HLS stream.
-func (j *PlayReadyJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
-   if err := j.validate(send); err != nil {
-      return err
-   }
-   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.playReadyKey(keyId, send)
-   }
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return downloadHls(playlist, j.Threads, streamId, keyFetcher)
-}
-
-// WidevineJob holds configuration for a Widevine encrypted download.
+// WidevineJob holds credential paths for Widevine decryption.
 type WidevineJob struct {
-   Threads    int
    ClientId   string
    PrivateKey string
 }
 
-func (j *WidevineJob) validate(send Sender) error {
-   if send == nil {
-      return errors.New("send function cannot be nil")
-   }
-   if j.ClientId == "" || j.PrivateKey == "" {
-      return errors.New("widevine requires ClientId and PrivateKey paths")
-   }
-   return nil
+// PlayReadyJob holds credential paths for PlayReady decryption.
+type PlayReadyJob struct {
+   CertificateChain string
+   EncryptSignKey   string
 }
 
-// DownloadDash parses and downloads a Widevine-encrypted DASH stream.
-func (j *WidevineJob) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
-   if err := j.validate(send); err != nil {
-      return err
-   }
-   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.widevineKey(keyId, contentId, send)
-   }
+// DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
+func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
    manifest, err := parseDash(body, baseURL)
    if err != nil {
       return err
    }
-   return downloadDash(manifest, j.Threads, streamId, keyFetcher)
-}
 
-// DownloadHls parses and downloads a Widevine-encrypted HLS stream.
-func (j *WidevineJob) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
-   if err := j.validate(send); err != nil {
+   fetcher, err := j.getFetcher(send)
+   if err != nil {
       return err
    }
-   keyFetcher := func(keyId, contentId []byte) ([]byte, error) {
-      return j.widevineKey(keyId, contentId, send)
-   }
+
+   return downloadDash(manifest, j.Threads, streamId, fetcher)
+}
+
+// DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
+func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
    playlist, err := parseHls(body, baseURL)
    if err != nil {
       return err
    }
-   return downloadHls(playlist, j.Threads, streamId, keyFetcher)
+
+   fetcher, err := j.getFetcher(send)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, j.Threads, streamId, fetcher)
+}
+
+// getFetcher determines the appropriate key retrieval logic based on which nested job struct is present.
+func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
+   if j.Widevine != nil {
+      if send == nil {
+         return nil, fmt.Errorf("widevine configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return j.Widevine.widevineKey(keyId, contentId, send)
+      }, nil
+   }
+   if j.PlayReady != nil {
+      if send == nil {
+         return nil, fmt.Errorf("playready configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return j.PlayReady.playReadyKey(keyId, send)
+      }, nil
+   }
+   // Verify that we don't have a sender without a configuration
+   if send != nil {
+      return nil, fmt.Errorf("send function provided but no DRM configuration found")
+   }
+   // No DRM config present; return nil fetcher for clear download.
+   return nil, nil
 }
 
 // parseDash is an internal helper to parse a DASH manifest.
