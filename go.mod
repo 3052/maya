@@ -1,6 +1,6 @@
 module 41.neocities.org/maya
 
-go 1.24.0
+go 1.26.0
 
 require (
 	41.neocities.org/drm v1.8.0
