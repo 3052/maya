@@ -7,9 +7,67 @@ import (
    "errors"
    "fmt"
    "log"
-   "math/big"
    "os"
+   "path/filepath"
 )
+
+func playReadyKey(folder string, keyId []byte, send Sender) ([]byte, error) {
+   if send == nil {
+      return nil, errors.New("send function cannot be nil")
+   }
+   if folder == "" {
+      return nil, errors.New("playready requires a folder path")
+   }
+   // 1. certificate chain
+   data, err := os.ReadFile(filepath.Join(folder, "bdevcert.dat"))
+   if err != nil {
+      return nil, err
+   }
+   chain, err := playReady.ParseChain(data)
+   if err != nil {
+      return nil, err
+   }
+   // 2. signing key
+   data, err = os.ReadFile(filepath.Join(folder, "zprivsig.dat"))
+   if err != nil {
+      return nil, err
+   }
+   signingKey, err := playReady.ParseRawPrivateKey(data)
+   if err != nil {
+      return nil, err
+   }
+   // 3. encrypt key
+   data, err = os.ReadFile(filepath.Join(folder, "zprivencr.dat"))
+   if err != nil {
+      return nil, err
+   }
+   encryptKey, err := playReady.ParseRawPrivateKey(data)
+   if err != nil {
+      return nil, err
+   }
+   playReady.UuidOrGuid(keyId)
+   data, err = chain.LicenseRequestBytes(signingKey, keyId)
+   if err != nil {
+      return nil, err
+   }
+   data, err = send(data)
+   if err != nil {
+      return nil, err
+   }
+   license, err := playReady.ParseLicense(data)
+   if err != nil {
+      return nil, err
+   }
+   if !bytes.Equal(license.ContentKey.KeyID[:], keyId) {
+      return nil, errors.New("key ID mismatch")
+   }
+   key, err := license.Decrypt(encryptKey)
+   if err != nil {
+      return nil, err
+   }
+   log.Printf("key %x", key)
+   return key, nil
+}
 
 func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
@@ -43,8 +101,6 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
 // widevineSystemId is the UUID for the Widevine DRM system.
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
 
-var errKeyMismatch = errors.New("key ID mismatch")
-
 // protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
    ContentId []byte
@@ -54,18 +110,18 @@ type protectionInfo struct {
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
-func (w *WidevineJob) widevineKey(keyId []byte, contentId []byte, send Sender) ([]byte, error) {
+func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]byte, error) {
    if send == nil {
       return nil, errors.New("send function cannot be nil")
    }
-   if w.ClientId == "" || w.PrivateKey == "" {
-      return nil, errors.New("widevine requires ClientId and PrivateKey paths")
+   if folder == "" {
+      return nil, errors.New("widevine requires a folder path")
    }
-   client_id, err := os.ReadFile(w.ClientId)
+   client_id, err := os.ReadFile(filepath.Join(folder, "client_id.bin"))
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(w.PrivateKey)
+   pemBytes, err := os.ReadFile(filepath.Join(folder, "private_key.pem"))
    if err != nil {
       return nil, err
    }
@@ -102,46 +158,4 @@ func (w *WidevineJob) widevineKey(keyId []byte, contentId []byte, send Sender) (
    }
    log.Printf("key %x", foundKey)
    return foundKey, nil
-}
-
-func (p *PlayReadyJob) playReadyKey(keyId []byte, send Sender) ([]byte, error) {
-   if send == nil {
-      return nil, errors.New("send function cannot be nil")
-   }
-   if p.CertificateChain == "" || p.EncryptSignKey == "" {
-      return nil, errors.New("playready requires CertificateChain and EncryptSignKey paths")
-   }
-   chainData, err := os.ReadFile(p.CertificateChain)
-   if err != nil {
-      return nil, err
-   }
-   var chain playReady.Chain
-   if err := chain.Decode(chainData); err != nil {
-      return nil, err
-   }
-   signKeyData, err := os.ReadFile(p.EncryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   encryptSignKey := new(big.Int).SetBytes(signKeyData)
-   playReady.UuidOrGuid(keyId)
-   body, err := chain.RequestBody(keyId, encryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   respData, err := send(body)
-   if err != nil {
-      return nil, err
-   }
-   var license playReady.License
-   coord, err := license.Decrypt(respData, encryptSignKey)
-   if err != nil {
-      return nil, err
-   }
-   if !bytes.Equal(license.ContentKey.KeyId[:], keyId) {
-      return nil, errKeyMismatch
-   }
-   key := coord.Key()
-   log.Printf("key %x", key)
-   return key, nil
 }

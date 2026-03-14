@@ -121,23 +121,11 @@ func ListHls(body []byte, baseURL *url.URL) error {
 type Sender func([]byte) ([]byte, error)
 
 // Job holds configuration for downloads.
-// It supports Clear, Widevine, and PlayReady via nested structs.
+// Widevine and PlayReady specify folder paths containing their respective keys.
 type Job struct {
    Threads   int
-   Widevine  *WidevineJob
-   PlayReady *PlayReadyJob
-}
-
-// WidevineJob holds credential paths for Widevine decryption.
-type WidevineJob struct {
-   ClientId   string
-   PrivateKey string
-}
-
-// PlayReadyJob holds credential paths for PlayReady decryption.
-type PlayReadyJob struct {
-   CertificateChain string
-   EncryptSignKey   string
+   Widevine  string
+   PlayReady string
 }
 
 // DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
@@ -170,22 +158,22 @@ func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Send
    return downloadHls(playlist, j.Threads, streamId, fetcher)
 }
 
-// getFetcher determines the appropriate key retrieval logic based on which nested job struct is present.
+// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
 func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
-   if j.Widevine != nil {
+   if j.Widevine != "" {
       if send == nil {
          return nil, fmt.Errorf("widevine configuration present but send function is nil")
       }
       return func(keyId, contentId []byte) ([]byte, error) {
-         return j.Widevine.widevineKey(keyId, contentId, send)
+         return widevineKey(j.Widevine, keyId, contentId, send)
       }, nil
    }
-   if j.PlayReady != nil {
+   if j.PlayReady != "" {
       if send == nil {
          return nil, fmt.Errorf("playready configuration present but send function is nil")
       }
       return func(keyId, contentId []byte) ([]byte, error) {
-         return j.PlayReady.playReadyKey(keyId, send)
+         return playReadyKey(j.PlayReady, keyId, send)
       }, nil
    }
    // Verify that we don't have a sender without a configuration

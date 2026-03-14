@@ -3,7 +3,7 @@ module 41.neocities.org/maya
 go 1.26.0
 
 require (
-	41.neocities.org/drm v1.8.4
+	41.neocities.org/drm v1.8.9
 	41.neocities.org/luna v1.33.6
 	41.neocities.org/sofia v1.13.8
 )
