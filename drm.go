@@ -58,7 +58,10 @@ func playReadyKey(folder string, keyId []byte, send Sender) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   if !bytes.Equal(license.ContentKey.KeyID[:], keyId) {
+   ok := bytes.Equal(
+      license.ContainerOuter.ContainerKeys.ContentKey.GuidKeyID, keyId,
+   )
+   if !ok {
       return nil, errors.New("key ID mismatch")
    }
    key, err := license.Decrypt(encryptKey)
