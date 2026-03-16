@@ -126,7 +126,6 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
    return io.ReadAll(resp.Body)
 }
 
-// It relies on the struct's state for configuration.
 func (c *Cache) Setup(file string) error {
    var err error
    c.File, err = os.UserCacheDir()
@@ -137,8 +136,16 @@ func (c *Cache) Setup(file string) error {
    return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
 }
 
+func (c *Cache) Read(value any) error {
+   data, err := os.ReadFile(c.File)
+   if err != nil {
+      return err
+   }
+   return xml.Unmarshal(data, value)
+}
+
 func (c *Cache) Write(value any) error {
-   data, err := xml.Marshal(value)
+   data, err := xml.MarshalIndent(value, "", " ")
    if err != nil {
       return err
    }
@@ -146,25 +153,13 @@ func (c *Cache) Write(value any) error {
    return os.WriteFile(c.File, data, os.ModePerm)
 }
 
-func (c *Cache) Read(value any) {
-   var data []byte
-   // 1. Disk access
-   data, c.Error = os.ReadFile(c.File)
-   // 2. Handle File Errors
-   if c.Error == nil {
-      // 3. Unmarshal the data
-      c.Error = xml.Unmarshal(data, value)
-   }
-}
-
 type Cache struct {
-   File  string
-   Error error
+   File string
 }
 
 func (c *Cache) Update(value any, logic func() error) error {
-   if c.Read(value); c.Error != nil {
-      return c.Error
+   if err := c.Read(value); err != nil {
+      return err
    }
    if err := logic(); err != nil {
       return err
