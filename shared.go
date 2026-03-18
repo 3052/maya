@@ -156,13 +156,3 @@ func (c *Cache) Write(value any) error {
 type Cache struct {
    File string
 }
-
-func (c *Cache) Update(value any, logic func() error) error {
-   if err := c.Read(value); err != nil {
-      return err
-   }
-   if err := logic(); err != nil {
-      return err
-   }
-   return c.Write(value)
-}
