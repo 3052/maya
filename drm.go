@@ -3,13 +3,28 @@ package maya
 import (
    "41.neocities.org/drm/playReady"
    "41.neocities.org/drm/widevine"
+   "41.neocities.org/luna/dash"
+   "41.neocities.org/sofia"
    "bytes"
    "errors"
    "fmt"
    "log"
    "os"
    "path/filepath"
+   "strings"
 )
+
+// widevineSystemId is the UUID for the Widevine DRM system.
+const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
+
+// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
+type protectionInfo struct {
+   ContentId []byte
+   KeyId     []byte
+}
+
+// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
+type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func playReadyKey(folder string, keyId []byte, send Sender) ([]byte, error) {
    if send == nil {
@@ -88,8 +103,6 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
       log.Printf("key ID from MP4 tenc: %x", keyId)
    }
    if keyId == nil {
-      // If no Key ID is found, we assume the stream is not encrypted and
-      // return nil for the key, which will cause the downloader to skip decryption.
       log.Println("No key ID found in MP4 'tenc' box; assuming stream is not encrypted.")
       return nil, nil
    }
@@ -100,18 +113,6 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
    }
    return key, nil
 }
-
-// widevineSystemId is the UUID for the Widevine DRM system.
-const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
-
-// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
-type protectionInfo struct {
-   ContentId []byte
-   KeyId     []byte
-}
-
-// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
-type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]byte, error) {
    if send == nil {
@@ -161,4 +162,66 @@ func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]
    }
    log.Printf("key %x", foundKey)
    return foundKey, nil
+}
+
+// getDashProtection extracts Widevine PSSH data from a representation.
+func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
+   const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+   var psshData []byte
+   for _, contentProtection := range rep.GetContentProtection() {
+      if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
+         pssh, err := contentProtection.GetPssh()
+         if err != nil {
+            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
+         }
+         if pssh != nil {
+            psshData = pssh
+            break // Found it
+         }
+      }
+   }
+
+   if psshData == nil {
+      return nil, nil
+   }
+
+   var psshBox sofia.PsshBox
+   if err := psshBox.Parse(psshData); err != nil {
+      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
+   }
+
+   var wvData widevine.PsshData
+   if err := wvData.Unmarshal(psshBox.Data); err != nil {
+      // Not a fatal error, might just be a PSSH without a content ID
+      return &protectionInfo{ContentId: nil, KeyId: nil}, nil
+   }
+
+   // The KeyId field is explicitly set to nil, as it must only come from the MP4.
+   return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
+}
+
+// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
+func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
+   if j.Widevine != "" {
+      if send == nil {
+         return nil, fmt.Errorf("widevine configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return widevineKey(j.Widevine, keyId, contentId, send)
+      }, nil
+   }
+   if j.PlayReady != "" {
+      if send == nil {
+         return nil, fmt.Errorf("playready configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return playReadyKey(j.PlayReady, keyId, send)
+      }, nil
+   }
+   // Verify that we don't have a sender without a configuration
+   if send != nil {
+      return nil, fmt.Errorf("send function provided but no DRM configuration found")
+   }
+   // No DRM config present; return nil fetcher for clear download.
+   return nil, nil
 }

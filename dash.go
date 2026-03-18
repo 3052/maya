@@ -1,18 +1,16 @@
 package maya
 
 import (
-   "41.neocities.org/drm/widevine"
    "41.neocities.org/luna/dash"
-   "41.neocities.org/sofia"
    "errors"
    "fmt"
    "log"
    "net/http"
-   "strings"
+   "net/url"
+   "slices"
 )
 
-// getMiddleBitrate calculates an accurate bitrate for a representation and
-// stores it in MedianBandwidth
+// getMiddleBitrate calculates an accurate bitrate for a representation and stores it...
 func getMiddleBitrate(rep *dash.Representation) error {
    log.Println("update", rep.Id)
    if rep.SegmentBase != nil {
@@ -103,42 +101,6 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
    return nil, nil
 }
 
-// getDashProtection extracts Widevine PSSH data from a representation.
-func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
-   const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-   var psshData []byte
-   for _, contentProtection := range rep.GetContentProtection() {
-      if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
-         pssh, err := contentProtection.GetPssh()
-         if err != nil {
-            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
-         }
-         if pssh != nil {
-            psshData = pssh
-            break // Found it
-         }
-      }
-   }
-
-   if psshData == nil {
-      return nil, nil
-   }
-
-   var psshBox sofia.PsshBox
-   if err := psshBox.Parse(psshData); err != nil {
-      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
-   }
-
-   var wvData widevine.PsshData
-   if err := wvData.Unmarshal(psshBox.Data); err != nil {
-      // Not a fatal error, might just be a PSSH without a content ID
-      return &protectionInfo{ContentId: nil, KeyId: nil}, nil
-   }
-
-   // The KeyId field is explicitly set to nil, as it must only come from the MP4.
-   return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
-}
-
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
 func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := manifest.GetRepresentations()[streamId]
@@ -188,4 +150,51 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       fetchKey:           fetchKey,
    }
    return orchestrateDownload(job)
+}
+
+// detectDashType determines the file extension and container type from a DASH Representation's metadata.
+func detectDashType(rep *dash.Representation) (*typeInfo, error) {
+   switch rep.GetMimeType() {
+   case "video/mp4":
+      return &typeInfo{Extension: ".mp4", IsFMP4: true}, nil
+   case "audio/mp4":
+      return &typeInfo{Extension: ".m4a", IsFMP4: true}, nil
+   case "text/vtt":
+      return &typeInfo{Extension: ".vtt", IsFMP4: false}, nil
+   default:
+      return nil, fmt.Errorf("unsupported mime type for stream %s: %s", rep.Id, rep.GetMimeType())
+   }
+}
+
+// listStreamsDash is an internal helper to print streams from a parsed manifest
+func listStreamsDash(manifest *dash.Mpd) error {
+   groups := manifest.GetRepresentations()
+   repsForSorting := make([]*dash.Representation, 0, len(groups))
+   for _, group := range groups {
+      representation := group[len(group)/2]
+      if representation.GetMimeType() == "video/mp4" {
+         if err := getMiddleBitrate(representation); err != nil {
+            return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
+         }
+      }
+      repsForSorting = append(repsForSorting, representation)
+   }
+   slices.SortFunc(repsForSorting, dash.Bandwidth)
+   for i, representation := range repsForSorting {
+      if i > 0 {
+         fmt.Println()
+      }
+      fmt.Println(representation)
+   }
+   return nil
+}
+
+// parseDash is an internal helper to parse a DASH manifest.
+func parseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
+   manifest, err := dash.Parse(body)
+   if err != nil {
+      return nil, fmt.Errorf("failed to parse DASH manifest: %w", err)
+   }
+   manifest.MpdUrl = baseURL
+   return manifest, nil
 }

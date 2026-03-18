@@ -11,6 +11,29 @@ import (
    "time"
 )
 
+// progress tracks and logs the status of a multi-threaded download
+type progress struct {
+   total     int
+   processed int
+   counts    []int64
+   start     time.Time
+   lastLog   time.Time
+}
+
+// workItem is a request bundled with its index for out-of-order processing.
+type workItem struct {
+   index   int
+   request mediaRequest
+}
+
+// result is the outcome of a download attempt from a worker.
+type result struct {
+   index    int
+   workerId int
+   data     []byte
+   err      error
+}
+
 func (p *progress) update(workerId int) {
    p.processed++
    if workerId >= 0 && workerId < len(p.counts) {
@@ -41,29 +64,6 @@ func (p *progress) update(workerId int) {
       )
       p.lastLog = now
    }
-}
-
-// progress tracks and logs the status of a multi-threaded download
-type progress struct {
-   total     int
-   processed int
-   counts    []int64
-   start     time.Time
-   lastLog   time.Time
-}
-
-// workItem is a request bundled with its index for out-of-order processing.
-type workItem struct {
-   index   int
-   request mediaRequest
-}
-
-// result is the outcome of a download attempt from a worker.
-type result struct {
-   index    int
-   workerId int
-   data     []byte
-   err      error
 }
 
 // clamp ensures a value stays within a specified range.
