@@ -34,7 +34,7 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]medi
       return requests, nil
    }
    // For other types (SegmentTemplate, SegmentList), iterate through each Period's
-   // Representation to build the full list. This logic was correct.
+   // Representation to build the full list.
    var requests []mediaRequest
    for _, rep := range group {
       segs, err := generateSegments(rep)
