@@ -13,6 +13,44 @@ import (
    "strings"
 )
 
+func (c *Cache) Read(value any) func(func() error) error {
+   // 1. Attempt the read and unmarshal, capturing any error
+   data, err := os.ReadFile(c.File)
+   if err == nil {
+      err = xml.Unmarshal(data, value)
+   }
+   // 2. Return the callback wrapper
+   return func(action func() error) error {
+      if err != nil {
+         return err // Blocks the action and returns the read error
+      }
+      return action()
+   }
+}
+
+type Cache struct {
+   File string
+}
+
+func (c *Cache) Setup(file string) error {
+   var err error
+   c.File, err = os.UserCacheDir()
+   if err != nil {
+      return err
+   }
+   c.File = filepath.Join(c.File, file)
+   return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
+}
+
+func (c *Cache) Write(value any) error {
+   data, err := xml.MarshalIndent(value, "", " ")
+   if err != nil {
+      return err
+   }
+   log.Println("Write", c.File)
+   return os.WriteFile(c.File, data, os.ModePerm)
+}
+
 // Parse calls flag.Parse() and returns a map indicating which flags
 // were explicitly set on the command line.
 func Parse() map[*flag.Flag]bool {
@@ -172,35 +210,4 @@ func SetProxy(proxyUrl, excludePatterns string) error {
       },
    }
    return nil
-}
-
-type Cache struct {
-   File string
-}
-
-func (c *Cache) Setup(file string) error {
-   var err error
-   c.File, err = os.UserCacheDir()
-   if err != nil {
-      return err
-   }
-   c.File = filepath.Join(c.File, file)
-   return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
-}
-
-func (c *Cache) Read(value any) error {
-   data, err := os.ReadFile(c.File)
-   if err != nil {
-      return err
-   }
-   return xml.Unmarshal(data, value)
-}
-
-func (c *Cache) Write(value any) error {
-   data, err := xml.MarshalIndent(value, "", " ")
-   if err != nil {
-      return err
-   }
-   log.Println("Write", c.File)
-   return os.WriteFile(c.File, data, os.ModePerm)
 }
