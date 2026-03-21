@@ -1,3 +1,4 @@
+// orchestrator.go
 package maya
 
 import (
@@ -13,17 +14,20 @@ import (
    "strings"
 )
 
-// mediaRequest represents a single segment to be downloaded.
-type mediaRequest struct {
-   url    *url.URL
-   header http.Header
+// segment represents a single chunk to be downloaded.
+// This is used for both DASH and HLS, mapping tasks to workers.
+type segment struct {
+   url      *url.URL
+   header   http.Header
+   duration float64 // Used mostly by DASH for bitrate calculations
+   sizeBits uint64  // Used mostly by DASH for bitrate calculations
 }
 
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
 type downloadJob struct {
    outputFileNameBase string // RENAMED from streamId
    typeInfo           *typeInfo
-   allRequests        []mediaRequest
+   allRequests        []segment
    initSegmentData    []byte
    manifestProtection *protectionInfo
    threads            int
