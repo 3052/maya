@@ -1,3 +1,4 @@
+// dash.go
 package maya
 
 import (

@@ -1,3 +1,4 @@
+// shared.go
 package maya
 
 import (

@@ -1,3 +1,4 @@
+// downloader.go
 package maya
 
 import (
@@ -23,7 +24,7 @@ type progress struct {
 // workItem is a request bundled with its index for out-of-order processing.
 type workItem struct {
    index   int
-   request mediaRequest
+   request segment
 }
 
 // result is the outcome of a download attempt from a worker.
@@ -87,7 +88,7 @@ func newProgress(total, numWorkers int) *progress {
 }
 
 // executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []mediaRequest, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
    if len(requests) == 0 {
       if remux != nil {
          return remux.Finish()
