@@ -14,6 +14,51 @@ import (
    "strings"
 )
 
+func SetProxy(proxyUrl, excludePatterns string) error {
+   var parsedProxy *url.URL
+   if proxyUrl != "" {
+      var err error
+      parsedProxy, err = url.Parse(proxyUrl)
+      if err != nil {
+         return err
+      }
+   }
+   // Split patterns by comma
+   patterns := strings.Split(excludePatterns, ",")
+   // Assign directly to the global DefaultTransport.
+   // We ignore any existing values in the previous DefaultTransport.
+   http.DefaultTransport = &http.Transport{
+      DisableKeepAlives: true, // github.com/golang/go/issues/25793
+      Proxy: func(req *http.Request) (*url.URL, error) {
+         fileName := path.Base(req.URL.Path)
+         // Check exclusion patterns
+         for _, pattern := range patterns {
+            matched, err := path.Match(pattern, fileName)
+            if err != nil {
+               return nil, err
+            }
+            if matched {
+               // Pattern matched: Bypass proxy, do not log.
+               return nil, nil
+            }
+         }
+         // Pattern did NOT match.
+         // Handle empty method (Empty implies "GET" in Go http.Request)
+         if req.Method == "" {
+            req.Method = "GET"
+         }
+         if parsedProxy != nil {
+            log.Println("proxy", req.Method, req.URL)
+            return parsedProxy, nil
+         }
+         // No proxy configured, but not excluded.
+         log.Println(req.Method, req.URL)
+         return nil, nil
+      },
+   }
+   return nil
+}
+
 func (c *Cache) Read(value any) func(func() error) error {
    // 1. Attempt the read and unmarshal, capturing any error
    data, err := os.ReadFile(c.File)
@@ -166,49 +211,4 @@ func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Send
    }
 
    return downloadHls(playlist, j.Threads, streamId, fetcher)
-}
-
-func SetProxy(proxyUrl, excludePatterns string) error {
-   var parsedProxy *url.URL
-   if proxyUrl != "" {
-      var err error
-      parsedProxy, err = url.Parse(proxyUrl)
-      if err != nil {
-         return err
-      }
-   }
-   // Split patterns by comma
-   patterns := strings.Split(excludePatterns, ",")
-   // Assign directly to the global DefaultTransport.
-   // We ignore any existing values in the previous DefaultTransport.
-   http.DefaultTransport = &http.Transport{
-      DisableKeepAlives: true, // github.com/golang/go/issues/25793
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         fileName := path.Base(req.URL.Path)
-         // Check exclusion patterns
-         for _, pattern := range patterns {
-            matched, err := path.Match(pattern, fileName)
-            if err != nil {
-               return nil, err
-            }
-            if matched {
-               // Pattern matched: Bypass proxy, do not log.
-               return nil, nil
-            }
-         }
-         // Pattern did NOT match.
-         // Handle empty method (Empty implies "GET" in Go http.Request)
-         if req.Method == "" {
-            req.Method = "GET"
-         }
-         if parsedProxy != nil {
-            log.Println("proxy", req.Method, req.URL)
-            return parsedProxy, nil
-         }
-         // No proxy configured, but not excluded.
-         log.Println(req.Method, req.URL)
-         return nil, nil
-      },
-   }
-   return nil
 }
