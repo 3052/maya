@@ -14,6 +14,56 @@ import (
    "strings"
 )
 
+func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
+   var remux sofia.Remuxer
+   remux.Writer = file
+   if len(firstData) > 0 {
+      if err := remux.Initialize(firstData); err != nil {
+         return nil, nil, err
+      }
+   }
+
+   var initProtection *protectionInfo
+   if remux.Moov != nil {
+      initProtection = &protectionInfo{}
+      wvIdBytes, err := hex.DecodeString(widevineSystemId)
+      if err != nil {
+         panic("failed to decode hardcoded widevine system id")
+      }
+
+      // 1. Get Content ID from the PSSH box in the init segment.
+      if pssh, ok := remux.Moov.FindPssh(wvIdBytes); ok {
+         wv_data, err := widevine.DecodePsshData(pssh.Data)
+         if err == nil {
+            initProtection.ContentId = wv_data.ContentId
+         }
+      }
+      // 2. Get key ID ONLY from the 'tenc' box.
+      if len(remux.Moov.Trak) > 0 {
+         trak := remux.Moov.Trak[0]
+         if trak.Mdia != nil {
+            if trak.Mdia.Minf != nil {
+               if trak.Mdia.Minf.Stbl != nil {
+                  if trak.Mdia.Minf.Stbl.Stsd != nil {
+                     for _, enc := range trak.Mdia.Minf.Stbl.Stsd.EncChildren {
+                        if enc.Sinf != nil && enc.Sinf.Schi != nil && enc.Sinf.Schi.Tenc != nil {
+                           var zeroKid [16]byte
+                           if !bytes.Equal(enc.Sinf.Schi.Tenc.DefaultKID[:], zeroKid[:]) {
+                              initProtection.KeyId = enc.Sinf.Schi.Tenc.DefaultKID[:]
+                              break
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      }
+      remux.Moov.RemovePssh()
+   }
+   return &remux, initProtection, nil
+}
+
 // segment represents a single chunk to be downloaded.
 // This is used for both DASH and HLS, mapping tasks to workers.
 type segment struct {
@@ -75,54 +125,4 @@ func createFile(name string) (*os.File, error) {
    }
    log.Println("Creating file:", name)
    return os.Create(name)
-}
-
-func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
-   var remux sofia.Remuxer
-   remux.Writer = file
-   if len(firstData) > 0 {
-      if err := remux.Initialize(firstData); err != nil {
-         return nil, nil, err
-      }
-   }
-
-   var initProtection *protectionInfo
-   if remux.Moov != nil {
-      initProtection = &protectionInfo{}
-      wvIdBytes, err := hex.DecodeString(widevineSystemId)
-      if err != nil {
-         panic("failed to decode hardcoded widevine system id")
-      }
-
-      // 1. Get Content ID from the PSSH box in the init segment.
-      if pssh, ok := remux.Moov.FindPssh(wvIdBytes); ok {
-         var wvData widevine.PsshData
-         if err := wvData.Unmarshal(pssh.Data); err == nil {
-            initProtection.ContentId = wvData.ContentId
-         }
-      }
-      // 2. Get key ID ONLY from the 'tenc' box.
-      if len(remux.Moov.Trak) > 0 {
-         trak := remux.Moov.Trak[0]
-         if trak.Mdia != nil {
-            if trak.Mdia.Minf != nil {
-               if trak.Mdia.Minf.Stbl != nil {
-                  if trak.Mdia.Minf.Stbl.Stsd != nil {
-                     for _, enc := range trak.Mdia.Minf.Stbl.Stsd.EncChildren {
-                        if enc.Sinf != nil && enc.Sinf.Schi != nil && enc.Sinf.Schi.Tenc != nil {
-                           var zeroKid [16]byte
-                           if !bytes.Equal(enc.Sinf.Schi.Tenc.DefaultKID[:], zeroKid[:]) {
-                              initProtection.KeyId = enc.Sinf.Schi.Tenc.DefaultKID[:]
-                              break
-                           }
-                        }
-                     }
-                  }
-               }
-            }
-         }
-      }
-      remux.Moov.RemovePssh()
-   }
-   return &remux, initProtection, nil
 }

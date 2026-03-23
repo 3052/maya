@@ -8,35 +8,13 @@ import (
    "net/http"
 )
 
-// getDashMediaRequests generates the full list of media segments for a DASH representation group.
-func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segment, error) {
-   if len(group) == 0 {
-      return nil, nil
-   }
-   // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
-   if group[0].SegmentBase != nil {
-      return generateSegmentsFromSidx(group[0], sidxData)
-   }
-   // For other types (SegmentTemplate, SegmentList), iterate through each Period's
-   // Representation to build the full list.
-   var requests []segment
-   for _, rep := range group {
-      segs, err := generateSegments(rep)
-      if err != nil {
-         return nil, err
-      }
-      requests = append(requests, segs...)
-   }
-   return requests, nil
-}
-
 // generateSegmentsFromSidx parses a pre-fetched sidx box to generate segments.
 func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segment, error) {
    baseUrl, err := rep.ResolveBaseUrl()
    if err != nil {
       return nil, err
    }
-   parsed, err := sofia.Parse(sidxData)
+   parsed, err := sofia.DecodeBoxes(sidxData)
    if err != nil {
       return nil, err
    }
@@ -125,4 +103,26 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
    }
    return []segment{{url: baseUrl, duration: duration}}, nil
+}
+
+// getDashMediaRequests generates the full list of media segments for a DASH representation group.
+func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segment, error) {
+   if len(group) == 0 {
+      return nil, nil
+   }
+   // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
+   if group[0].SegmentBase != nil {
+      return generateSegmentsFromSidx(group[0], sidxData)
+   }
+   // For other types (SegmentTemplate, SegmentList), iterate through each Period's
+   // Representation to build the full list.
+   var requests []segment
+   for _, rep := range group {
+      segs, err := generateSegments(rep)
+      if err != nil {
+         return nil, err
+      }
+      requests = append(requests, segs...)
+   }
+   return requests, nil
 }

@@ -12,6 +12,59 @@ import (
    "time"
 )
 
+// processAndWriteSegments consumes results from the worker pool, decrypts,
+// remuxes, and writes data
+func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, numWorkers int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
+   if remux != nil && len(key) > 0 {
+      block, err := aes.NewCipher(key)
+      if err != nil {
+         doneChan <- err
+         return
+      }
+      remux.OnSample = func(data []byte, sample *sofia.SencSample) {
+         sofia.Decrypt(data, sample, block)
+      }
+   }
+   prog := newProgress(totalSegments, numWorkers)
+   pending := make(map[int]result)
+   nextIndex := 0
+   for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
+      res := <-results
+      if res.err != nil {
+         doneChan <- res.err
+         return
+      }
+      pending[res.index] = res
+      for {
+         item, ok := pending[nextIndex]
+         if !ok {
+            break
+         }
+         if remux != nil {
+            if err := remux.AddSegment(item.data); err != nil {
+               doneChan <- err
+               return
+            }
+         } else {
+            if _, err := dst.Write(item.data); err != nil {
+               doneChan <- err
+               return
+            }
+         }
+         prog.update(item.workerId)
+         delete(pending, nextIndex)
+         nextIndex++
+      }
+   }
+   if remux != nil {
+      if err := remux.Finish(); err != nil {
+         doneChan <- err
+         return
+      }
+   }
+   doneChan <- nil
+}
+
 // progress tracks and logs the status of a multi-threaded download
 type progress struct {
    total     int
@@ -116,56 +169,4 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
    }
    close(workQueue)
    return <-doneChan
-}
-
-// processAndWriteSegments consumes results from the worker pool, decrypts, remuxes, and writes data.
-func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, numWorkers int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
-   if remux != nil && len(key) > 0 {
-      block, err := aes.NewCipher(key)
-      if err != nil {
-         doneChan <- err
-         return
-      }
-      remux.OnSample = func(sample []byte, info *sofia.SampleEncryptionInfo) {
-         sofia.DecryptSample(sample, info, block)
-      }
-   }
-   prog := newProgress(totalSegments, numWorkers)
-   pending := make(map[int]result)
-   nextIndex := 0
-   for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
-      res := <-results
-      if res.err != nil {
-         doneChan <- res.err
-         return
-      }
-      pending[res.index] = res
-      for {
-         item, ok := pending[nextIndex]
-         if !ok {
-            break
-         }
-         if remux != nil {
-            if err := remux.AddSegment(item.data); err != nil {
-               doneChan <- err
-               return
-            }
-         } else {
-            if _, err := dst.Write(item.data); err != nil {
-               doneChan <- err
-               return
-            }
-         }
-         prog.update(item.workerId)
-         delete(pending, nextIndex)
-         nextIndex++
-      }
-   }
-   if remux != nil {
-      if err := remux.Finish(); err != nil {
-         doneChan <- err
-         return
-      }
-   }
-   doneChan <- nil
 }

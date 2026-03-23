@@ -15,6 +15,64 @@ import (
    "strings"
 )
 
+// getDashProtection extracts Widevine PSSH data from a representation.
+func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
+   const widevineUrn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+   var pssh_data []byte
+   for _, contentProtection := range rep.GetContentProtection() {
+      if strings.ToLower(contentProtection.SchemeIdUri) == widevineUrn {
+         pssh, err := contentProtection.GetPssh()
+         if err != nil {
+            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
+         }
+         if pssh != nil {
+            pssh_data = pssh
+            break // Found it
+         }
+      }
+   }
+   if pssh_data == nil {
+      return nil, nil
+   }
+   pssh_box, err := sofia.DecodePsshBox(pssh_data)
+   if err != nil {
+      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
+   }
+   wv_data, err := widevine.DecodePsshData(pssh_box.Data)
+   if err != nil {
+      return nil, fmt.Errorf("could not decode widevine pssh data: %w", err)
+   }
+   // The KeyId field is explicitly set to nil, as it must only come from the
+   // MP4
+   return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
+}
+
+// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
+func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
+   if j.Widevine != "" {
+      if send == nil {
+         return nil, fmt.Errorf("widevine configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return widevineKey(j.Widevine, keyId, contentId, send)
+      }, nil
+   }
+   if j.PlayReady != "" {
+      if send == nil {
+         return nil, fmt.Errorf("playready configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return playReadyKey(j.PlayReady, keyId, send)
+      }, nil
+   }
+   // Verify that we don't have a sender without a configuration
+   if send != nil {
+      return nil, fmt.Errorf("send function provided but no DRM configuration found")
+   }
+   // No DRM config present; return nil fetcher for clear download.
+   return nil, nil
+}
+
 // widevineSystemId is the UUID for the Widevine DRM system.
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
 
@@ -126,30 +184,30 @@ func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]
    if err != nil {
       return nil, err
    }
-   pemBytes, err := os.ReadFile(filepath.Join(folder, "private_key.pem"))
+   pem_data, err := os.ReadFile(filepath.Join(folder, "private_key.pem"))
    if err != nil {
       return nil, err
    }
    var pssh widevine.PsshData
    pssh.ContentId = contentId
    pssh.KeyIds = [][]byte{keyId}
-   req_bytes, err := pssh.BuildLicenseRequest(client_id)
+   req_data, err := pssh.EncodeLicenseRequest(client_id)
    if err != nil {
       return nil, err
    }
-   privateKey, err := widevine.ParsePrivateKey(pemBytes)
+   private_key, err := widevine.DecodePrivateKey(pem_data)
    if err != nil {
       return nil, err
    }
-   signedBytes, err := widevine.BuildSignedMessage(req_bytes, privateKey)
+   signed_data, err := widevine.EncodeSignedMessage(req_data, private_key)
    if err != nil {
       return nil, err
    }
-   respBytes, err := send(signedBytes)
+   resp_data, err := send(signed_data)
    if err != nil {
       return nil, err
    }
-   keys, err := widevine.ParseLicenseResponse(respBytes, req_bytes, privateKey)
+   keys, err := widevine.DecodeLicenseResponse(resp_data, req_data, private_key)
    if err != nil {
       return nil, err
    }
@@ -163,66 +221,4 @@ func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]
    }
    log.Printf("key %x", foundKey)
    return foundKey, nil
-}
-
-// getDashProtection extracts Widevine PSSH data from a representation.
-func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
-   const widevineURN = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-   var psshData []byte
-   for _, contentProtection := range rep.GetContentProtection() {
-      if strings.ToLower(contentProtection.SchemeIdUri) == widevineURN {
-         pssh, err := contentProtection.GetPssh()
-         if err != nil {
-            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
-         }
-         if pssh != nil {
-            psshData = pssh
-            break // Found it
-         }
-      }
-   }
-
-   if psshData == nil {
-      return nil, nil
-   }
-
-   var psshBox sofia.PsshBox
-   if err := psshBox.Parse(psshData); err != nil {
-      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
-   }
-
-   var wvData widevine.PsshData
-   if err := wvData.Unmarshal(psshBox.Data); err != nil {
-      // Not a fatal error, might just be a PSSH without a content ID
-      return &protectionInfo{ContentId: nil, KeyId: nil}, nil
-   }
-
-   // The KeyId field is explicitly set to nil, as it must only come from the MP4.
-   return &protectionInfo{ContentId: wvData.ContentId, KeyId: nil}, nil
-}
-
-// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
-func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
-   if j.Widevine != "" {
-      if send == nil {
-         return nil, fmt.Errorf("widevine configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return widevineKey(j.Widevine, keyId, contentId, send)
-      }, nil
-   }
-   if j.PlayReady != "" {
-      if send == nil {
-         return nil, fmt.Errorf("playready configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return playReadyKey(j.PlayReady, keyId, send)
-      }, nil
-   }
-   // Verify that we don't have a sender without a configuration
-   if send != nil {
-      return nil, fmt.Errorf("send function provided but no DRM configuration found")
-   }
-   // No DRM config present; return nil fetcher for clear download.
-   return nil, nil
 }
