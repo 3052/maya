@@ -15,6 +15,38 @@ import (
    "strings"
 )
 
+// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
+func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
+   // 1. Enforce mutually exclusive DRM configurations
+   if j.Widevine != "" && j.PlayReady != "" {
+      return nil, fmt.Errorf("both widevine and playready configurations are present")
+   }
+   // 2. State: send != nil && Widevine != "" && PlayReady == ""
+   if j.Widevine != "" {
+      if send == nil {
+         return nil, fmt.Errorf("widevine configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return widevineKey(j.Widevine, keyId, contentId, send)
+      }, nil
+   }
+   // 3. State: send != nil && Widevine == "" && PlayReady != ""
+   if j.PlayReady != "" {
+      if send == nil {
+         return nil, fmt.Errorf("playready configuration present but send function is nil")
+      }
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return playReadyKey(j.PlayReady, keyId, send)
+      }, nil
+   }
+   // 4. Reject invalid state: send != nil && Widevine == "" && PlayReady == ""
+   if send != nil {
+      return nil, fmt.Errorf("send function provided but no DRM configuration found")
+   }
+   // 5. State: send == nil && Widevine == "" && PlayReady == ""
+   return nil, nil // Clear stream configuration
+}
+
 // getDashProtection extracts Widevine PSSH data from a representation.
 func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    const widevineUrn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
@@ -45,32 +77,6 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    // The KeyId field is explicitly set to nil, as it must only come from the
    // MP4
    return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
-}
-
-// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
-func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
-   if j.Widevine != "" {
-      if send == nil {
-         return nil, fmt.Errorf("widevine configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return widevineKey(j.Widevine, keyId, contentId, send)
-      }, nil
-   }
-   if j.PlayReady != "" {
-      if send == nil {
-         return nil, fmt.Errorf("playready configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return playReadyKey(j.PlayReady, keyId, send)
-      }, nil
-   }
-   // Verify that we don't have a sender without a configuration
-   if send != nil {
-      return nil, fmt.Errorf("send function provided but no DRM configuration found")
-   }
-   // No DRM config present; return nil fetcher for clear download.
-   return nil, nil
 }
 
 // widevineSystemId is the UUID for the Widevine DRM system.
