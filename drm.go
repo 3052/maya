@@ -17,34 +17,24 @@ import (
 
 // getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
 func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
-   // 1. Enforce mutually exclusive DRM configurations
-   if j.Widevine != "" && j.PlayReady != "" {
-      return nil, fmt.Errorf("both widevine and playready configurations are present")
-   }
-   // 2. State: send != nil && Widevine != "" && PlayReady == ""
-   if j.Widevine != "" {
-      if send == nil {
-         return nil, fmt.Errorf("widevine configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return widevineKey(j.Widevine, keyId, contentId, send)
-      }, nil
-   }
-   // 3. State: send != nil && Widevine == "" && PlayReady != ""
-   if j.PlayReady != "" {
-      if send == nil {
-         return nil, fmt.Errorf("playready configuration present but send function is nil")
-      }
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return playReadyKey(j.PlayReady, keyId, send)
-      }, nil
-   }
-   // 4. Reject invalid state: send != nil && Widevine == "" && PlayReady == ""
    if send != nil {
-      return nil, fmt.Errorf("send function provided but no DRM configuration found")
+      if j.Widevine != "" {
+         if j.PlayReady == "" {
+            return func(keyId, contentId []byte) ([]byte, error) {
+               return widevineKey(j.Widevine, keyId, contentId, send)
+            }, nil
+         }
+      } else if j.PlayReady != "" {
+         return func(keyId, contentId []byte) ([]byte, error) {
+            return playReadyKey(j.PlayReady, keyId, send)
+         }, nil
+      }
+   } else if j.Widevine == "" {
+      if j.PlayReady == "" {
+         return nil, nil
+      }
    }
-   // 5. State: send == nil && Widevine == "" && PlayReady == ""
-   return nil, nil // Clear stream configuration
+   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a send function, or neither with no send function")
 }
 
 // getDashProtection extracts Widevine PSSH data from a representation.
