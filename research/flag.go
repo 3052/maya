@@ -1,111 +1,105 @@
-package flag
+package myflag
 
 import (
    "fmt"
+   "os"
    "slices"
    "strconv"
-   "strings"
 )
 
-// ==========================================
-// Core Types
-// ==========================================
-
-// A Flag represents the state of a single command line flag.
 type Flag struct {
-   Name   string
-   Usage  string
-   Value  string // Parsed value stored directly as a string
-   IsBool bool   // True if the flag doesn't require a subsequent argument
+   Name     string
+   Usage    string
+   IsBool   bool
+   Provided bool
+   Set      func(string) error
 }
 
-// A FlagSet represents a set of defined flags.
-type FlagSet []*Flag
+var flags []*Flag
 
-// ==========================================
-// Flag Registration
-// ==========================================
-
-// String adds a new string flag to the FlagSet.
-func (f *FlagSet) String(name string, value string, usage string) {
-   *f = append(*f, &Flag{
-      Name:   name,
-      Usage:  usage,
-      Value:  value,
-      IsBool: false,
-   })
+func String(name, usage string) (*Flag, *string) {
+   p := new(string)
+   f := &Flag{
+      Name:  name,
+      Usage: usage,
+      Set: func(val string) error {
+         *p = val
+         return nil
+      },
+   }
+   flags = append(flags, f)
+   return f, p
 }
 
-// Bool adds a new boolean flag to the FlagSet.
-func (f *FlagSet) Bool(name string, value bool, usage string) {
-   *f = append(*f, &Flag{
+func Bool(name, usage string) (*Flag, *bool) {
+   p := new(bool)
+   f := &Flag{
       Name:   name,
       Usage:  usage,
-      Value:  strconv.FormatBool(value),
       IsBool: true,
-   })
+      Set: func(val string) error {
+         if val == "true" {
+            *p = true
+         }
+         return nil
+      },
+   }
+   flags = append(flags, f)
+   return f, p
 }
 
-// ==========================================
-// Parsing Logic
-// ==========================================
+func Int(name, usage string) (*Flag, *int) {
+   p := new(int)
+   f := &Flag{
+      Name:  name,
+      Usage: usage,
+      Set: func(val string) (err error) {
+         *p, err = strconv.Atoi(val)
+         return
+      },
+   }
+   flags = append(flags, f)
+   return f, p
+}
 
-// Parse parses flag definitions from the argument list.
-func (f *FlagSet) Parse(arguments []string) error {
-   args := arguments
+func Parse() error {
+   args := os.Args[1:]
 
-   for {
-      if len(args) == 0 {
-         return nil
+   for i := 0; i < len(args); i++ {
+      arg := args[i]
+
+      if len(arg) < 2 || arg[0] != '-' {
+         break
       }
 
-      arg := args[0]
+      name := arg[1:]
 
-      // Stop parsing if it's not a flag (doesn't start with "-")
-      if !strings.HasPrefix(arg, "-") || arg == "-" {
-         return nil
-      }
-
-      // Pop the argument from the list
-      args = args[1:]
-
-      // Strip leading dashes
-      trimmed := strings.TrimLeft(arg, "-")
-
-      // Check for key=value format
-      parts := strings.SplitN(trimmed, "=", 2)
-      name := parts[0]
-
-      // Find the flag in the slice
-      idx := slices.IndexFunc(*f, func(fl *Flag) bool {
-         return fl.Name == name
+      idx := slices.IndexFunc(flags, func(f *Flag) bool {
+         return f.Name == name
       })
 
       if idx == -1 {
-         return fmt.Errorf("flag provided but not defined: -%s", name)
+         return fmt.Errorf("provided but not defined: -%s", name)
       }
-
-      flag := (*f)[idx]
+      flag := flags[idx]
 
       var value string
-      if len(parts) == 2 {
-         // Format: -flag=value
-         value = parts[1]
+
+      if flag.IsBool {
+         value = "true"
       } else {
-         // Format: -flag value OR boolean -flag
-         if flag.IsBool {
-            value = "true" // Booleans don't consume the next argument
-         } else {
-            // Requires next argument
-            if len(args) == 0 {
-               return fmt.Errorf("flag needs an argument: -%s", name)
-            }
-            value = args[0]
-            args = args[1:] // Consume the argument
+         if i+1 >= len(args) || (len(args[i+1]) >= 2 && args[i+1][0] == '-') {
+            return fmt.Errorf("flag needs an argument: -%s", name)
          }
+         value = args[i+1]
+         i++
       }
 
-      // Store the parsed result directly as a string
-      flag.Value = value
+      if err := flag.Set(value); err != nil {
+         return fmt.Errorf("invalid value for flag -%s: %v", name, err)
+      }
+
+      flag.Provided = true
    }
+   return nil
 }
