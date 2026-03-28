@@ -20,24 +20,24 @@ type Flag struct {
    IsBool bool
    IsSet  bool
    Set    func(string) error
-   Usage  func() string
+   Usage  string
 }
 
 var flags []*Flag
 
 func StringFlag(pointer *string, name, usage string) *Flag {
+   usage = fmt.Sprintf(" string\n\t%s", usage)
+   if *pointer != "" {
+      usage += fmt.Sprintf("\n\tdefault %s", *pointer)
+   }
+
    f := &Flag{
       Name: name,
       Set: func(val string) error {
          *pointer = val
          return nil
       },
-      Usage: func() string {
-         if *pointer != "" {
-            return fmt.Sprintf(" string\n\t%s\n\tdefault %s", usage, *pointer)
-         }
-         return fmt.Sprintf(" string\n\t%s", usage)
-      },
+      Usage: usage,
    }
    flags = append(flags, f)
    return f
@@ -47,37 +47,33 @@ func BoolFlag(name, usage string) *Flag {
    f := &Flag{
       Name:   name,
       IsBool: true,
-      Usage: func() string {
-         return fmt.Sprintf("\n\t%s", usage)
-      },
+      Usage:  fmt.Sprintf("\n\t%s", usage),
    }
    flags = append(flags, f)
    return f
 }
 
 func IntFlag(pointer *int, name, usage string) *Flag {
+   usage = fmt.Sprintf(" int\n\t%s", usage)
+   if *pointer != 0 {
+      usage += fmt.Sprintf("\n\tdefault %d", *pointer)
+   }
+
    f := &Flag{
       Name: name,
       Set: func(val string) (err error) {
          *pointer, err = strconv.Atoi(val)
          return
       },
-      Usage: func() string {
-         if *pointer != 0 {
-            return fmt.Sprintf(" int\n\t%s\n\tdefault %d", usage, *pointer)
-         }
-         return fmt.Sprintf(" int\n\t%s", usage)
-      },
+      Usage: usage,
    }
    flags = append(flags, f)
    return f
 }
 
 func ParseFlags() error {
-   args := os.Args[1:]
-
-   for i := 0; i < len(args); i++ {
-      arg := args[i]
+   for i := 1; i < len(os.Args); i++ {
+      arg := os.Args[i]
 
       if len(arg) < 2 || arg[0] != '-' {
          return fmt.Errorf("unexpected argument: %s", arg)
@@ -96,11 +92,11 @@ func ParseFlags() error {
 
       if !f.IsBool {
          i++
-         if i >= len(args) {
+         if i >= len(os.Args) {
             return fmt.Errorf("flag needs an argument: -%s", name)
          }
 
-         if err := f.Set(args[i]); err != nil {
+         if err := f.Set(os.Args[i]); err != nil {
             return fmt.Errorf("invalid value for flag -%s: %v", name, err)
          }
       }
@@ -118,7 +114,7 @@ func PrintFlags(groups [][]*Flag) error {
          fmt.Fprintln(os.Stderr)
       }
       for _, f := range group {
-         fmt.Fprintf(os.Stderr, "-%s%s\n", f.Name, f.Usage())
+         fmt.Fprintf(os.Stderr, "-%s%s\n", f.Name, f.Usage)
          printed[f] = true
       }
    }
@@ -235,7 +231,6 @@ func SetProxy(proxyUrl, excludePatterns string) error {
    }
    return nil
 }
-
 func (c *Cache) Read(value any) func(func() error) error {
    // 1. Attempt the read and unmarshal, capturing any error
    data, err := os.ReadFile(c.File)
