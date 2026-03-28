@@ -3,7 +3,6 @@ package maya
 
 import (
    "encoding/xml"
-   "flag"
    "fmt"
    "log"
    "net/http"
@@ -11,63 +10,125 @@ import (
    "os"
    "path"
    "path/filepath"
+   "slices"
+   "strconv"
    "strings"
 )
 
-// Usage prints the structured usage and checks for missing flags.
-func Usage(groups [][]*flag.Flag) error {
-   seen := map[string]bool{}
-   // 1. Print usage and mark flags as seen
-   for i, group := range groups {
-      if i >= 1 {
-         fmt.Println()
-      }
-      for _, f := range group {
-         fmt.Printf("-%v %v\n", f.Name, f.Usage)
-         if f.DefValue != "" {
-            fmt.Printf("\tdefault %v\n", f.DefValue)
+type Flag struct {
+   Name   string
+   IsBool bool
+   IsSet  bool
+   Set    func(string) error
+   Usage  func() string
+}
+
+var flags []*Flag
+
+func StringFlag(pointer *string, name, usage string) *Flag {
+   f := &Flag{
+      Name: name,
+      Set: func(val string) error {
+         *pointer = val
+         return nil
+      },
+      Usage: func() string {
+         if *pointer != "" {
+            return fmt.Sprintf(" string\n\t%s\n\tdefault %s", usage, *pointer)
          }
-         seen[f.Name] = true
-      }
+         return fmt.Sprintf(" string\n\t%s", usage)
+      },
    }
-   // 2. Check for missing flags
-   var missing string
-   flag.VisitAll(func(f *flag.Flag) {
-      if !seen[f.Name] {
-         missing = f.Name
+   flags = append(flags, f)
+   return f
+}
+
+func BoolFlag(name, usage string) *Flag {
+   f := &Flag{
+      Name:   name,
+      IsBool: true,
+      Usage: func() string {
+         return fmt.Sprintf("\n\t%s", usage)
+      },
+   }
+   flags = append(flags, f)
+   return f
+}
+
+func IntFlag(pointer *int, name, usage string) *Flag {
+   f := &Flag{
+      Name: name,
+      Set: func(val string) (err error) {
+         *pointer, err = strconv.Atoi(val)
+         return
+      },
+      Usage: func() string {
+         if *pointer != 0 {
+            return fmt.Sprintf(" int\n\t%s\n\tdefault %d", usage, *pointer)
+         }
+         return fmt.Sprintf(" int\n\t%s", usage)
+      },
+   }
+   flags = append(flags, f)
+   return f
+}
+
+func ParseFlags() error {
+   args := os.Args[1:]
+
+   for i := 0; i < len(args); i++ {
+      arg := args[i]
+
+      if len(arg) < 2 || arg[0] != '-' {
+         return fmt.Errorf("unexpected argument: %s", arg)
       }
-   })
-   if missing != "" {
-      return fmt.Errorf("defined flag missing: -%s", missing)
+
+      name := arg[1:]
+
+      idx := slices.IndexFunc(flags, func(f *Flag) bool {
+         return f.Name == name
+      })
+
+      if idx == -1 {
+         return fmt.Errorf("provided but not defined: -%s", name)
+      }
+      f := flags[idx]
+
+      if !f.IsBool {
+         i++
+         if i >= len(args) {
+            return fmt.Errorf("flag needs an argument: -%s", name)
+         }
+
+         if err := f.Set(args[i]); err != nil {
+            return fmt.Errorf("invalid value for flag -%s: %v", name, err)
+         }
+      }
+
+      f.IsSet = true
    }
    return nil
 }
 
-// Parse calls flag.Parse() and returns a map indicating which flags
-// were explicitly set on the command line.
-func Parse() map[*flag.Flag]bool {
-   flag.Parse()
-   setFlags := make(map[*flag.Flag]bool)
-   // flag.Visit only visits flags that have been explicitly set
-   flag.Visit(func(f *flag.Flag) {
-      setFlags[f] = true
-   })
-   return setFlags
-}
+func PrintFlags(groups [][]*Flag) error {
+   printed := make(map[*Flag]bool)
 
-func StringVar(value *string, name, usage string) *flag.Flag {
-   flag.StringVar(value, name, *value, usage)
-   return flag.Lookup(name)
-}
+   for i, group := range groups {
+      if i > 0 {
+         fmt.Fprintln(os.Stderr)
+      }
+      for _, f := range group {
+         fmt.Fprintf(os.Stderr, "-%s%s\n", f.Name, f.Usage())
+         printed[f] = true
+      }
+   }
 
-func BoolVar(value *bool, name, usage string) *flag.Flag {
-   flag.BoolVar(value, name, *value, usage)
-   return flag.Lookup(name)
-}
-
-func IntVar(value *int, name, usage string) *flag.Flag {
-   flag.IntVar(value, name, *value, usage)
-   return flag.Lookup(name)
+   for _, f := range flags {
+      if !printed[f] {
+         return fmt.Errorf("flag -%s is missing from PrintFlags groups", f.Name)
+      }
+   }
+   return nil
 }
 
 // ListDash parses a DASH manifest and lists the available streams.

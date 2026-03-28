@@ -2,8 +2,8 @@
 package maya
 
 import (
-   "41.neocities.org/drm/playReady"
-   "41.neocities.org/drm/widevine"
+   "41.neocities.org/diana/playReady"
+   "41.neocities.org/diana/widevine"
    "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
    "bytes"

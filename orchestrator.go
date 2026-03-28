@@ -2,7 +2,7 @@
 package maya
 
 import (
-   "41.neocities.org/drm/widevine"
+   "41.neocities.org/diana/widevine"
    "41.neocities.org/sofia"
    "bytes"
    "encoding/hex"
