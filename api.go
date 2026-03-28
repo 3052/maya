@@ -74,10 +74,8 @@ func IntFlag(pointer *int, name, usage string) *Flag {
 }
 
 func ParseFlags() error {
-   args := os.Args[1:]
-
-   for i := 0; i < len(args); i++ {
-      arg := args[i]
+   for i := 1; i < len(os.Args); i++ {
+      arg := os.Args[i]
 
       if len(arg) < 2 || arg[0] != '-' {
          return fmt.Errorf("unexpected argument: %s", arg)
@@ -96,11 +94,11 @@ func ParseFlags() error {
 
       if !f.IsBool {
          i++
-         if i >= len(args) {
+         if i >= len(os.Args) {
             return fmt.Errorf("flag needs an argument: -%s", name)
          }
 
-         if err := f.Set(args[i]); err != nil {
+         if err := f.Set(os.Args[i]); err != nil {
             return fmt.Errorf("invalid value for flag -%s: %v", name, err)
          }
       }
@@ -235,7 +233,6 @@ func SetProxy(proxyUrl, excludePatterns string) error {
    }
    return nil
 }
-
 func (c *Cache) Read(value any) func(func() error) error {
    // 1. Attempt the read and unmarshal, capturing any error
    data, err := os.ReadFile(c.File)
