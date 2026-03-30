@@ -25,6 +25,16 @@ type Flag struct {
 
 var flags []*Flag
 
+func FuncFlag(name, usage string, fn func(string) error) *Flag {
+   f := &Flag{
+      Name:  name,
+      Set:   fn,
+      Usage: fmt.Sprintf(" value\n\t%s", usage),
+   }
+   flags = append(flags, f)
+   return f
+}
+
 func StringFlag(pointer *string, name, usage string) *Flag {
    usage = fmt.Sprintf(" string\n\t%s", usage)
    if *pointer != "" {
