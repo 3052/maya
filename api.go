@@ -25,6 +25,16 @@ type Flag struct {
 
 var flags []*Flag
 
+func FuncFlag(name, usage string, fn func(string) error) *Flag {
+   f := &Flag{
+      Name:  name,
+      Set:   fn,
+      Usage: fmt.Sprintf(" value\n\t%s", usage),
+   }
+   flags = append(flags, f)
+   return f
+}
+
 func StringFlag(pointer *string, name, usage string) *Flag {
    usage = fmt.Sprintf(" string\n\t%s", usage)
    if *pointer != "" {
@@ -145,9 +155,9 @@ func ListHls(body []byte, baseURL *url.URL) error {
    return listStreamsHls(playlist)
 }
 
-// Sender encapsulates the process of sending a byte payload (like a signed
-// license request) to a DRM server and returning the response payload.
-type Sender func([]byte) ([]byte, error)
+// Fetcher encapsulates the process of fetching a byte payload (like a signed
+// license request) from a DRM server and returning the response payload.
+type Fetcher func([]byte) ([]byte, error)
 
 // Job holds configuration for downloads.
 // Widevine and PlayReady specify folder paths containing their respective keys.
@@ -158,13 +168,13 @@ type Job struct {
 }
 
 // DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
-func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, send Sender) error {
+func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, fetch Fetcher) error {
    manifest, err := parseDash(body, baseURL)
    if err != nil {
       return err
    }
 
-   fetcher, err := j.getFetcher(send)
+   fetcher, err := j.getFetcher(fetch)
    if err != nil {
       return err
    }
@@ -173,13 +183,13 @@ func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, send 
 }
 
 // DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
-func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, send Sender) error {
+func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, fetch Fetcher) error {
    playlist, err := parseHls(body, baseURL)
    if err != nil {
       return err
    }
 
-   fetcher, err := j.getFetcher(send)
+   fetcher, err := j.getFetcher(fetch)
    if err != nil {
       return err
    }

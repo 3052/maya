@@ -16,17 +16,17 @@ import (
 )
 
 // getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
-func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
-   if send != nil {
+func (j *Job) getFetcher(fetch Fetcher) (keyFetcher, error) {
+   if fetch != nil {
       if j.Widevine != "" {
          if j.PlayReady == "" {
             return func(keyId, contentId []byte) ([]byte, error) {
-               return widevineKey(j.Widevine, keyId, contentId, send)
+               return widevineKey(j.Widevine, keyId, contentId, fetch)
             }, nil
          }
       } else if j.PlayReady != "" {
          return func(keyId, contentId []byte) ([]byte, error) {
-            return playReadyKey(j.PlayReady, keyId, send)
+            return playReadyKey(j.PlayReady, keyId, fetch)
          }, nil
       }
    } else if j.Widevine == "" {
@@ -34,7 +34,7 @@ func (j *Job) getFetcher(send Sender) (keyFetcher, error) {
          return nil, nil
       }
    }
-   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a send function, or neither with no send function")
+   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a fetch function, or neither with no fetch function")
 }
 
 // getDashProtection extracts Widevine PSSH data from a representation.
@@ -81,9 +81,9 @@ type protectionInfo struct {
 // keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
-func playReadyKey(folder string, keyId []byte, send Sender) ([]byte, error) {
-   if send == nil {
-      return nil, errors.New("send function cannot be nil")
+func playReadyKey(folder string, keyId []byte, fetch Fetcher) ([]byte, error) {
+   if fetch == nil {
+      return nil, errors.New("fetch function cannot be nil")
    }
    if folder == "" {
       return nil, errors.New("playready requires a folder path")
@@ -120,7 +120,7 @@ func playReadyKey(folder string, keyId []byte, send Sender) ([]byte, error) {
    if err != nil {
       return nil, err
    }
-   data, err = send(data)
+   data, err = fetch(data)
    if err != nil {
       return nil, err
    }
@@ -169,9 +169,9 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
    return key, nil
 }
 
-func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]byte, error) {
-   if send == nil {
-      return nil, errors.New("send function cannot be nil")
+func widevineKey(folder string, keyId []byte, contentId []byte, fetch Fetcher) ([]byte, error) {
+   if fetch == nil {
+      return nil, errors.New("fetch function cannot be nil")
    }
    if folder == "" {
       return nil, errors.New("widevine requires a folder path")
@@ -199,7 +199,7 @@ func widevineKey(folder string, keyId []byte, contentId []byte, send Sender) ([]
    if err != nil {
       return nil, err
    }
-   resp_data, err := send(signed_data)
+   resp_data, err := fetch(signed_data)
    if err != nil {
       return nil, err
    }
