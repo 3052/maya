@@ -241,6 +241,7 @@ func SetProxy(proxyUrl, excludePatterns string) error {
    }
    return nil
 }
+
 func (c *Cache) Read(value any) func(func() error) error {
    // 1. Attempt the read and unmarshal, capturing any error
    data, err := os.ReadFile(c.File)
