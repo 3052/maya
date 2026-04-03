@@ -15,7 +15,73 @@ import (
    "strings"
 )
 
-func playReadyKey(folder string, keyId []byte, fetch Fetcher) ([]byte, error) {
+// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
+func (j *Job) getFetcher(fetch Fetcher) (keyFetcher, error) {
+   if fetch != nil {
+      if j.Widevine != "" {
+         if j.PlayReady == "" {
+            return func(keyId, contentId []byte) ([]byte, error) {
+               return widevineKey(j.Widevine, keyId, contentId, fetch)
+            }, nil
+         }
+      } else if j.PlayReady != "" {
+         return func(keyId, contentId []byte) ([]byte, error) {
+            return playReadyKey(j.PlayReady, keyId, string(contentId), fetch)
+         }, nil
+      }
+   } else if j.Widevine == "" {
+      if j.PlayReady == "" {
+         return nil, nil
+      }
+   }
+   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a fetch function, or neither with no fetch function")
+}
+
+// getDashProtection extracts Widevine PSSH data from a representation.
+func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
+   const widevineUrn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+   var pssh_data []byte
+   for _, contentProtection := range rep.GetContentProtection() {
+      if strings.ToLower(contentProtection.SchemeIdUri) == widevineUrn {
+         pssh, err := contentProtection.GetPssh()
+         if err != nil {
+            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
+         }
+         if pssh != nil {
+            pssh_data = pssh
+            break // Found it
+         }
+      }
+   }
+   if pssh_data == nil {
+      return nil, nil
+   }
+   pssh_box, err := sofia.DecodePsshBox(pssh_data)
+   if err != nil {
+      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
+   }
+   wv_data, err := widevine.DecodePsshData(pssh_box.Data)
+   if err != nil {
+      return nil, fmt.Errorf("could not decode widevine pssh data: %w", err)
+   }
+   // The KeyId field is explicitly set to nil, as it must only come from the
+   // MP4
+   return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
+}
+
+// widevineSystemId is the UUID for the Widevine DRM system.
+const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
+
+// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
+type protectionInfo struct {
+   ContentId []byte
+   KeyId     []byte
+}
+
+// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
+type keyFetcher func(keyId, contentId []byte) ([]byte, error)
+
+func playReadyKey(folder string, keyId []byte, contentId string, fetch Fetcher) ([]byte, error) {
    if fetch == nil {
       return nil, errors.New("fetch function cannot be nil")
    }
@@ -50,7 +116,7 @@ func playReadyKey(folder string, keyId []byte, fetch Fetcher) ([]byte, error) {
       return nil, err
    }
    playReady.UuidOrGuid(keyId)
-   data, err = chain.LicenseRequestBytes(signingKey, keyId)
+   data, err = chain.LicenseRequestBytes(signingKey, keyId, contentId)
    if err != nil {
       return nil, err
    }
@@ -76,7 +142,7 @@ func playReadyKey(folder string, keyId []byte, fetch Fetcher) ([]byte, error) {
    return key, nil
 }
 
-func widevineKey(folder string, keyId []byte, contentId []byte, fetch Fetcher) ([]byte, error) {
+func widevineKey(folder string, keyId, contentId []byte, fetch Fetcher) ([]byte, error) {
    if fetch == nil {
       return nil, errors.New("fetch function cannot be nil")
    }
@@ -152,69 +218,3 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
    }
    return key, nil
 }
-
-// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
-func (j *Job) getFetcher(fetch Fetcher) (keyFetcher, error) {
-   if fetch != nil {
-      if j.Widevine != "" {
-         if j.PlayReady == "" {
-            return func(keyId, contentId []byte) ([]byte, error) {
-               return widevineKey(j.Widevine, keyId, contentId, fetch)
-            }, nil
-         }
-      } else if j.PlayReady != "" {
-         return func(keyId, contentId []byte) ([]byte, error) {
-            return playReadyKey(j.PlayReady, keyId, fetch)
-         }, nil
-      }
-   } else if j.Widevine == "" {
-      if j.PlayReady == "" {
-         return nil, nil
-      }
-   }
-   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a fetch function, or neither with no fetch function")
-}
-
-// getDashProtection extracts Widevine PSSH data from a representation.
-func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
-   const widevineUrn = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-   var pssh_data []byte
-   for _, contentProtection := range rep.GetContentProtection() {
-      if strings.ToLower(contentProtection.SchemeIdUri) == widevineUrn {
-         pssh, err := contentProtection.GetPssh()
-         if err != nil {
-            return nil, fmt.Errorf("could not parse widevine pssh from manifest: %w", err)
-         }
-         if pssh != nil {
-            pssh_data = pssh
-            break // Found it
-         }
-      }
-   }
-   if pssh_data == nil {
-      return nil, nil
-   }
-   pssh_box, err := sofia.DecodePsshBox(pssh_data)
-   if err != nil {
-      return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
-   }
-   wv_data, err := widevine.DecodePsshData(pssh_box.Data)
-   if err != nil {
-      return nil, fmt.Errorf("could not decode widevine pssh data: %w", err)
-   }
-   // The KeyId field is explicitly set to nil, as it must only come from the
-   // MP4
-   return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
-}
-
-// widevineSystemId is the UUID for the Widevine DRM system.
-const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
-
-// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
-type protectionInfo struct {
-   ContentId []byte
-   KeyId     []byte
-}
-
-// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
-type keyFetcher func(keyId, contentId []byte) ([]byte, error)
