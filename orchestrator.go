@@ -2,10 +2,12 @@
 package maya
 
 import (
+   "41.neocities.org/diana/playReady"
    "41.neocities.org/diana/widevine"
    "41.neocities.org/sofia"
    "bytes"
    "encoding/hex"
+   "fmt"
    "log"
    "net/http"
    "net/url"
@@ -30,6 +32,10 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
       if err != nil {
          panic("failed to decode hardcoded widevine system id")
       }
+      prIdBytes, err := hex.DecodeString(playReadySystemId)
+      if err != nil {
+         panic("failed to decode hardcoded playready system id")
+      }
 
       // 1. Get Content ID from the PSSH box in the init segment.
       if pssh, ok := remux.Moov.FindPssh(wvIdBytes); ok {
@@ -38,6 +44,18 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
             initProtection.ContentId = wv_data.ContentId
          }
       }
+      if initProtection.ContentId == nil {
+         if pssh, ok := remux.Moov.FindPssh(prIdBytes); ok {
+            wrm, err := playReady.ParsePro(pssh.Data)
+            if err != nil {
+               return nil, nil, fmt.Errorf("failed to parse PlayReady PRO: %w", err)
+            }
+            if wrm.Data.CustomAttributes != nil {
+               initProtection.ContentId = []byte(wrm.Data.CustomAttributes.ContentId)
+            }
+         }
+      }
+
       // 2. Get key ID ONLY from the 'tenc' box.
       if len(remux.Moov.Trak) > 0 {
          trak := remux.Moov.Trak[0]

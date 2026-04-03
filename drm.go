@@ -72,6 +72,9 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
 // widevineSystemId is the UUID for the Widevine DRM system.
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
 
+// playReadySystemId is the UUID for the PlayReady DRM system.
+const playReadySystemId = "9a04f07998404286ab92e65be0885f95"
+
 // protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
    ContentId []byte
