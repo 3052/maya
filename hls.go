@@ -8,6 +8,7 @@ import (
    "io"
    "net/http"
    "net/url"
+   "path"
    "slices"
    "strconv"
    "strings"
@@ -38,11 +39,16 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchKey keyFetcher) error {
-   typeInfo, targetURI, err := detectHlsType(playlist, streamId)
+   targetURI, err := getHlsStreamUrl(playlist, streamId)
    if err != nil {
       return err
    }
    mediaPl, err := fetchMediaPlaylist(targetURI)
+   if err != nil {
+      return err
+   }
+
+   typeInfo, err := determineHlsType(mediaPl)
    if err != nil {
       return err
    }
@@ -71,29 +77,46 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
    return orchestrateDownload(job)
 }
 
-// detectHlsType finds the correct stream in an HLS playlist by its ID and determines its type.
-func detectHlsType(playlist *hls.MasterPlaylist, streamId int) (*typeInfo, *url.URL, error) {
+// getHlsStreamUrl finds the correct stream in an HLS playlist by its ID and returns its URI.
+func getHlsStreamUrl(playlist *hls.MasterPlaylist, streamId int) (*url.URL, error) {
    for _, variant := range playlist.StreamInfs {
       if variant.Id == streamId {
-         info := &typeInfo{Extension: ".mp4", IsFMP4: true}
-         return info, variant.Uri, nil
+         return variant.Uri, nil
       }
    }
    for _, rendition := range playlist.Medias {
       if rendition.Id == streamId {
-         var info *typeInfo
-         switch rendition.Type {
-         case "AUDIO":
-            info = &typeInfo{Extension: ".m4a", IsFMP4: true}
-         case "SUBTITLES":
-            info = &typeInfo{Extension: ".vtt", IsFMP4: false}
-         default:
-            return nil, nil, fmt.Errorf("unsupported HLS media type: %s", rendition.Type)
-         }
-         return info, rendition.Uri, nil
+         return rendition.Uri, nil
       }
    }
-   return nil, nil, fmt.Errorf("stream with ID not found: %d", streamId)
+   return nil, fmt.Errorf("stream with ID not found: %d", streamId)
+}
+
+// determineHlsType extracts the file extension directly from the segment URL.
+func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
+   if len(mediaPl.Segments) == 0 {
+      return nil, errors.New("empty media playlist")
+   }
+
+   // Rely entirely on the URL of the first segment
+   firstSegURL := mediaPl.Segments[0].Uri
+   ext := path.Ext(firstSegURL.Path)
+   if ext == "" {
+      return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegURL.String())
+   }
+
+   // If it has a Map, it's definitively fMP4. Otherwise, check if the URL explicitly says it's an mp4 variant.
+   isFMP4 := false
+   if mediaPl.Map != nil {
+      isFMP4 = true
+   } else if ext == ".mp4" || ext == ".m4s" || ext == ".m4a" {
+      isFMP4 = true
+   }
+
+   return &typeInfo{
+      Extension: ext,
+      IsFMP4:    isFMP4,
+   }, nil
 }
 
 // listStreamsHls is an internal helper to print streams from a parsed playlist
