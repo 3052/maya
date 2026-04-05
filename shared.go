@@ -8,12 +8,6 @@ import (
    "net/url"
 )
 
-// typeInfo holds the determined properties of a media stream.
-type typeInfo struct {
-   Extension string
-   IsFMP4    bool
-}
-
 // getSegment performs an HTTP GET request for a segment and returns its body.
 func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
    req := http.Request{URL: targetUrl}
@@ -31,4 +25,10 @@ func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
       return nil, errors.New(resp.Status)
    }
    return io.ReadAll(resp.Body)
+}
+
+// typeInfo holds the determined properties of a media stream.
+type typeInfo struct {
+   Extension string
+   IsFMP4    bool
 }
