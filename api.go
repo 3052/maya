@@ -15,6 +15,84 @@ import (
    "strings"
 )
 
+// SetProxyTransport overrides the global http.DefaultTransport with the proxy
+// routing logic. proxiesCSV and ignoreLogCSV are comma-separated strings.
+func SetProxyTransport(proxiesCSV, ignoreLogCSV string) error {
+   prt := &proxyRoundTripper{}
+   // Directly assign the split slice
+   if ignoreLogCSV != "" {
+      prt.ignoreLog = strings.Split(ignoreLogCSV, ",")
+   }
+   // Parse the proxies
+   if proxiesCSV == "" {
+      // Directly assign a slice containing exactly one empty transport (no
+      // proxy)
+      prt.transports = []*http.Transport{{}}
+   } else {
+      // Append to the slice dynamically
+      for _, proxyStr := range strings.Split(proxiesCSV, ",") {
+         parsedURL, err := url.Parse(proxyStr)
+         if err != nil {
+            return err // Do not ignore URL parsing errors
+         }
+         transport := &http.Transport{}
+         transport.Proxy = http.ProxyURL(parsedURL)
+         prt.transports = append(prt.transports, transport)
+      }
+   }
+   // Assign our custom RoundTripper to the global DefaultTransport
+   http.DefaultTransport = prt
+   return nil
+}
+
+// proxyRoundTripper intercepts requests, logs them, and routes them to the correct transport.
+type proxyRoundTripper struct {
+   transports []*http.Transport
+   index      int
+   ignoreLog  []string
+}
+
+// shouldLog checks if the request path matches any of the ignore patterns.
+// If a pattern is malformed, it returns the error to be handled by the caller.
+func (p *proxyRoundTripper) shouldLog(reqPath string) (bool, error) {
+   base := path.Base(reqPath)
+
+   for _, pattern := range p.ignoreLog {
+      matched, err := path.Match(pattern, base)
+      if err != nil {
+         return false, err
+      }
+      if matched {
+         return false, nil
+      }
+   }
+
+   return true, nil
+}
+
+func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+   logReq, err := p.shouldLog(req.URL.Path)
+   if err != nil {
+      return nil, err // Abort the request and return the pattern error
+   }
+
+   // Grab the current transport using the stored index
+   transport := p.transports[p.index]
+
+   if logReq {
+      if transport.Proxy != nil {
+         log.Printf("proxy %s %s", req.Method, req.URL)
+      } else {
+         log.Printf("%s %s", req.Method, req.URL)
+      }
+   }
+
+   // Advance the index for the next request, wrapping around back to 0 when it reaches the end
+   p.index = (p.index + 1) % len(p.transports)
+
+   return transport.RoundTrip(req)
+}
+
 type Flag struct {
    Name   string
    IsBool bool
@@ -195,51 +273,6 @@ func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, fetch Fet
    }
 
    return downloadHls(playlist, j.Threads, streamId, fetcher)
-}
-
-func SetProxy(proxyUrl, excludePatterns string) error {
-   var parsedProxy *url.URL
-   if proxyUrl != "" {
-      var err error
-      parsedProxy, err = url.Parse(proxyUrl)
-      if err != nil {
-         return err
-      }
-   }
-   // Split patterns by comma
-   patterns := strings.Split(excludePatterns, ",")
-   // Assign directly to the global DefaultTransport.
-   // We ignore any existing values in the previous DefaultTransport.
-   http.DefaultTransport = &http.Transport{
-      DisableKeepAlives: true, // github.com/golang/go/issues/25793
-      Proxy: func(req *http.Request) (*url.URL, error) {
-         fileName := path.Base(req.URL.Path)
-         // Check exclusion patterns
-         for _, pattern := range patterns {
-            matched, err := path.Match(pattern, fileName)
-            if err != nil {
-               return nil, err
-            }
-            if matched {
-               // Pattern matched: Bypass proxy, do not log.
-               return nil, nil
-            }
-         }
-         // Pattern did NOT match.
-         // Handle empty method (Empty implies "GET" in Go http.Request)
-         if req.Method == "" {
-            req.Method = "GET"
-         }
-         if parsedProxy != nil {
-            log.Println("proxy", req.Method, req.URL)
-            return parsedProxy, nil
-         }
-         // No proxy configured, but not excluded.
-         log.Println(req.Method, req.URL)
-         return nil, nil
-      },
-   }
-   return nil
 }
 
 func (c *Cache) Read(value any) func(func() error) error {
