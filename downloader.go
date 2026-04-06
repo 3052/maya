@@ -148,7 +148,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       }
       return nil
    }
-   numWorkers := clamp(threads, 1, 9)
+   numWorkers := clamp(threads, 1, 10)
    workQueue := make(chan workItem, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
