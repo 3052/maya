@@ -16,17 +16,16 @@ import (
 )
 
 // overrides the global http.DefaultTransport with the proxy routing logic.
-// proxiesCSV and ignoreLogCSV are comma-separated strings.
-func SetProxy(proxiesCSV, ignoreLogCSV string) error {
-   prt := &proxyRoundTripper{}
-   // Directly assign the split slice
-   if ignoreLogCSV != "" {
-      prt.ignoreLog = strings.Split(ignoreLogCSV, ",")
+// proxiesCSV is a comma-separated string. ignoreLog accepts multiple string patterns.
+func SetProxy(proxiesCSV string, ignoreLog ...string) error {
+   prt := &proxyRoundTripper{
+      // Directly assign the variadic slice (it will be nil if no args are
+      // passed, which is perfectly safe to iterate over in Go)
+      ignoreLog: ignoreLog,
    }
    // Parse the proxies
    if proxiesCSV == "" {
-      // Directly assign a slice containing exactly one empty transport (no
-      // proxy)
+      // Directly assign a slice containing exactly one empty transport (no proxy)
       prt.transports = []*http.Transport{{}}
    } else {
       // Append to the slice dynamically

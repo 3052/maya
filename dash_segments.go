@@ -26,19 +26,37 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segm
    if err != nil {
       return nil, err
    }
+
+   var segments []segment
+   const targetChunkSize = 2 * 1024 * 1024 // 2 MB chunks
+
+   // Cleaned up variables
    currentOffset := end + 1
-   segments := make([]segment, len(sidx.References))
-   for refIdx, ref := range sidx.References {
-      endOffset := currentOffset + uint64(ref.ReferencedSize) - 1
-      header := make(http.Header)
-      header.Set("range", "bytes="+dash.FormatRange(currentOffset, endOffset))
-      segments[refIdx] = segment{
-         url:      baseUrl,
-         header:   header,
-         duration: float64(ref.SubsegmentDuration) / float64(sidx.Timescale),
-         sizeBits: uint64(ref.ReferencedSize) * 8,
+   chunkStart := currentOffset
+   var chunkDuration float64
+
+   for i, ref := range sidx.References {
+      refSize := uint64(ref.ReferencedSize)
+      chunkDuration += float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
+      currentOffset += refSize
+
+      // Check if the current chunk size (currentOffset - chunkStart) hit the target, or if it's the last reference
+      if (currentOffset-chunkStart) >= targetChunkSize || i == len(sidx.References)-1 {
+         endOffset := currentOffset - 1
+         header := make(http.Header)
+         header.Set("range", "bytes="+dash.FormatRange(chunkStart, endOffset))
+
+         segments = append(segments, segment{
+            url:      baseUrl,
+            header:   header,
+            duration: chunkDuration,
+            sizeBits: (currentOffset - chunkStart) * 8, // calculated on the fly
+         })
+
+         // Reset for the next chunk
+         chunkStart = currentOffset
+         chunkDuration = 0
       }
-      currentOffset += uint64(ref.ReferencedSize)
    }
    return segments, nil
 }
