@@ -15,6 +15,29 @@ import (
    "strings"
 )
 
+func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+   // An empty method implies "GET". Update the request directly.
+   if req.Method == "" {
+      req.Method = http.MethodGet
+   }
+   logReq, err := p.shouldLog(req.URL.Path)
+   if err != nil {
+      return nil, err // Abort the request and return the pattern error
+   }
+   // Grab the current transport using the stored index
+   transport := p.transports[p.index]
+   if logReq {
+      if transport.Proxy != nil {
+         log.Printf("proxy %s %s", req.Method, req.URL)
+      } else {
+         log.Printf("%s %s", req.Method, req.URL)
+      }
+   }
+   // Advance the index for the next request, wrapping around back to 0 when it reaches the end
+   p.index = (p.index + 1) % len(p.transports)
+   return transport.RoundTrip(req)
+}
+
 // overrides the global http.DefaultTransport with the proxy routing logic.
 // proxiesCSV is a comma-separated string. ignoreLog accepts multiple string patterns.
 func SetProxy(proxiesCSV string, ignoreLog ...string) error {
@@ -67,29 +90,6 @@ func (p *proxyRoundTripper) shouldLog(reqPath string) (bool, error) {
    }
 
    return true, nil
-}
-
-func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   logReq, err := p.shouldLog(req.URL.Path)
-   if err != nil {
-      return nil, err // Abort the request and return the pattern error
-   }
-
-   // Grab the current transport using the stored index
-   transport := p.transports[p.index]
-
-   if logReq {
-      if transport.Proxy != nil {
-         log.Printf("proxy %s %s", req.Method, req.URL)
-      } else {
-         log.Printf("%s %s", req.Method, req.URL)
-      }
-   }
-
-   // Advance the index for the next request, wrapping around back to 0 when it reaches the end
-   p.index = (p.index + 1) % len(p.transports)
-
-   return transport.RoundTrip(req)
 }
 
 type Flag struct {
