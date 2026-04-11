@@ -27,7 +27,7 @@ func getMiddleBitrate(rep *dash.Representation) error {
          return err
       }
 
-      segs, err := generateSegmentsFromSidx(rep, sidxData)
+      segs, err := generateSegmentsFromSidx(rep, sidxData, false)
       if err != nil {
          return err
       }

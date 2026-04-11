@@ -9,7 +9,7 @@ import (
 )
 
 // generateSegmentsFromSidx parses a pre-fetched sidx box to generate segments.
-func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segment, error) {
+func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSegments bool) ([]segment, error) {
    baseUrl, err := rep.ResolveBaseUrl()
    if err != nil {
       return nil, err
@@ -41,7 +41,8 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte) ([]segm
       currentOffset += refSize
 
       // Check if the current chunk size (currentOffset - chunkStart) hit the target, or if it's the last reference
-      if (currentOffset-chunkStart) >= targetChunkSize || i == len(sidx.References)-1 {
+      // If groupSegments is false, we ignore the target size and create a segment for every single reference
+      if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || i == len(sidx.References)-1 {
          endOffset := currentOffset - 1
          header := make(http.Header)
          header.Set("range", "bytes="+dash.FormatRange(chunkStart, endOffset))
@@ -129,8 +130,9 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segm
       return nil, nil
    }
    // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
+   // groupSegments = true for downloading, chunks into larger size targets
    if group[0].SegmentBase != nil {
-      return generateSegmentsFromSidx(group[0], sidxData)
+      return generateSegmentsFromSidx(group[0], sidxData, true)
    }
    // For other types (SegmentTemplate, SegmentList), iterate through each Period's
    // Representation to build the full list.
