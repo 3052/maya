@@ -105,6 +105,10 @@ func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
       return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegURL.String())
    }
 
+   if ext == ".mp4a" {
+      ext = ".m4a"
+   }
+
    // If it has a Map, it's definitively fMP4. Otherwise, check if the URL explicitly says it's an mp4 variant.
    isFMP4 := false
    if mediaPl.Map != nil {
