@@ -14,9 +14,20 @@ import (
    "strings"
 )
 
+// parseHls is an internal helper to parse an HLS master playlist.
+func parseHls(body string, baseURL *url.URL) (*hls.MasterPlaylist, error) {
+   master, err := hls.DecodeMaster(body)
+   if err != nil {
+      return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
+   }
+   master.ResolveUris(baseURL)
+   return master, nil
+}
+
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
-   resp, err := http.Get(mediaURL.String())
+   request := http.Request{URL: mediaURL}
+   resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
@@ -54,13 +65,13 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
    }
 
    allRequests := make([]segment, len(mediaPl.Segments))
-   for i, hlsSeg := range mediaPl.Segments {
-      allRequests[i] = segment{url: hlsSeg.Uri, header: nil}
+   for index, hlsSeg := range mediaPl.Segments {
+      allRequests[index] = segment{url: hlsSeg.Uri, header: nil}
    }
 
    var initData []byte
    if typeInfo.IsFMP4 && mediaPl.Map != nil {
-      initData, err = getSegment(mediaPl.Map, nil)
+      initData, err = getBytes(mediaPl.Map, nil)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
       }
@@ -146,15 +157,4 @@ func listStreamsHls(playlist *hls.MasterPlaylist) error {
       fmt.Println(variant)
    }
    return nil
-}
-
-// parseHls is an internal helper to parse an HLS master playlist.
-func parseHls(body []byte, baseURL *url.URL) (*hls.MasterPlaylist, error) {
-   bodyStr := string(body)
-   master, err := hls.DecodeMaster(bodyStr)
-   if err != nil {
-      return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
-   }
-   master.ResolveUris(baseURL)
-   return master, nil
 }

@@ -105,8 +105,8 @@ func (p *progress) update(workerId int) {
       }
 
       var done []byte
-      for i, count := range p.counts {
-         if i > 0 {
+      for index, count := range p.counts {
+         if index > 0 {
             done = append(done, ' ')
          }
          done = strconv.AppendInt(done, count, 10)
@@ -157,7 +157,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       go func(id int) {
          defer wg.Done()
          for item := range workQueue {
-            data, err := getSegment(item.request.url, item.request.header)
+            data, err := getBytes(item.request.url, item.request.header)
             results <- result{index: item.index, workerId: id, data: data, err: err}
          }
       }(workerId)

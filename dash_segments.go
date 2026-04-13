@@ -35,14 +35,14 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
    chunkStart := currentOffset
    var chunkDuration float64
 
-   for i, ref := range sidx.References {
+   for index, ref := range sidx.References {
       refSize := uint64(ref.ReferencedSize)
       chunkDuration += float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
       currentOffset += refSize
 
       // Check if the current chunk size (currentOffset - chunkStart) hit the target, or if it's the last reference
       // If groupSegments is false, we ignore the target size and create a segment for every single reference
-      if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || i == len(sidx.References)-1 {
+      if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || index == len(sidx.References)-1 {
          endOffset := currentOffset - 1
          header := make(http.Header)
          header.Set("range", "bytes="+dash.FormatRange(chunkStart, endOffset))

@@ -8,8 +8,8 @@ import (
    "net/url"
 )
 
-// getSegment performs an HTTP GET request for a segment and returns its body.
-func getSegment(targetUrl *url.URL, header http.Header) ([]byte, error) {
+// getBytes performs an HTTP GET request and returns its body.
+func getBytes(targetUrl *url.URL, header http.Header) ([]byte, error) {
    req := http.Request{URL: targetUrl}
    if header != nil {
       req.Header = header

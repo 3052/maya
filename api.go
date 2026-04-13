@@ -3,7 +3,9 @@ package maya
 
 import (
    "encoding/xml"
+   "errors"
    "fmt"
+   "io"
    "log"
    "net/http"
    "net/url"
@@ -14,6 +16,90 @@ import (
    "strconv"
    "strings"
 )
+
+// DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
+func (j *Job) DownloadHls(body string, baseURL *url.URL, streamId int, fetch Fetcher) error {
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return err
+   }
+   fetcher, err := j.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+   return downloadHls(playlist, j.Threads, streamId, fetcher)
+}
+
+// ListHls fetches, parses an HLS playlist, and lists the available streams.
+func ListHls(baseURL *url.URL) (string, error) {
+   request := http.Request{URL: baseURL}
+   resp, err := http.DefaultClient.Do(&request)
+   if err != nil {
+      return "", err
+   }
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return "", errors.New(resp.Status)
+   }
+   var builder strings.Builder
+   _, err = io.Copy(&builder, resp.Body)
+   if err != nil {
+      return "", err
+   }
+   body := builder.String()
+
+   playlist, err := parseHls(body, baseURL)
+   if err != nil {
+      return "", err
+   }
+   if err := listStreamsHls(playlist); err != nil {
+      return "", err
+   }
+   return body, nil
+}
+
+// ListDash fetches, parses a DASH manifest, and lists the available streams.
+func ListDash(baseURL *url.URL) ([]byte, error) {
+   body, err := getBytes(baseURL, nil)
+   if err != nil {
+      return nil, err
+   }
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return nil, err
+   }
+   if err := listStreamsDash(manifest); err != nil {
+      return nil, err
+   }
+   return body, nil
+}
+
+// Fetcher encapsulates the process of fetching a byte payload (like a signed
+// license request) from a DRM server and returning the response payload.
+type Fetcher func([]byte) ([]byte, error)
+
+// Job holds configuration for downloads.
+// Widevine and PlayReady specify folder paths containing their respective keys.
+type Job struct {
+   Threads   int
+   Widevine  string
+   PlayReady string
+}
+
+// DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
+func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, fetch Fetcher) error {
+   manifest, err := parseDash(body, baseURL)
+   if err != nil {
+      return err
+   }
+
+   fetcher, err := j.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+
+   return downloadDash(manifest, j.Threads, streamId, fetcher)
+}
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
    // An empty method implies "GET". Update the request directly.
@@ -103,13 +189,13 @@ type Flag struct {
 var flags []*Flag
 
 func FuncFlag(name, usage string, fn func(string) error) *Flag {
-   f := &Flag{
+   flag := &Flag{
       Name:  name,
       Set:   fn,
       Usage: fmt.Sprintf(" value\n\t%s", usage),
    }
-   flags = append(flags, f)
-   return f
+   flags = append(flags, flag)
+   return flag
 }
 
 func StringFlag(pointer *string, name, usage string) *Flag {
@@ -118,7 +204,7 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       usage += fmt.Sprintf("\n\tdefault %s", *pointer)
    }
 
-   f := &Flag{
+   flag := &Flag{
       Name: name,
       Set: func(val string) error {
          *pointer = val
@@ -126,18 +212,18 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       },
       Usage: usage,
    }
-   flags = append(flags, f)
-   return f
+   flags = append(flags, flag)
+   return flag
 }
 
 func BoolFlag(name, usage string) *Flag {
-   f := &Flag{
+   flag := &Flag{
       Name:   name,
       IsBool: true,
       Usage:  fmt.Sprintf("\n\t%s", usage),
    }
-   flags = append(flags, f)
-   return f
+   flags = append(flags, flag)
+   return flag
 }
 
 func IntFlag(pointer *int, name, usage string) *Flag {
@@ -146,7 +232,7 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       usage += fmt.Sprintf("\n\tdefault %d", *pointer)
    }
 
-   f := &Flag{
+   flag := &Flag{
       Name: name,
       Set: func(val string) (err error) {
          *pointer, err = strconv.Atoi(val)
@@ -154,13 +240,13 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       },
       Usage: usage,
    }
-   flags = append(flags, f)
-   return f
+   flags = append(flags, flag)
+   return flag
 }
 
 func ParseFlags() error {
-   for i := 1; i < len(os.Args); i++ {
-      arg := os.Args[i]
+   for index := 1; index < len(os.Args); index++ {
+      arg := os.Args[index]
 
       if len(arg) < 2 || arg[0] != '-' {
          return fmt.Errorf("unexpected argument: %s", arg)
@@ -168,27 +254,27 @@ func ParseFlags() error {
 
       name := arg[1:]
 
-      idx := slices.IndexFunc(flags, func(f *Flag) bool {
-         return f.Name == name
+      idx := slices.IndexFunc(flags, func(flag *Flag) bool {
+         return flag.Name == name
       })
 
       if idx == -1 {
          return fmt.Errorf("provided but not defined: -%s", name)
       }
-      f := flags[idx]
+      flag := flags[idx]
 
-      if !f.IsBool {
-         i++
-         if i >= len(os.Args) {
+      if !flag.IsBool {
+         index++
+         if index >= len(os.Args) {
             return fmt.Errorf("flag needs an argument: -%s", name)
          }
 
-         if err := f.Set(os.Args[i]); err != nil {
+         if err := flag.Set(os.Args[index]); err != nil {
             return fmt.Errorf("invalid value for flag -%s: %v", name, err)
          }
       }
 
-      f.IsSet = true
+      flag.IsSet = true
    }
    return nil
 }
@@ -196,82 +282,22 @@ func ParseFlags() error {
 func PrintFlags(groups [][]*Flag) error {
    printed := make(map[*Flag]bool)
 
-   for i, group := range groups {
-      if i > 0 {
+   for index, group := range groups {
+      if index > 0 {
          fmt.Fprintln(os.Stderr)
       }
-      for _, f := range group {
-         fmt.Fprintf(os.Stderr, "-%s%s\n", f.Name, f.Usage)
-         printed[f] = true
+      for _, flag := range group {
+         fmt.Fprintf(os.Stderr, "-%s%s\n", flag.Name, flag.Usage)
+         printed[flag] = true
       }
    }
 
-   for _, f := range flags {
-      if !printed[f] {
-         return fmt.Errorf("flag -%s is missing from PrintFlags groups", f.Name)
+   for _, flag := range flags {
+      if !printed[flag] {
+         return fmt.Errorf("flag -%s is missing from PrintFlags groups", flag.Name)
       }
    }
    return nil
-}
-
-// ListDash parses a DASH manifest and lists the available streams.
-func ListDash(body []byte, baseURL *url.URL) error {
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return listStreamsDash(manifest)
-}
-
-// ListHls parses an HLS playlist and lists the available streams.
-func ListHls(body []byte, baseURL *url.URL) error {
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
-   }
-   return listStreamsHls(playlist)
-}
-
-// Fetcher encapsulates the process of fetching a byte payload (like a signed
-// license request) from a DRM server and returning the response payload.
-type Fetcher func([]byte) ([]byte, error)
-
-// Job holds configuration for downloads.
-// Widevine and PlayReady specify folder paths containing their respective keys.
-type Job struct {
-   Threads   int
-   Widevine  string
-   PlayReady string
-}
-
-// DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
-func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, fetch Fetcher) error {
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := j.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, j.Threads, streamId, fetcher)
-}
-
-// DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
-func (j *Job) DownloadHls(body []byte, baseURL *url.URL, streamId int, fetch Fetcher) error {
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := j.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadHls(playlist, j.Threads, streamId, fetcher)
 }
 
 func (c *Cache) Read(value any) func(func() error) error {
