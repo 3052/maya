@@ -44,7 +44,8 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
-   mediaPl.ResolveUris(mediaURL)
+   // Fix: use the potentially redirected URL
+   mediaPl.ResolveUris(resp.Request.URL)
    return mediaPl, nil
 }
 

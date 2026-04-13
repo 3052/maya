@@ -17,61 +17,112 @@ import (
    "strings"
 )
 
-// DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
-func (j *Job) DownloadHls(body string, baseURL *url.URL, streamId int, fetch Fetcher) error {
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return err
-   }
-   fetcher, err := j.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-   return downloadHls(playlist, j.Threads, streamId, fetcher)
+// DashManifest holds the DASH manifest response body and the final resolved URL.
+type DashManifest struct {
+   Url  *url.URL
+   Body []byte
 }
 
-// ListHls fetches, parses an HLS playlist, and lists the available streams.
-func ListHls(baseURL *url.URL) (string, error) {
-   request := http.Request{URL: baseURL}
-   resp, err := http.DefaultClient.Do(&request)
-   if err != nil {
-      return "", err
+// Download parses and downloads a DASH stream (Clear or Encrypted).
+func (m *DashManifest) Download(config *Job, fetch Fetcher) error {
+   if config == nil {
+      config = &Job{}
    }
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return "", errors.New(resp.Status)
-   }
-   var builder strings.Builder
-   _, err = io.Copy(&builder, resp.Body)
-   if err != nil {
-      return "", err
-   }
-   body := builder.String()
 
-   playlist, err := parseHls(body, baseURL)
+   manifest, err := parseDash(m.Body, m.Url)
    if err != nil {
-      return "", err
+      return err
    }
-   if err := listStreamsHls(playlist); err != nil {
-      return "", err
+
+   fetcher, err := config.getFetcher(fetch)
+   if err != nil {
+      return err
    }
-   return body, nil
+
+   return downloadDash(manifest, config.Threads, config.Dash, fetcher)
 }
 
 // ListDash fetches, parses a DASH manifest, and lists the available streams.
-func ListDash(baseURL *url.URL) ([]byte, error) {
-   body, err := getBytes(baseURL, nil)
+func ListDash(baseURL *url.URL) (*DashManifest, error) {
+   request := http.Request{URL: baseURL}
+   resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
-   manifest, err := parseDash(body, baseURL)
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   body, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return nil, err
+   }
+
+   finalURL := resp.Request.URL
+   manifest, err := parseDash(body, finalURL)
    if err != nil {
       return nil, err
    }
    if err := listStreamsDash(manifest); err != nil {
       return nil, err
    }
-   return body, nil
+   return &DashManifest{Url: finalURL, Body: body}, nil
+}
+
+// HlsManifest holds the HLS playlist response body and the final resolved URL.
+type HlsManifest struct {
+   Url  *url.URL
+   Body string
+}
+
+// Download parses and downloads an HLS stream (Clear or Encrypted).
+func (m *HlsManifest) Download(config *Job, fetch Fetcher) error {
+   if config == nil {
+      config = &Job{}
+   }
+
+   playlist, err := parseHls(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   fetcher, err := config.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, config.Threads, config.Hls, fetcher)
+}
+
+// ListHls fetches, parses an HLS playlist, and lists the available streams.
+func ListHls(baseURL *url.URL) (*HlsManifest, error) {
+   request := http.Request{URL: baseURL}
+   resp, err := http.DefaultClient.Do(&request)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   var builder strings.Builder
+   _, err = io.Copy(&builder, resp.Body)
+   if err != nil {
+      return nil, err
+   }
+   body := builder.String()
+
+   finalURL := resp.Request.URL
+   playlist, err := parseHls(body, finalURL)
+   if err != nil {
+      return nil, err
+   }
+   if err := listStreamsHls(playlist); err != nil {
+      return nil, err
+   }
+   return &HlsManifest{Url: finalURL, Body: body}, nil
 }
 
 // Fetcher encapsulates the process of fetching a byte payload (like a signed
@@ -84,21 +135,8 @@ type Job struct {
    Threads   int
    Widevine  string
    PlayReady string
-}
-
-// DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
-func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, fetch Fetcher) error {
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := j.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, j.Threads, streamId, fetcher)
+   Dash      string
+   Hls       int
 }
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -189,13 +227,13 @@ type Flag struct {
 var flags []*Flag
 
 func FuncFlag(name, usage string, fn func(string) error) *Flag {
-   flag := &Flag{
+   option := &Flag{
       Name:  name,
       Set:   fn,
       Usage: fmt.Sprintf(" value\n\t%s", usage),
    }
-   flags = append(flags, flag)
-   return flag
+   flags = append(flags, option)
+   return option
 }
 
 func StringFlag(pointer *string, name, usage string) *Flag {
@@ -204,7 +242,7 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       usage += fmt.Sprintf("\n\tdefault %s", *pointer)
    }
 
-   flag := &Flag{
+   option := &Flag{
       Name: name,
       Set: func(val string) error {
          *pointer = val
@@ -212,18 +250,18 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       },
       Usage: usage,
    }
-   flags = append(flags, flag)
-   return flag
+   flags = append(flags, option)
+   return option
 }
 
 func BoolFlag(name, usage string) *Flag {
-   flag := &Flag{
+   option := &Flag{
       Name:   name,
       IsBool: true,
       Usage:  fmt.Sprintf("\n\t%s", usage),
    }
-   flags = append(flags, flag)
-   return flag
+   flags = append(flags, option)
+   return option
 }
 
 func IntFlag(pointer *int, name, usage string) *Flag {
@@ -232,7 +270,7 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       usage += fmt.Sprintf("\n\tdefault %d", *pointer)
    }
 
-   flag := &Flag{
+   option := &Flag{
       Name: name,
       Set: func(val string) (err error) {
          *pointer, err = strconv.Atoi(val)
@@ -240,8 +278,8 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       },
       Usage: usage,
    }
-   flags = append(flags, flag)
-   return flag
+   flags = append(flags, option)
+   return option
 }
 
 func ParseFlags() error {
@@ -254,27 +292,27 @@ func ParseFlags() error {
 
       name := arg[1:]
 
-      idx := slices.IndexFunc(flags, func(flag *Flag) bool {
-         return flag.Name == name
+      idx := slices.IndexFunc(flags, func(option *Flag) bool {
+         return option.Name == name
       })
 
       if idx == -1 {
          return fmt.Errorf("provided but not defined: -%s", name)
       }
-      flag := flags[idx]
+      option := flags[idx]
 
-      if !flag.IsBool {
+      if !option.IsBool {
          index++
          if index >= len(os.Args) {
             return fmt.Errorf("flag needs an argument: -%s", name)
          }
 
-         if err := flag.Set(os.Args[index]); err != nil {
+         if err := option.Set(os.Args[index]); err != nil {
             return fmt.Errorf("invalid value for flag -%s: %v", name, err)
          }
       }
 
-      flag.IsSet = true
+      option.IsSet = true
    }
    return nil
 }
@@ -286,15 +324,15 @@ func PrintFlags(groups [][]*Flag) error {
       if index > 0 {
          fmt.Fprintln(os.Stderr)
       }
-      for _, flag := range group {
-         fmt.Fprintf(os.Stderr, "-%s%s\n", flag.Name, flag.Usage)
-         printed[flag] = true
+      for _, option := range group {
+         fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
+         printed[option] = true
       }
    }
 
-   for _, flag := range flags {
-      if !printed[flag] {
-         return fmt.Errorf("flag -%s is missing from PrintFlags groups", flag.Name)
+   for _, option := range flags {
+      if !printed[option] {
+         return fmt.Errorf("flag -%s is missing from PrintFlags groups", option.Name)
       }
    }
    return nil
