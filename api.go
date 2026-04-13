@@ -17,61 +17,112 @@ import (
    "strings"
 )
 
-// DownloadHls parses and downloads an HLS stream (Clear or Encrypted).
-func (j *Job) DownloadHls(body string, baseURL *url.URL, streamId int, fetch Fetcher) error {
-   playlist, err := parseHls(body, baseURL)
+// DashManifest holds the DASH manifest response body and the final resolved URL.
+type DashManifest struct {
+   Url  *url.URL
+   Body []byte
+}
+
+// Download parses and downloads a DASH stream (Clear or Encrypted).
+func (m *DashManifest) Download(j *Job, fetch Fetcher) error {
+   if j == nil {
+      j = &Job{}
+   }
+
+   manifest, err := parseDash(m.Body, m.Url)
    if err != nil {
       return err
    }
+
    fetcher, err := j.getFetcher(fetch)
    if err != nil {
       return err
    }
-   return downloadHls(playlist, j.Threads, streamId, fetcher)
-}
 
-// ListHls fetches, parses an HLS playlist, and lists the available streams.
-func ListHls(baseURL *url.URL) (string, error) {
-   request := http.Request{URL: baseURL}
-   resp, err := http.DefaultClient.Do(&request)
-   if err != nil {
-      return "", err
-   }
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return "", errors.New(resp.Status)
-   }
-   var builder strings.Builder
-   _, err = io.Copy(&builder, resp.Body)
-   if err != nil {
-      return "", err
-   }
-   body := builder.String()
-
-   playlist, err := parseHls(body, baseURL)
-   if err != nil {
-      return "", err
-   }
-   if err := listStreamsHls(playlist); err != nil {
-      return "", err
-   }
-   return body, nil
+   return downloadDash(manifest, j.Threads, j.Dash, fetcher)
 }
 
 // ListDash fetches, parses a DASH manifest, and lists the available streams.
-func ListDash(baseURL *url.URL) ([]byte, error) {
-   body, err := getBytes(baseURL, nil)
+func ListDash(baseUrl *url.URL) (*DashManifest, error) {
+   req := http.Request{URL: baseUrl}
+   resp, err := http.DefaultClient.Do(&req)
    if err != nil {
       return nil, err
    }
-   manifest, err := parseDash(body, baseURL)
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   body, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return nil, err
+   }
+
+   finalUrl := resp.Request.URL
+   manifest, err := parseDash(body, finalUrl)
    if err != nil {
       return nil, err
    }
    if err := listStreamsDash(manifest); err != nil {
       return nil, err
    }
-   return body, nil
+   return &DashManifest{Url: finalUrl, Body: body}, nil
+}
+
+// HlsManifest holds the HLS playlist response body and the final resolved URL.
+type HlsManifest struct {
+   Url  *url.URL
+   Body string
+}
+
+// Download parses and downloads an HLS stream (Clear or Encrypted).
+func (m *HlsManifest) Download(j *Job, fetch Fetcher) error {
+   if j == nil {
+      j = &Job{}
+   }
+
+   playlist, err := parseHls(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   fetcher, err := j.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, j.Threads, j.Hls, fetcher)
+}
+
+// ListHls fetches, parses an HLS playlist, and lists the available streams.
+func ListHls(baseUrl *url.URL) (*HlsManifest, error) {
+   request := http.Request{URL: baseUrl}
+   resp, err := http.DefaultClient.Do(&request)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   var builder strings.Builder
+   _, err = io.Copy(&builder, resp.Body)
+   if err != nil {
+      return nil, err
+   }
+   body := builder.String()
+
+   finalUrl := resp.Request.URL
+   playlist, err := parseHls(body, finalUrl)
+   if err != nil {
+      return nil, err
+   }
+   if err := listStreamsHls(playlist); err != nil {
+      return nil, err
+   }
+   return &HlsManifest{Url: finalUrl, Body: body}, nil
 }
 
 // Fetcher encapsulates the process of fetching a byte payload (like a signed
@@ -84,21 +135,8 @@ type Job struct {
    Threads   int
    Widevine  string
    PlayReady string
-}
-
-// DownloadDash parses and downloads a DASH stream (Clear or Encrypted).
-func (j *Job) DownloadDash(body []byte, baseURL *url.URL, streamId string, fetch Fetcher) error {
-   manifest, err := parseDash(body, baseURL)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := j.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, j.Threads, streamId, fetcher)
+   Dash      string
+   Hls       int
 }
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -125,26 +163,26 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 // overrides the global http.DefaultTransport with the proxy routing logic.
-// proxiesCSV is a comma-separated string. ignoreLog accepts multiple string patterns.
-func SetProxy(proxiesCSV string, ignoreLog ...string) error {
+// proxiesCsv is a comma-separated string. ignoreLog accepts multiple string patterns.
+func SetProxy(proxiesCsv string, ignoreLog ...string) error {
    prt := &proxyRoundTripper{
       // Directly assign the variadic slice (it will be nil if no args are
       // passed, which is perfectly safe to iterate over in Go)
       ignoreLog: ignoreLog,
    }
    // Parse the proxies
-   if proxiesCSV == "" {
+   if proxiesCsv == "" {
       // Directly assign a slice containing exactly one empty transport (no proxy)
       prt.transports = []*http.Transport{{}}
    } else {
       // Append to the slice dynamically
-      for _, proxyStr := range strings.Split(proxiesCSV, ",") {
-         parsedURL, err := url.Parse(proxyStr)
+      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+         parsedUrl, err := url.Parse(proxyStr)
          if err != nil {
             return err // Do not ignore URL parsing errors
          }
          transport := &http.Transport{}
-         transport.Proxy = http.ProxyURL(parsedURL)
+         transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
       }
    }
