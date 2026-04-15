@@ -17,38 +17,22 @@ import (
    "strings"
 )
 
-// Dash holds the DASH manifest response body and the final resolved URL.
-type Dash struct {
-   Url  *url.URL
-   Body []byte
-}
-
-// Download parses and downloads a DASH stream (Clear or Encrypted).
-func (m *Dash) Download(jobSetup *Job, fetch Fetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   manifest, err := parseDash(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := jobSetup.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, fetcher)
-}
+// ManifestGetter defines a function for retrieving the manifest URL.
+type ManifestGetter func() (*url.URL, error)
 
 // ListDash fetches, parses a DASH manifest, and lists the available streams.
-func ListDash(baseURL *url.URL) (*Dash, error) {
+func ListDash(getter ManifestGetter) (*Dash, error) {
+   baseURL, err := getter()
+   if err != nil {
+      return nil, err
+   }
+
    request := http.Request{URL: baseURL}
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
+
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK {
       return nil, errors.New(resp.Status)
@@ -64,44 +48,27 @@ func ListDash(baseURL *url.URL) (*Dash, error) {
    if err != nil {
       return nil, err
    }
+
    if err := listStreamsDash(manifest); err != nil {
       return nil, err
    }
+
    return &Dash{Url: finalURL, Body: body}, nil
 }
 
-// Hls holds the HLS playlist response body and the final resolved URL.
-type Hls struct {
-   Url  *url.URL
-   Body string
-}
-
-// Download parses and downloads an HLS stream (Clear or Encrypted).
-func (m *Hls) Download(jobSetup *Job, fetch Fetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   playlist, err := parseHls(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := jobSetup.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, fetcher)
-}
-
 // ListHls fetches, parses an HLS playlist, and lists the available streams.
-func ListHls(baseURL *url.URL) (*Hls, error) {
+func ListHls(getter ManifestGetter) (*Hls, error) {
+   baseURL, err := getter()
+   if err != nil {
+      return nil, err
+   }
+
    request := http.Request{URL: baseURL}
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
+
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK {
       return nil, errors.New(resp.Status)
@@ -112,6 +79,7 @@ func ListHls(baseURL *url.URL) (*Hls, error) {
    if err != nil {
       return nil, err
    }
+
    body := builder.String()
 
    finalURL := resp.Request.URL
@@ -119,15 +87,67 @@ func ListHls(baseURL *url.URL) (*Hls, error) {
    if err != nil {
       return nil, err
    }
+
    if err := listStreamsHls(playlist); err != nil {
       return nil, err
    }
+
    return &Hls{Url: finalURL, Body: body}, nil
 }
 
-// Fetcher encapsulates the process of fetching a byte payload (like a signed
+// Dash holds the DASH manifest response body and the final resolved URL.
+type Dash struct {
+   Url  *url.URL
+   Body []byte
+}
+
+// Download parses and downloads a DASH stream (Clear or Encrypted).
+func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   manifest, err := parseDash(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   kFetcher, err := jobSetup.getFetcher(fetcher)
+   if err != nil {
+      return err
+   }
+
+   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, kFetcher)
+}
+
+// Hls holds the HLS playlist response body and the final resolved URL.
+type Hls struct {
+   Url  *url.URL
+   Body string
+}
+
+// Download parses and downloads an HLS stream (Clear or Encrypted).
+func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   playlist, err := parseHls(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   kFetcher, err := jobSetup.getFetcher(fetcher)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, kFetcher)
+}
+
+// LicenseFetcher encapsulates the process of fetching a byte payload (like a signed
 // license request) from a DRM server and returning the response payload.
-type Fetcher func([]byte) ([]byte, error)
+type LicenseFetcher func([]byte) ([]byte, error)
 
 // Job holds configuration for downloads.
 // Widevine and PlayReady specify folder paths containing their respective keys.
@@ -144,10 +164,12 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
    if req.Method == "" {
       req.Method = http.MethodGet
    }
+
    logReq, err := p.shouldLog(req.URL.Path)
    if err != nil {
       return nil, err // Abort the request and return the pattern error
    }
+
    // Grab the current transport using the stored index
    transport := p.transports[p.index]
    if logReq {
@@ -156,6 +178,7 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
       } else {
          log.Printf("%s %s", req.Method, req.URL)
       }
+
    }
    // Advance the index for the next request, wrapping around back to 0 when it reaches the end
    p.index = (p.index + 1) % len(p.transports)
@@ -170,6 +193,7 @@ func SetProxy(proxiesCSV string, ignoreLog ...string) error {
       // passed, which is perfectly safe to iterate over in Go)
       ignoreLog: ignoreLog,
    }
+
    // Parse the proxies
    if proxiesCSV == "" {
       // Directly assign a slice containing exactly one empty transport (no proxy)
@@ -181,10 +205,12 @@ func SetProxy(proxiesCSV string, ignoreLog ...string) error {
          if err != nil {
             return err // Do not ignore URL parsing errors
          }
+
          transport := &http.Transport{}
          transport.Proxy = http.ProxyURL(parsedURL)
          prt.transports = append(prt.transports, transport)
       }
+
    }
    // Assign our custom RoundTripper to the global DefaultTransport
    http.DefaultTransport = prt
@@ -208,9 +234,11 @@ func (p *proxyRoundTripper) shouldLog(reqPath string) (bool, error) {
       if err != nil {
          return false, err
       }
+
       if matched {
          return false, nil
       }
+
    }
 
    return true, nil
@@ -232,6 +260,7 @@ func FuncFlag(name, usage string, fn func(string) error) *Flag {
       Set:   fn,
       Usage: fmt.Sprintf(" value\n\t%s", usage),
    }
+
    flags = append(flags, option)
    return option
 }
@@ -250,6 +279,7 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       },
       Usage: usage,
    }
+
    flags = append(flags, option)
    return option
 }
@@ -260,6 +290,7 @@ func BoolFlag(name, usage string) *Flag {
       IsBool: true,
       Usage:  fmt.Sprintf("\n\t%s", usage),
    }
+
    flags = append(flags, option)
    return option
 }
@@ -278,6 +309,7 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       },
       Usage: usage,
    }
+
    flags = append(flags, option)
    return option
 }
@@ -313,7 +345,9 @@ func ParseFlags() error {
       }
 
       option.IsSet = true
+
    }
+
    return nil
 }
 
@@ -324,16 +358,19 @@ func PrintFlags(groups [][]*Flag) error {
       if index > 0 {
          fmt.Fprintln(os.Stderr)
       }
+
       for _, option := range group {
          fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
          printed[option] = true
       }
+
    }
 
    for _, option := range flags {
       if !printed[option] {
          return fmt.Errorf("flag -%s is missing from PrintFlags groups", option.Name)
       }
+
    }
    return nil
 }
@@ -344,13 +381,16 @@ func (c *Cache) Read(value any) func(func() error) error {
    if err == nil {
       err = xml.Unmarshal(data, value)
    }
+
    // 2. Return the callback wrapper
    return func(action func() error) error {
       if err != nil {
          return err // Blocks the action and returns the read error
       }
+
       return action()
    }
+
 }
 
 type Cache struct {
@@ -363,6 +403,7 @@ func (c *Cache) Setup(file string) error {
    if err != nil {
       return err
    }
+
    c.File = filepath.Join(c.File, file)
    return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
 }
@@ -372,6 +413,7 @@ func (c *Cache) Write(value any) error {
    if err != nil {
       return err
    }
+
    log.Println("Write", c.File)
    return os.WriteFile(c.File, data, os.ModePerm)
 }

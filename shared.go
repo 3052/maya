@@ -16,14 +16,17 @@ func getBytes(targetUrl *url.URL, header http.Header) ([]byte, error) {
    } else {
       req.Header = http.Header{}
    }
+
    resp, err := http.DefaultClient.Do(&req)
    if err != nil {
       return nil, err
    }
+
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
       return nil, errors.New(resp.Status)
    }
+
    return io.ReadAll(resp.Body)
 }
 
