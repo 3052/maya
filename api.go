@@ -17,33 +17,18 @@ import (
    "strings"
 )
 
-// Dash holds the DASH manifest response body and the final resolved URL.
-type Dash struct {
-   Url  *url.URL
-   Body []byte
-}
-
-// Download parses and downloads a DASH stream (Clear or Encrypted).
-func (m *Dash) Download(jobSetup *Job, fetch Fetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   manifest, err := parseDash(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := jobSetup.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, fetcher)
+// ManifestGetter defines an interface for retrieving the manifest URL.
+type ManifestGetter interface {
+   GetManifest() (*url.URL, error)
 }
 
 // ListDash fetches, parses a DASH manifest, and lists the available streams.
-func ListDash(baseURL *url.URL) (*Dash, error) {
+func ListDash(getter ManifestGetter) (*Dash, error) {
+   baseURL, err := getter.GetManifest()
+   if err != nil {
+      return nil, err
+   }
+
    request := http.Request{URL: baseURL}
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
@@ -70,33 +55,13 @@ func ListDash(baseURL *url.URL) (*Dash, error) {
    return &Dash{Url: finalURL, Body: body}, nil
 }
 
-// Hls holds the HLS playlist response body and the final resolved URL.
-type Hls struct {
-   Url  *url.URL
-   Body string
-}
-
-// Download parses and downloads an HLS stream (Clear or Encrypted).
-func (m *Hls) Download(jobSetup *Job, fetch Fetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   playlist, err := parseHls(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   fetcher, err := jobSetup.getFetcher(fetch)
-   if err != nil {
-      return err
-   }
-
-   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, fetcher)
-}
-
 // ListHls fetches, parses an HLS playlist, and lists the available streams.
-func ListHls(baseURL *url.URL) (*Hls, error) {
+func ListHls(getter ManifestGetter) (*Hls, error) {
+   baseURL, err := getter.GetManifest()
+   if err != nil {
+      return nil, err
+   }
+
    request := http.Request{URL: baseURL}
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
@@ -123,6 +88,56 @@ func ListHls(baseURL *url.URL) (*Hls, error) {
       return nil, err
    }
    return &Hls{Url: finalURL, Body: body}, nil
+}
+
+// Dash holds the DASH manifest response body and the final resolved URL.
+type Dash struct {
+   Url  *url.URL
+   Body []byte
+}
+
+// Download parses and downloads a DASH stream (Clear or Encrypted).
+func (m *Dash) Download(jobSetup *Job, fetch Fetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   manifest, err := parseDash(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   fetcher, err := jobSetup.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+
+   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, fetcher)
+}
+
+// Hls holds the HLS playlist response body and the final resolved URL.
+type Hls struct {
+   Url  *url.URL
+   Body string
+}
+
+// Download parses and downloads an HLS stream (Clear or Encrypted).
+func (m *Hls) Download(jobSetup *Job, fetch Fetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   playlist, err := parseHls(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   fetcher, err := jobSetup.getFetcher(fetch)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, fetcher)
 }
 
 // Fetcher encapsulates the process of fetching a byte payload (like a signed
