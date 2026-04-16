@@ -17,148 +17,6 @@ import (
    "strings"
 )
 
-// ManifestGetter defines a function for retrieving the manifest URL.
-type ManifestGetter func() (*url.URL, error)
-
-// ListDash fetches, parses a DASH manifest, and lists the available streams.
-func ListDash(getter ManifestGetter) (*Dash, error) {
-   baseURL, err := getter()
-   if err != nil {
-      return nil, err
-   }
-
-   request := http.Request{URL: baseURL}
-   resp, err := http.DefaultClient.Do(&request)
-   if err != nil {
-      return nil, err
-   }
-
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return nil, errors.New(resp.Status)
-   }
-
-   body, err := io.ReadAll(resp.Body)
-   if err != nil {
-      return nil, err
-   }
-
-   finalURL := resp.Request.URL
-   manifest, err := parseDash(body, finalURL)
-   if err != nil {
-      return nil, err
-   }
-
-   if err := listStreamsDash(manifest); err != nil {
-      return nil, err
-   }
-
-   return &Dash{Url: finalURL, Body: body}, nil
-}
-
-// ListHls fetches, parses an HLS playlist, and lists the available streams.
-func ListHls(getter ManifestGetter) (*Hls, error) {
-   baseURL, err := getter()
-   if err != nil {
-      return nil, err
-   }
-
-   request := http.Request{URL: baseURL}
-   resp, err := http.DefaultClient.Do(&request)
-   if err != nil {
-      return nil, err
-   }
-
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return nil, errors.New(resp.Status)
-   }
-
-   var builder strings.Builder
-   _, err = io.Copy(&builder, resp.Body)
-   if err != nil {
-      return nil, err
-   }
-
-   body := builder.String()
-
-   finalURL := resp.Request.URL
-   playlist, err := parseHls(body, finalURL)
-   if err != nil {
-      return nil, err
-   }
-
-   if err := listStreamsHls(playlist); err != nil {
-      return nil, err
-   }
-
-   return &Hls{Url: finalURL, Body: body}, nil
-}
-
-// Dash holds the DASH manifest response body and the final resolved URL.
-type Dash struct {
-   Url  *url.URL
-   Body []byte
-}
-
-// Download parses and downloads a DASH stream (Clear or Encrypted).
-func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   manifest, err := parseDash(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   kFetcher, err := jobSetup.getFetcher(fetcher)
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, kFetcher)
-}
-
-// Hls holds the HLS playlist response body and the final resolved URL.
-type Hls struct {
-   Url  *url.URL
-   Body string
-}
-
-// Download parses and downloads an HLS stream (Clear or Encrypted).
-func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
-   playlist, err := parseHls(m.Body, m.Url)
-   if err != nil {
-      return err
-   }
-
-   kFetcher, err := jobSetup.getFetcher(fetcher)
-   if err != nil {
-      return err
-   }
-
-   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, kFetcher)
-}
-
-// LicenseFetcher encapsulates the process of fetching a byte payload (like a signed
-// license request) from a DRM server and returning the response payload.
-type LicenseFetcher func([]byte) ([]byte, error)
-
-// Job holds configuration for downloads.
-// Widevine and PlayReady specify folder paths containing their respective keys.
-type Job struct {
-   Threads   int
-   Widevine  string
-   PlayReady string
-   Dash      string
-   Hls       int
-}
-
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
    // An empty method implies "GET". Update the request directly.
    if req.Method == "" {
@@ -416,4 +274,146 @@ func (c *Cache) Write(value any) error {
 
    log.Println("Write", c.File)
    return os.WriteFile(c.File, data, os.ModePerm)
+}
+
+// ManifestGetter defines a function for retrieving the manifest URL.
+type ManifestGetter func() (*url.URL, error)
+
+// ListDash fetches, parses a DASH manifest, and lists the available streams.
+func ListDash(getter ManifestGetter) (*Dash, error) {
+   baseURL, err := getter()
+   if err != nil {
+      return nil, err
+   }
+
+   request := http.Request{URL: baseURL}
+   resp, err := http.DefaultClient.Do(&request)
+   if err != nil {
+      return nil, err
+   }
+
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   body, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return nil, err
+   }
+
+   finalURL := resp.Request.URL
+   manifest, err := parseDash(body, finalURL)
+   if err != nil {
+      return nil, err
+   }
+
+   if err := listStreamsDash(manifest); err != nil {
+      return nil, err
+   }
+
+   return &Dash{Url: finalURL, Body: body}, nil
+}
+
+// ListHls fetches, parses an HLS playlist, and lists the available streams.
+func ListHls(getter ManifestGetter) (*Hls, error) {
+   baseURL, err := getter()
+   if err != nil {
+      return nil, err
+   }
+
+   request := http.Request{URL: baseURL}
+   resp, err := http.DefaultClient.Do(&request)
+   if err != nil {
+      return nil, err
+   }
+
+   defer resp.Body.Close()
+   if resp.StatusCode != http.StatusOK {
+      return nil, errors.New(resp.Status)
+   }
+
+   var builder strings.Builder
+   _, err = io.Copy(&builder, resp.Body)
+   if err != nil {
+      return nil, err
+   }
+
+   body := builder.String()
+
+   finalURL := resp.Request.URL
+   playlist, err := parseHls(body, finalURL)
+   if err != nil {
+      return nil, err
+   }
+
+   if err := listStreamsHls(playlist); err != nil {
+      return nil, err
+   }
+
+   return &Hls{Url: finalURL, Body: body}, nil
+}
+
+// Dash holds the DASH manifest response body and the final resolved URL.
+type Dash struct {
+   Url  *url.URL
+   Body []byte
+}
+
+// Download parses and downloads a DASH stream (Clear or Encrypted).
+func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   manifest, err := parseDash(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   kFetcher, err := jobSetup.getFetcher(fetcher)
+   if err != nil {
+      return err
+   }
+
+   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, kFetcher)
+}
+
+// Hls holds the HLS playlist response body and the final resolved URL.
+type Hls struct {
+   Url  *url.URL
+   Body string
+}
+
+// Download parses and downloads an HLS stream (Clear or Encrypted).
+func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
+   if jobSetup == nil {
+      jobSetup = &Job{}
+   }
+
+   playlist, err := parseHls(m.Body, m.Url)
+   if err != nil {
+      return err
+   }
+
+   kFetcher, err := jobSetup.getFetcher(fetcher)
+   if err != nil {
+      return err
+   }
+
+   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, kFetcher)
+}
+
+// LicenseFetcher encapsulates the process of fetching a byte payload (like a signed
+// license request) from a DRM server and returning the response payload.
+type LicenseFetcher func([]byte) ([]byte, error)
+
+// Job holds configuration for downloads.
+// Widevine and PlayReady specify folder paths containing their respective keys.
+type Job struct {
+   Threads   int
+   Widevine  string
+   PlayReady string
+   Dash      string
+   Hls       int
 }
