@@ -2,6 +2,7 @@
 package maya
 
 import (
+   "bytes"
    "encoding/xml"
    "errors"
    "fmt"
@@ -16,6 +17,41 @@ import (
    "strconv"
    "strings"
 )
+
+// Get performs an HTTP GET request by manually constructing the http.Request
+// struct
+func Get(targetURL *url.URL, headers map[string]string) (*http.Response, error) {
+   // Initialize a non-nil http.Header to prevent default-client panics.
+   // Ranging over a nil 'headers' map is safe in Go.
+   reqHeader := make(http.Header)
+   for key, value := range headers {
+      reqHeader.Set(key, value)
+   }
+   req := &http.Request{
+      Method: http.MethodGet,
+      URL:    targetURL,
+      Header: reqHeader,
+   }
+   return http.DefaultClient.Do(req)
+}
+
+// Post performs an HTTP POST request by manually constructing the http.Request
+// struct
+func Post(targetURL *url.URL, headers map[string]string, body *bytes.Buffer) (*http.Response, error) {
+   reqHeader := make(http.Header)
+   for key, value := range headers {
+      reqHeader.Set(key, value)
+   }
+   req := &http.Request{
+      Method: http.MethodPost,
+      URL:    targetURL,
+      Header: reqHeader,
+   }
+   if body != nil {
+      req.Body = io.NopCloser(body)
+   }
+   return http.DefaultClient.Do(req)
+}
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
    // An empty method implies "GET". Update the request directly.
