@@ -28,9 +28,8 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
    }
 
    var segments []segment
-   const targetChunkSize = 2 * 1024 * 1024 // 2 MB chunks
+   const targetChunkSize = 2 * 1024 * 1024
 
-   // Cleaned up variables
    currentOffset := end + 1
    chunkStart := currentOffset
    var chunkDuration float64
@@ -40,8 +39,6 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
       chunkDuration += float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
       currentOffset += refSize
 
-      // Check if the current chunk size (currentOffset - chunkStart) hit the target, or if it's the last reference
-      // If groupSegments is false, we ignore the target size and create a segment for every single reference
       if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || index == len(sidx.References)-1 {
          endOffset := currentOffset - 1
          header := make(http.Header)
@@ -51,10 +48,9 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
             url:      baseUrl,
             header:   header,
             duration: chunkDuration,
-            sizeBits: (currentOffset - chunkStart) * 8, // calculated on the fly
+            sizeBits: (currentOffset - chunkStart) * 8,
          })
 
-         // Reset for the next chunk
          chunkStart = currentOffset
          chunkDuration = 0
       }
@@ -129,13 +125,9 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segm
    if len(group) == 0 {
       return nil, nil
    }
-   // THE FIX: If using SegmentBase, the sidx contains all segments. Process it ONCE.
-   // groupSegments = true for downloading, chunks into larger size targets
    if group[0].SegmentBase != nil {
       return generateSegmentsFromSidx(group[0], sidxData, true)
    }
-   // For other types (SegmentTemplate, SegmentList), iterate through each Period's
-   // Representation to build the full list.
    var requests []segment
    for _, rep := range group {
       segs, err := generateSegments(rep)

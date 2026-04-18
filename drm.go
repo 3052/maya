@@ -53,7 +53,7 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
 
          if pssh != nil {
             pssh_data = pssh
-            break // Found it
+            break
          }
 
       }
@@ -73,24 +73,17 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
       return nil, fmt.Errorf("could not decode widevine pssh data: %w", err)
    }
 
-   // The KeyId field is explicitly set to nil, as it must only come from the
-   // MP4
    return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
 }
 
-// widevineSystemId is the UUID for the Widevine DRM system.
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
-
-// playReadySystemId is the UUID for the PlayReady DRM system.
 const playReadySystemId = "9a04f07998404286ab92e65be0885f95"
 
-// protectionInfo holds standardized DRM data extracted from a manifest or init segment.
 type protectionInfo struct {
    ContentId []byte
    KeyId     []byte
 }
 
-// keyFetcher is a function type that abstracts the DRM-specific key retrieval process.
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func playReadyKey(folder string, keyId []byte, contentId string, fetcher LicenseFetcher) ([]byte, error) {
@@ -102,7 +95,6 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, errors.New("playready requires a folder path")
    }
 
-   // 1. certificate chain
    data, err := os.ReadFile(filepath.Join(folder, "bdevcert.dat"))
    if err != nil {
       return nil, err
@@ -113,7 +105,6 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   // 2. signing key
    data, err = os.ReadFile(filepath.Join(folder, "zprivsig.dat"))
    if err != nil {
       return nil, err
@@ -124,7 +115,6 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   // 3. encrypt key
    data, err = os.ReadFile(filepath.Join(folder, "zprivencr.dat"))
    if err != nil {
       return nil, err
@@ -230,7 +220,6 @@ func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher)
 
 func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *protectionInfo) ([]byte, error) {
    var keyId, contentId []byte
-   // Priority for Content ID is: Manifest -> Init Segment
    if manifestProtection != nil && len(manifestProtection.ContentId) > 0 {
       contentId = manifestProtection.ContentId
       log.Printf("content ID from manifest: %x", contentId)
@@ -239,7 +228,6 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
       log.Printf("content ID from MP4: %x", contentId)
    }
 
-   // Key ID MUST come from the init segment ('tenc' box).
    if initProtection != nil && initProtection.KeyId != nil {
       keyId = initProtection.KeyId
       log.Printf("key ID from MP4 tenc: %x", keyId)
@@ -250,7 +238,6 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
       return nil, nil
    }
 
-   // Finally, fetch the key.
    key, err := fetcher(keyId, contentId)
    if err != nil {
       return nil, fmt.Errorf("failed to fetch decryption key: %w", err)

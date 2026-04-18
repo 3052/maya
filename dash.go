@@ -70,7 +70,7 @@ func getMiddleBitrate(rep *dash.Representation) error {
 
 // getDashInitSegment locates and fetches the initialization segment for a DASH representation.
 func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
-   if !typeInfo.IsFMP4 {
+   if !typeInfo.IsFmp4 {
       return nil, nil
    }
    // Case 1: Initialization defined in SegmentBase
@@ -157,11 +157,11 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
 func detectDashType(rep *dash.Representation) (*typeInfo, error) {
    switch rep.GetMimeType() {
    case "video/mp4":
-      return &typeInfo{Extension: ".mp4", IsFMP4: true}, nil
+      return &typeInfo{Extension: ".mp4", IsFmp4: true}, nil
    case "audio/mp4":
-      return &typeInfo{Extension: ".m4a", IsFMP4: true}, nil
+      return &typeInfo{Extension: ".m4a", IsFmp4: true}, nil
    case "text/vtt":
-      return &typeInfo{Extension: ".vtt", IsFMP4: false}, nil
+      return &typeInfo{Extension: ".vtt", IsFmp4: false}, nil
    default:
       return nil, fmt.Errorf("unsupported mime type for stream %s: %s", rep.Id, rep.GetMimeType())
    }
@@ -191,11 +191,11 @@ func listStreamsDash(manifest *dash.Mpd) error {
 }
 
 // parseDash is an internal helper to parse a DASH manifest.
-func parseDash(body []byte, baseURL *url.URL) (*dash.Mpd, error) {
+func parseDash(body []byte, baseUrl *url.URL) (*dash.Mpd, error) {
    manifest, err := dash.Parse(body)
    if err != nil {
       return nil, fmt.Errorf("failed to parse DASH manifest: %w", err)
    }
-   manifest.MpdUrl = baseURL
+   manifest.MpdUrl = baseUrl
    return manifest, nil
 }

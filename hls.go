@@ -15,18 +15,18 @@ import (
 )
 
 // parseHls is an internal helper to parse an HLS master playlist.
-func parseHls(body string, baseURL *url.URL) (*hls.MasterPlaylist, error) {
+func parseHls(body string, baseUrl *url.URL) (*hls.MasterPlaylist, error) {
    master, err := hls.DecodeMaster(body)
    if err != nil {
       return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
    }
-   master.ResolveUris(baseURL)
+   master.ResolveUris(baseUrl)
    return master, nil
 }
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
-func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
-   request := http.Request{URL: mediaURL}
+func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
+   request := http.Request{URL: mediaUrl}
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
@@ -44,18 +44,17 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
-   // Fix: use the potentially redirected URL
    mediaPl.ResolveUris(resp.Request.URL)
    return mediaPl, nil
 }
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchKey keyFetcher) error {
-   targetURI, err := getHlsStreamUrl(playlist, streamId)
+   targetUri, err := getHlsStreamUrl(playlist, streamId)
    if err != nil {
       return err
    }
-   mediaPl, err := fetchMediaPlaylist(targetURI)
+   mediaPl, err := fetchMediaPlaylist(targetUri)
    if err != nil {
       return err
    }
@@ -71,7 +70,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
    }
 
    var initData []byte
-   if typeInfo.IsFMP4 && mediaPl.Map != nil {
+   if typeInfo.IsFmp4 && mediaPl.Map != nil {
       initData, err = getBytes(mediaPl.Map, nil)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
@@ -82,7 +81,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,
-      manifestProtection: nil, // No manifest protection extraction for HLS
+      manifestProtection: nil,
       threads:            threads,
       fetchKey:           fetchKey,
    }
@@ -110,28 +109,26 @@ func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
       return nil, errors.New("empty media playlist")
    }
 
-   // Rely entirely on the URL of the first segment
-   firstSegURL := mediaPl.Segments[0].Uri
-   ext := path.Ext(firstSegURL.Path)
+   firstSegUrl := mediaPl.Segments[0].Uri
+   ext := path.Ext(firstSegUrl.Path)
    if ext == "" {
-      return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegURL.String())
+      return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegUrl.String())
    }
 
    if ext == ".mp4a" {
       ext = ".m4a"
    }
 
-   // If it has a Map, it's definitively fMP4. Otherwise, check if the URL explicitly says it's an mp4 variant.
-   isFMP4 := false
+   isFmp4 := false
    if mediaPl.Map != nil {
-      isFMP4 = true
+      isFmp4 = true
    } else if ext == ".mp4" || ext == ".m4s" || ext == ".m4a" {
-      isFMP4 = true
+      isFmp4 = true
    }
 
    return &typeInfo{
       Extension: ext,
-      IsFMP4:    isFMP4,
+      IsFmp4:    isFmp4,
    }, nil
 }
 

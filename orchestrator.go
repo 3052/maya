@@ -37,7 +37,6 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
          panic("failed to decode hardcoded playready system id")
       }
 
-      // 1. Get Content ID from the PSSH box in the init segment.
       if pssh, ok := remux.Moov.FindPssh(wvIdBytes); ok {
          wv_data, err := widevine.DecodePsshData(pssh.Data)
          if err == nil {
@@ -56,7 +55,6 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
          }
       }
 
-      // 2. Get key ID ONLY from the 'tenc' box.
       if len(remux.Moov.Trak) > 0 {
          trak := remux.Moov.Trak[0]
          if trak.Mdia != nil {
@@ -83,17 +81,16 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
 }
 
 // segment represents a single chunk to be downloaded.
-// This is used for both DASH and HLS, mapping tasks to workers.
 type segment struct {
    url      *url.URL
    header   http.Header
-   duration float64 // Used mostly by DASH for bitrate calculations
-   sizeBits uint64  // Used mostly by DASH for bitrate calculations
+   duration float64
+   sizeBits uint64
 }
 
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
 type downloadJob struct {
-   outputFileNameBase string // RENAMED from streamId
+   outputFileNameBase string
    typeInfo           *typeInfo
    allRequests        []segment
    initSegmentData    []byte
@@ -108,19 +105,16 @@ func orchestrateDownload(job *downloadJob) error {
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.typeInfo.Extension)
 
-   // CHANGED: Use shared createFile to handle directories
    file, err := createFile(name.String())
    if err != nil {
       return err
    }
    defer file.Close()
 
-   if !job.typeInfo.IsFMP4 {
-      // Non-FMP4 streams (e.g., VTT): download all segments and concatenate them directly.
+   if !job.typeInfo.IsFmp4 {
       return executeDownload(job.allRequests, nil, nil, file, job.threads)
    }
 
-   // FMP4 streams: require an initialization segment and a remuxer.
    remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
    if err != nil {
       return err

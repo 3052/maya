@@ -11,6 +11,6 @@ require (
 require (
 	41.neocities.org/protobuf v1.6.2 // indirect
 	filippo.io/nistec v0.0.4 // indirect
-	github.com/emmansun/gmsm v0.41.1 // indirect
+	github.com/emmansun/gmsm v0.42.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 )
