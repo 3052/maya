@@ -44,7 +44,6 @@ func fetchMediaPlaylist(mediaURL *url.URL) (*hls.MediaPlaylist, error) {
    if err != nil {
       return nil, err
    }
-   // Fix: use the potentially redirected URL
    mediaPl.ResolveUris(resp.Request.URL)
    return mediaPl, nil
 }
@@ -82,7 +81,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,
-      manifestProtection: nil, // No manifest protection extraction for HLS
+      manifestProtection: nil,
       threads:            threads,
       fetchKey:           fetchKey,
    }
@@ -110,7 +109,6 @@ func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
       return nil, errors.New("empty media playlist")
    }
 
-   // Rely entirely on the URL of the first segment
    firstSegURL := mediaPl.Segments[0].Uri
    ext := path.Ext(firstSegURL.Path)
    if ext == "" {
@@ -121,7 +119,6 @@ func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
       ext = ".m4a"
    }
 
-   // If it has a Map, it's definitively fMP4. Otherwise, check if the URL explicitly says it's an mp4 variant.
    isFMP4 := false
    if mediaPl.Map != nil {
       isFMP4 = true
