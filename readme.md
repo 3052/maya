@@ -1,7 +1,6 @@
 # maya
 
-Package maya is a concurrent DASH stream downloader and assembler that handles
-manifest parsing, accurate bitrate calculation, and content decryption
+Multi-threaded DASH/HLS downloader with DRM decryption
 
 https://41.neocities.org/maya
 
