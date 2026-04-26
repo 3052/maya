@@ -77,6 +77,7 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
 }
 
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
+
 const playReadySystemId = "9a04f07998404286ab92e65be0885f95"
 
 type protectionInfo struct {
