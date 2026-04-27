@@ -12,6 +12,31 @@ import (
    "strings"
 )
 
+// overrides the global http.DefaultTransport with the proxy routing logic.
+func SetProxy(proxiesCsv string, ignoreLog ...string) error {
+   prt := &proxyRoundTripper{
+      ignoreLog: ignoreLog,
+   }
+
+   if proxiesCsv == "" {
+      prt.transports = []*http.Transport{{}}
+   } else {
+      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+         parsedUrl, err := url.Parse(proxyStr)
+         if err != nil {
+            return err
+         }
+
+         transport := &http.Transport{}
+         transport.Proxy = http.ProxyURL(parsedUrl)
+         prt.transports = append(prt.transports, transport)
+      }
+
+   }
+   http.DefaultTransport = prt
+   return nil
+}
+
 func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
    reqHeader := make(http.Header)
    for key, value := range headers {
@@ -75,30 +100,7 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
    return transport.RoundTrip(req)
 }
 
-// overrides the global http.DefaultTransport with the proxy routing logic.
-func SetProxy(proxiesCsv string, ignoreLog ...string) error {
-   prt := &proxyRoundTripper{
-      ignoreLog: ignoreLog,
-   }
-
-   if proxiesCsv == "" {
-      prt.transports = []*http.Transport{{}}
-   } else {
-      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-         parsedUrl, err := url.Parse(proxyStr)
-         if err != nil {
-            return err
-         }
-
-         transport := &http.Transport{}
-         transport.Proxy = http.ProxyURL(parsedUrl)
-         prt.transports = append(prt.transports, transport)
-      }
-
-   }
-   http.DefaultTransport = prt
-   return nil
-}
+///
 
 type proxyRoundTripper struct {
    transports []*http.Transport
