@@ -6,6 +6,7 @@ import (
    "errors"
    "fmt"
    "io"
+   "log"
    "net/http"
    "net/url"
    "path"
@@ -27,6 +28,7 @@ func parseHls(body string, baseUrl *url.URL) (*hls.MasterPlaylist, error) {
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
    request := http.Request{URL: mediaUrl}
+   log.Println("GET", mediaUrl)
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err

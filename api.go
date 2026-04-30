@@ -8,31 +8,24 @@ import (
    "log"
    "net/http"
    "net/url"
-   "path"
    "strings"
 )
 
 // overrides the global http.DefaultTransport with the proxy routing logic.
-func SetProxy(proxiesCsv string, ignoreLog ...string) error {
-   prt := &proxyRoundTripper{
-      ignoreLog: ignoreLog,
-   }
+func SetProxy(proxiesCsv string) error {
+   prt := &proxyRoundTripper{}
 
-   if proxiesCsv == "" {
-      prt.transports = []*http.Transport{{}}
-   } else {
-      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-         parsedUrl, err := url.Parse(proxyStr)
-         if err != nil {
-            return err
-         }
-
-         transport := &http.Transport{}
-         transport.Proxy = http.ProxyURL(parsedUrl)
-         prt.transports = append(prt.transports, transport)
+   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+      parsedUrl, err := url.Parse(proxyStr)
+      if err != nil {
+         return err
       }
 
+      transport := &http.Transport{}
+      transport.Proxy = http.ProxyURL(parsedUrl)
+      prt.transports = append(prt.transports, transport)
    }
+
    http.DefaultTransport = prt
    return nil
 }
@@ -47,6 +40,8 @@ func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error)
       URL:    targetUrl,
       Header: reqHeader,
    }
+
+   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
 }
 
@@ -61,6 +56,8 @@ func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) 
       URL:    targetUrl,
       Header: reqHeader,
    }
+
+   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
 }
 
@@ -78,52 +75,20 @@ func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Res
    if len(body) >= 1 {
       req.Body = io.NopCloser(bytes.NewReader(body))
    }
+
+   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
 }
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   logReq, err := p.shouldLog(req.URL.Path)
-   if err != nil {
-      return nil, err
-   }
-
    transport := p.transports[p.index]
-   if logReq {
-      if transport.Proxy != nil {
-         log.Printf("proxy %s %s", req.Method, req.URL)
-      } else {
-         log.Printf("%s %s", req.Method, req.URL)
-      }
-
-   }
    p.index = (p.index + 1) % len(p.transports)
    return transport.RoundTrip(req)
 }
 
-///
-
 type proxyRoundTripper struct {
    transports []*http.Transport
    index      int
-   ignoreLog  []string
-}
-
-func (p *proxyRoundTripper) shouldLog(reqPath string) (bool, error) {
-   base := path.Base(reqPath)
-
-   for _, pattern := range p.ignoreLog {
-      matched, err := path.Match(pattern, base)
-      if err != nil {
-         return false, err
-      }
-
-      if matched {
-         return false, nil
-      }
-
-   }
-
-   return true, nil
 }
 
 // getBytes performs an HTTP GET request and returns its body.
@@ -134,17 +99,14 @@ func getBytes(targetUrl *url.URL, header http.Header) ([]byte, error) {
    } else {
       req.Header = http.Header{}
    }
-
    resp, err := http.DefaultClient.Do(&req)
    if err != nil {
       return nil, err
    }
-
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
       return nil, errors.New(resp.Status)
    }
-
    return io.ReadAll(resp.Body)
 }
 
@@ -161,13 +123,12 @@ func ListDash(getter ManifestGetter) (*Dash, error) {
    if err != nil {
       return nil, err
    }
-
    request := http.Request{URL: baseUrl}
+   log.Println("GET", baseUrl)
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
-
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK {
       return nil, errors.New(resp.Status)
@@ -196,36 +157,30 @@ func ListHls(getter ManifestGetter) (*Hls, error) {
    if err != nil {
       return nil, err
    }
-
    request := http.Request{URL: baseUrl}
+   log.Println("GET", baseUrl)
    resp, err := http.DefaultClient.Do(&request)
    if err != nil {
       return nil, err
    }
-
    defer resp.Body.Close()
    if resp.StatusCode != http.StatusOK {
       return nil, errors.New(resp.Status)
    }
-
    var builder strings.Builder
    _, err = io.Copy(&builder, resp.Body)
    if err != nil {
       return nil, err
    }
-
    body := builder.String()
-
    finalUrl := resp.Request.URL
    playlist, err := parseHls(body, finalUrl)
    if err != nil {
       return nil, err
    }
-
    if err := listStreamsHls(playlist); err != nil {
       return nil, err
    }
-
    return &Hls{Url: finalUrl, Body: body}, nil
 }
 
