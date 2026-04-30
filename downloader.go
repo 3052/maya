@@ -157,7 +157,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       go func(id int) {
          defer wg.Done()
          for item := range workQueue {
-            data, err := getBytes(item.request.url, item.request.header)
+            data, err := getBytes(item.request.url, item.request.byteRange)
             results <- result{index: item.index, workerId: id, data: data, err: err}
          }
       }(workerId)

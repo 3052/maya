@@ -6,7 +6,6 @@ import (
    "errors"
    "fmt"
    "log"
-   "net/http"
    "net/url"
    "slices"
 )
@@ -20,9 +19,7 @@ func getMiddleBitrate(rep *dash.Representation) error {
          return err
       }
 
-      header := http.Header{}
-      header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err := getBytes(baseUrl, header)
+      sidxData, err := getBytes(baseUrl, rep.SegmentBase.IndexRange)
       if err != nil {
          return err
       }
@@ -56,7 +53,7 @@ func getMiddleBitrate(rep *dash.Representation) error {
       return nil
    }
    mid := segs[len(segs)/2]
-   data, err := getBytes(mid.url, mid.header)
+   data, err := getBytes(mid.url, mid.byteRange)
    if err != nil {
       return err
    }
@@ -79,9 +76,7 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, err
       }
-      header := http.Header{}
-      header.Set("range", "bytes="+rep.SegmentBase.Initialization.Range)
-      return getBytes(baseUrl, header)
+      return getBytes(baseUrl, rep.SegmentBase.Initialization.Range)
    }
    // Case 2: Initialization defined in SegmentTemplate
    if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
@@ -89,7 +84,7 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
       }
-      return getBytes(initUrl, nil)
+      return getBytes(initUrl, "")
    }
    // Case 3: Initialization defined in SegmentList
    if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
@@ -97,7 +92,7 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
-      return getBytes(initUrl, nil)
+      return getBytes(initUrl, "")
    }
    return nil, nil
 }
@@ -122,9 +117,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       if err != nil {
          return err
       }
-      header := http.Header{}
-      header.Set("range", "bytes="+rep.SegmentBase.IndexRange)
-      sidxData, err = getBytes(baseUrl, header)
+      sidxData, err = getBytes(baseUrl, rep.SegmentBase.IndexRange)
       if err != nil {
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }

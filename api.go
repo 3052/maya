@@ -92,18 +92,21 @@ type proxyRoundTripper struct {
 }
 
 // getBytes performs an HTTP GET request and returns its body.
-func getBytes(targetUrl *url.URL, header http.Header) ([]byte, error) {
-   req := http.Request{URL: targetUrl}
-   if header != nil {
-      req.Header = header
-   } else {
-      req.Header = http.Header{}
+func getBytes(targetUrl *url.URL, byteRange string) ([]byte, error) {
+   req := http.Request{
+      URL:    targetUrl,
+      Header: make(http.Header),
    }
+   if byteRange != "" {
+      req.Header.Set("Range", "bytes="+byteRange)
+   }
+
    resp, err := http.DefaultClient.Do(&req)
    if err != nil {
       return nil, err
    }
    defer resp.Body.Close()
+
    if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
       return nil, errors.New(resp.Status)
    }
@@ -123,9 +126,7 @@ func ListDash(getter ManifestGetter) (*Dash, error) {
    if err != nil {
       return nil, err
    }
-   request := http.Request{URL: baseUrl}
-   log.Println("GET", baseUrl)
-   resp, err := http.DefaultClient.Do(&request)
+   resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
    }
@@ -157,9 +158,7 @@ func ListHls(getter ManifestGetter) (*Hls, error) {
    if err != nil {
       return nil, err
    }
-   request := http.Request{URL: baseUrl}
-   log.Println("GET", baseUrl)
-   resp, err := http.DefaultClient.Do(&request)
+   resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
    }
