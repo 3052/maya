@@ -9,7 +9,6 @@ import (
    "encoding/hex"
    "fmt"
    "log"
-   "net/http"
    "net/url"
    "os"
    "path/filepath"
@@ -82,10 +81,10 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
 
 // segment represents a single chunk to be downloaded.
 type segment struct {
-   url      *url.URL
-   header   http.Header
-   duration float64
-   sizeBits uint64
+   url       *url.URL
+   byteRange string
+   duration  float64
+   sizeBits  uint64
 }
 
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
