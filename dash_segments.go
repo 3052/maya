@@ -5,7 +5,6 @@ import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
    "errors"
-   "net/http"
 )
 
 // generateSegmentsFromSidx parses a pre-fetched sidx box to generate segments.
@@ -41,14 +40,12 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
 
       if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || index == len(sidx.References)-1 {
          endOffset := currentOffset - 1
-         header := make(http.Header)
-         header.Set("range", "bytes="+dash.FormatRange(chunkStart, endOffset))
 
          segments = append(segments, segment{
-            url:      baseUrl,
-            header:   header,
-            duration: chunkDuration,
-            sizeBits: (currentOffset - chunkStart) * 8,
+            url:       baseUrl,
+            byteRange: dash.FormatRange(chunkStart, endOffset),
+            duration:  chunkDuration,
+            sizeBits:  (currentOffset - chunkStart) * 8,
          })
 
          chunkStart = currentOffset

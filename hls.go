@@ -6,8 +6,6 @@ import (
    "errors"
    "fmt"
    "io"
-   "log"
-   "net/http"
    "net/url"
    "path"
    "slices"
@@ -27,14 +25,12 @@ func parseHls(body string, baseUrl *url.URL) (*hls.MasterPlaylist, error) {
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
-   request := http.Request{URL: mediaUrl}
-   log.Println("GET", mediaUrl)
-   resp, err := http.DefaultClient.Do(&request)
+   resp, err := Get(mediaUrl, nil)
    if err != nil {
       return nil, err
    }
    defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
+   if resp.StatusCode != 200 {
       return nil, errors.New(resp.Status)
    }
    var data strings.Builder
@@ -68,12 +64,12 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
 
    allRequests := make([]segment, len(mediaPl.Segments))
    for index, hlsSeg := range mediaPl.Segments {
-      allRequests[index] = segment{url: hlsSeg.Uri, header: nil}
+      allRequests[index] = segment{url: hlsSeg.Uri}
    }
 
    var initData []byte
    if typeInfo.IsFmp4 && mediaPl.Map != nil {
-      initData, err = getBytes(mediaPl.Map, nil)
+      initData, err = getBytes(mediaPl.Map, "")
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
       }
