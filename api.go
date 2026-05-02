@@ -14,18 +14,19 @@ import (
 // overrides the global http.DefaultTransport with the proxy routing logic.
 func SetProxy(proxiesCsv string) error {
    prt := &proxyRoundTripper{}
-
-   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-      parsedUrl, err := url.Parse(proxyStr)
-      if err != nil {
-         return err
+   if proxiesCsv != "" {
+      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+         parsedUrl, err := url.Parse(proxyStr)
+         if err != nil {
+            return err
+         }
+         transport := &http.Transport{}
+         transport.Proxy = http.ProxyURL(parsedUrl)
+         prt.transports = append(prt.transports, transport)
       }
-
-      transport := &http.Transport{}
-      transport.Proxy = http.ProxyURL(parsedUrl)
-      prt.transports = append(prt.transports, transport)
+   } else {
+      prt.transports = []*http.Transport{{}}
    }
-
    http.DefaultTransport = prt
    return nil
 }
