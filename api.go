@@ -9,11 +9,13 @@ import (
    "net/http"
    "net/url"
    "strings"
+   "sync/atomic"
 )
 
-// overrides the global http.DefaultTransport with the proxy routing logic.
+// SetProxy overrides the global http.DefaultTransport with the proxy routing logic.
 func SetProxy(proxiesCsv string) error {
    prt := &proxyRoundTripper{}
+
    if proxiesCsv != "" {
       for _, proxyStr := range strings.Split(proxiesCsv, ",") {
          parsedUrl, err := url.Parse(proxyStr)
@@ -24,26 +26,30 @@ func SetProxy(proxiesCsv string) error {
          transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
       }
+
+      // Log without the variable
+      log.Println("Overriding http.DefaultTransport with proxies")
    } else {
       prt.transports = []*http.Transport{{}}
    }
+
    http.DefaultTransport = prt
    return nil
 }
 
-func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
-   reqHeader := make(http.Header)
-   for key, value := range headers {
-      reqHeader.Set(key, value)
-   }
-   req := &http.Request{
-      Method: http.MethodHead,
-      URL:    targetUrl,
-      Header: reqHeader,
-   }
+func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+   // Safely increment the index across multiple goroutines
+   idx := atomic.AddUint32(&p.index, 1) - 1
 
-   log.Println(req.Method, req.URL)
-   return http.DefaultClient.Do(req)
+   // Safely select the transport
+   transport := p.transports[int(idx)%len(p.transports)]
+
+   return transport.RoundTrip(req)
+}
+
+type proxyRoundTripper struct {
+   transports []*http.Transport
+   index      uint32
 }
 
 // Get performs an HTTP GET request by manually constructing the http.Request
@@ -81,15 +87,19 @@ func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Res
    return http.DefaultClient.Do(req)
 }
 
-func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   transport := p.transports[p.index]
-   p.index = (p.index + 1) % len(p.transports)
-   return transport.RoundTrip(req)
-}
+func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
+   reqHeader := make(http.Header)
+   for key, value := range headers {
+      reqHeader.Set(key, value)
+   }
+   req := &http.Request{
+      Method: http.MethodHead,
+      URL:    targetUrl,
+      Header: reqHeader,
+   }
 
-type proxyRoundTripper struct {
-   transports []*http.Transport
-   index      int
+   log.Println(req.Method, req.URL)
+   return http.DefaultClient.Do(req)
 }
 
 // getBytes performs an HTTP GET request and returns its body.
