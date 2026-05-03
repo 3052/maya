@@ -12,27 +12,27 @@ import (
    "sync/atomic"
 )
 
-// overrides the global http.DefaultTransport with the proxy routing logic.
+// SetProxy overrides the global http.DefaultTransport with the proxy routing
+// logic
 func SetProxy(proxiesCsv string) error {
-   prt := &proxyRoundTripper{}
-
    if proxiesCsv != "" {
+      prt := &proxyRoundTripper{}
+
       for _, proxyStr := range strings.Split(proxiesCsv, ",") {
          parsedUrl, err := url.Parse(proxyStr)
          if err != nil {
-            return err
+            return err // Standard Go short-circuit on error
          }
+
          transport := &http.Transport{}
          transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
       }
 
       log.Println("Overriding http.DefaultTransport with proxies")
-   } else {
-      prt.transports = []*http.Transport{{}}
+      http.DefaultTransport = prt
    }
 
-   http.DefaultTransport = prt
    return nil
 }
 
