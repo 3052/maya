@@ -11,6 +11,40 @@ import (
    "strconv"
 )
 
+type Cache struct {
+   File string
+}
+
+func (c *Cache) Read(value any) error {
+   data, err := os.ReadFile(c.File)
+   if err != nil {
+      return err // Return immediately if the file can't be read
+   }
+   // Return the result of the Unmarshal operation (either nil or an error)
+   return xml.Unmarshal(data, value)
+}
+
+func (c *Cache) Setup(file string) error {
+   var err error
+   c.File, err = os.UserCacheDir()
+   if err != nil {
+      return err
+   }
+
+   c.File = filepath.Join(c.File, file)
+   return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
+}
+
+func (c *Cache) Write(value any) error {
+   data, err := xml.MarshalIndent(value, "", " ")
+   if err != nil {
+      return err
+   }
+
+   log.Println("Write", c.File)
+   return os.WriteFile(c.File, data, os.ModePerm)
+}
+
 type Flag struct {
    Name   string
    IsBool bool
@@ -140,45 +174,4 @@ func PrintFlags(groups [][]*Flag) error {
 
    }
    return nil
-}
-
-func (c *Cache) Read(value any) func(func() error) error {
-   data, err := os.ReadFile(c.File)
-   if err == nil {
-      err = xml.Unmarshal(data, value)
-   }
-
-   return func(action func() error) error {
-      if err != nil {
-         return err
-      }
-
-      return action()
-   }
-
-}
-
-type Cache struct {
-   File string
-}
-
-func (c *Cache) Setup(file string) error {
-   var err error
-   c.File, err = os.UserCacheDir()
-   if err != nil {
-      return err
-   }
-
-   c.File = filepath.Join(c.File, file)
-   return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
-}
-
-func (c *Cache) Write(value any) error {
-   data, err := xml.MarshalIndent(value, "", " ")
-   if err != nil {
-      return err
-   }
-
-   log.Println("Write", c.File)
-   return os.WriteFile(c.File, data, os.ModePerm)
 }
