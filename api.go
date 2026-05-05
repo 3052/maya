@@ -12,45 +12,6 @@ import (
    "sync/atomic"
 )
 
-// SetProxy overrides the global http.DefaultTransport with the proxy routing
-// logic
-func SetProxy(proxiesCsv string) error {
-   if proxiesCsv != "" {
-      prt := &proxyRoundTripper{}
-
-      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-         parsedUrl, err := url.Parse(proxyStr)
-         if err != nil {
-            return err // Standard Go short-circuit on error
-         }
-
-         transport := &http.Transport{}
-         transport.Proxy = http.ProxyURL(parsedUrl)
-         prt.transports = append(prt.transports, transport)
-      }
-
-      log.Println("Overriding http.DefaultTransport with proxies")
-      http.DefaultTransport = prt
-   }
-
-   return nil
-}
-
-func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   // Safely increment the index.
-   idx := atomic.AddUint32(&p.index, 1)
-
-   // Safely select the transport
-   transport := p.transports[int(idx)%len(p.transports)]
-
-   return transport.RoundTrip(req)
-}
-
-type proxyRoundTripper struct {
-   transports []*http.Transport
-   index      uint32
-}
-
 // Get performs an HTTP GET request by manually constructing the http.Request
 func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
    reqHeader := make(http.Header)
@@ -122,6 +83,47 @@ func getBytes(targetUrl *url.URL, byteRange string) ([]byte, error) {
    }
    return io.ReadAll(resp.Body)
 }
+
+// SetProxy overrides the global http.DefaultTransport with the proxy routing
+// logic
+func SetProxy(proxiesCsv string) error {
+   if proxiesCsv != "" {
+      prt := &proxyRoundTripper{}
+
+      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+         parsedUrl, err := url.Parse(proxyStr)
+         if err != nil {
+            return err // Standard Go short-circuit on error
+         }
+
+         transport := &http.Transport{}
+         transport.Proxy = http.ProxyURL(parsedUrl)
+         prt.transports = append(prt.transports, transport)
+      }
+
+      log.Println("Overriding http.DefaultTransport with proxies")
+      http.DefaultTransport = prt
+   }
+
+   return nil
+}
+
+func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+   // Safely increment the index.
+   idx := atomic.AddUint32(&p.index, 1)
+
+   // Safely select the transport
+   transport := p.transports[int(idx)%len(p.transports)]
+
+   return transport.RoundTrip(req)
+}
+
+type proxyRoundTripper struct {
+   transports []*http.Transport
+   index      uint32
+}
+
+///
 
 // typeInfo holds the determined properties of a media stream.
 type typeInfo struct {

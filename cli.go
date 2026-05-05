@@ -7,42 +7,102 @@ import (
    "log"
    "os"
    "path/filepath"
+   "reflect"
    "slices"
    "strconv"
 )
 
+// Cache holds the pre-computed OS path for the cache directory.
 type Cache struct {
-   File string
+   FullPath string
 }
 
-func (c *Cache) Read(value any) error {
-   data, err := os.ReadFile(c.File)
+// Setup computes the full cache path, creates the directory exactly once,
+// and stores the path in the Cache struct.
+func (c *Cache) Setup(dirName string) error {
+   cacheDir, err := os.UserCacheDir()
    if err != nil {
-      return err // Return immediately if the file can't be read
+      return fmt.Errorf("failed to get cache directory: %w", err)
    }
-   // Return the result of the Unmarshal operation (either nil or an error)
-   return xml.Unmarshal(data, value)
+
+   c.FullPath = filepath.Join(cacheDir, dirName)
+
+   // Create the directory immediately upon setup
+   if err := os.MkdirAll(c.FullPath, os.ModePerm); err != nil {
+      return fmt.Errorf("failed to create directory: %w", err)
+   }
+
+   return nil
 }
 
-func (c *Cache) Setup(file string) error {
-   var err error
-   c.File, err = os.UserCacheDir()
-   if err != nil {
-      return err
+// GetFilePath unwraps pointers and builds the absolute string path for the file.
+// Exported so users can manually locate, check, or delete cache files.
+func (c *Cache) GetFilePath(v any) string {
+   t := reflect.TypeOf(v)
+   for t.Kind() == reflect.Ptr {
+      t = t.Elem()
    }
 
-   c.File = filepath.Join(c.File, file)
-   return os.MkdirAll(filepath.Dir(c.File), os.ModePerm)
+   return filepath.Join(c.FullPath, t.Name()+".xml")
 }
 
-func (c *Cache) Write(value any) error {
-   data, err := xml.MarshalIndent(value, "", " ")
+// Encode marshals the value and writes it to the cache directory.
+// It logs the full path immediately before attempting to write the file.
+func (c *Cache) Encode(v any) error {
+   filename := c.GetFilePath(v)
+
+   data, err := xml.MarshalIndent(v, "", "  ")
    if err != nil {
-      return err
+      return fmt.Errorf("failed to encode XML: %w", err)
    }
 
-   log.Println("Write", c.File)
-   return os.WriteFile(c.File, data, os.ModePerm)
+   log.Println("Saving:", filename)
+
+   err = os.WriteFile(filename, data, os.ModePerm)
+   if err != nil {
+      return fmt.Errorf("failed to write file: %w", err)
+   }
+
+   return nil
+}
+
+// Decode reads the XML from the cache directory and populates the struct.
+func (c *Cache) Decode(v any) error {
+   filename := c.GetFilePath(v)
+
+   data, err := os.ReadFile(filename)
+   if err != nil {
+      return fmt.Errorf("failed to read file: %w", err)
+   }
+
+   err = xml.Unmarshal(data, v)
+   if err != nil {
+      return fmt.Errorf("failed to decode XML: %w", err)
+   }
+
+   return nil
+}
+
+// Update reads the existing XML into v, calls your modify function,
+// and writes the updated value back to disk.
+// If the callback returns an error, the write is aborted.
+func (c *Cache) Update(v any, modify func() error) error {
+   // 1. Read existing data
+   if err := c.Decode(v); err != nil {
+      return fmt.Errorf("failed to decode for update: %w", err)
+   }
+
+   // 2. Modify the data using the provided callback
+   if err := modify(); err != nil {
+      return fmt.Errorf("update aborted by callback: %w", err)
+   }
+
+   // 3. Save it back
+   if err := c.Encode(v); err != nil {
+      return fmt.Errorf("failed to encode after update: %w", err)
+   }
+
+   return nil
 }
 
 type Flag struct {
