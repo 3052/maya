@@ -131,13 +131,7 @@ type typeInfo struct {
    IsFmp4    bool
 }
 
-type ManifestGetter func() (*url.URL, error)
-
-func ListDash(getter ManifestGetter) (*Dash, error) {
-   baseUrl, err := getter()
-   if err != nil {
-      return nil, err
-   }
+func ListDash(baseUrl *url.URL) (*Dash, error) {
    resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
@@ -165,11 +159,7 @@ func ListDash(getter ManifestGetter) (*Dash, error) {
    return &Dash{Url: finalUrl, Body: body}, nil
 }
 
-func ListHls(getter ManifestGetter) (*Hls, error) {
-   baseUrl, err := getter()
-   if err != nil {
-      return nil, err
-   }
+func ListHls(baseUrl *url.URL) (*Hls, error) {
    resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
