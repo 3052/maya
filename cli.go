@@ -17,19 +17,44 @@ type Cache struct {
    FullPath string
 }
 
-// Setup computes the full cache path, creates the directory exactly once,
-// and stores the path in the Cache struct.
-func (c *Cache) Setup(dirName string) error {
-   cacheDir, err := os.UserCacheDir()
-   if err != nil {
-      return fmt.Errorf("failed to get cache directory: %w", err)
+// Encode marshals the values and writes them to the cache directory.
+// It stops and returns an error on the first failure.
+func (c *Cache) Encode(values ...any) error {
+   for _, v := range values {
+      filename := c.GetFilePath(v)
+
+      data, err := xml.MarshalIndent(v, "", "  ")
+      if err != nil {
+         // Added type info to the error to know WHICH item failed
+         return fmt.Errorf("failed to encode XML for %T: %w", v, err)
+      }
+
+      log.Println("Saving:", filename)
+
+      err = os.WriteFile(filename, data, os.ModePerm)
+      if err != nil {
+         return fmt.Errorf("failed to write file %s: %w", filename, err)
+      }
    }
 
-   c.FullPath = filepath.Join(cacheDir, dirName)
+   return nil
+}
 
-   // Create the directory immediately upon setup
-   if err := os.MkdirAll(c.FullPath, os.ModePerm); err != nil {
-      return fmt.Errorf("failed to create directory: %w", err)
+// Decode reads the XML from the cache directory and populates the structs.
+// It stops and returns an error on the first failure.
+func (c *Cache) Decode(values ...any) error {
+   for _, v := range values {
+      filename := c.GetFilePath(v)
+
+      data, err := os.ReadFile(filename)
+      if err != nil {
+         return fmt.Errorf("failed to read file %s: %w", filename, err)
+      }
+
+      err = xml.Unmarshal(data, v)
+      if err != nil {
+         return fmt.Errorf("failed to decode XML for %T: %w", v, err)
+      }
    }
 
    return nil
@@ -46,60 +71,19 @@ func (c *Cache) GetFilePath(v any) string {
    return filepath.Join(c.FullPath, t.Name()+".xml")
 }
 
-// Encode marshals the value and writes it to the cache directory.
-// It logs the full path immediately before attempting to write the file.
-func (c *Cache) Encode(v any) error {
-   filename := c.GetFilePath(v)
-
-   data, err := xml.MarshalIndent(v, "", "  ")
+// Setup computes the full cache path, creates the directory exactly once,
+// and stores the path in the Cache struct.
+func (c *Cache) Setup(dirName string) error {
+   cacheDir, err := os.UserCacheDir()
    if err != nil {
-      return fmt.Errorf("failed to encode XML: %w", err)
+      return fmt.Errorf("failed to get cache directory: %w", err)
    }
 
-   log.Println("Saving:", filename)
+   c.FullPath = filepath.Join(cacheDir, dirName)
 
-   err = os.WriteFile(filename, data, os.ModePerm)
-   if err != nil {
-      return fmt.Errorf("failed to write file: %w", err)
-   }
-
-   return nil
-}
-
-// Decode reads the XML from the cache directory and populates the struct.
-func (c *Cache) Decode(v any) error {
-   filename := c.GetFilePath(v)
-
-   data, err := os.ReadFile(filename)
-   if err != nil {
-      return fmt.Errorf("failed to read file: %w", err)
-   }
-
-   err = xml.Unmarshal(data, v)
-   if err != nil {
-      return fmt.Errorf("failed to decode XML: %w", err)
-   }
-
-   return nil
-}
-
-// Update reads the existing XML into v, calls your modify function,
-// and writes the updated value back to disk.
-// If the callback returns an error, the write is aborted.
-func (c *Cache) Update(v any, modify func() error) error {
-   // 1. Read existing data
-   if err := c.Decode(v); err != nil {
-      return fmt.Errorf("failed to decode for update: %w", err)
-   }
-
-   // 2. Modify the data using the provided callback
-   if err := modify(); err != nil {
-      return fmt.Errorf("update aborted by callback: %w", err)
-   }
-
-   // 3. Save it back
-   if err := c.Encode(v); err != nil {
-      return fmt.Errorf("failed to encode after update: %w", err)
+   // Create the directory immediately upon setup
+   if err := os.MkdirAll(c.FullPath, os.ModePerm); err != nil {
+      return fmt.Errorf("failed to create directory: %w", err)
    }
 
    return nil
