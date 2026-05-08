@@ -4,6 +4,7 @@ package maya
 import (
    "41.neocities.org/sofia"
    "crypto/aes"
+   "errors"
    "io"
    "log"
    "os"
@@ -14,7 +15,7 @@ import (
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
 // remuxes, and writes data
-func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, numWorkers int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
+func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, threads int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
@@ -25,7 +26,7 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
          sofia.Decrypt(data, sample, block)
       }
    }
-   prog := newProgress(totalSegments, numWorkers)
+   prog := newProgress(totalSegments, threads)
    pending := make(map[int]result)
    nextIndex := 0
    for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
@@ -120,21 +121,10 @@ func (p *progress) update(workerId int) {
    }
 }
 
-// clamp ensures a value stays within a specified range.
-func clamp(value, low, high int) int {
-   if value < low {
-      return low
-   }
-   if value > high {
-      return high
-   }
-   return value
-}
-
-func newProgress(total, numWorkers int) *progress {
+func newProgress(total, threads int) *progress {
    return &progress{
       total:   total,
-      counts:  make([]int64, numWorkers),
+      counts:  make([]int64, threads),
       start:   time.Now(),
       lastLog: time.Now(),
    }
@@ -142,18 +132,28 @@ func newProgress(total, numWorkers int) *progress {
 
 // executeDownload runs the concurrent worker pool to download all segments.
 func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
+   if threads <= -1 {
+      return errors.New("threads cannot be -1 or less")
+   }
+   if threads >= 10 {
+      return errors.New("threads cannot be 10 or more")
+   }
+   if threads == 0 {
+      threads = 1
+   }
+
    if len(requests) == 0 {
       if remux != nil {
          return remux.Finish()
       }
       return nil
    }
-   numWorkers := clamp(threads, 1, 10)
+
    workQueue := make(chan workItem, len(requests))
    results := make(chan result, len(requests))
    var wg sync.WaitGroup
-   wg.Add(numWorkers)
-   for workerId := 0; workerId < numWorkers; workerId++ {
+   wg.Add(threads)
+   for workerId := 0; workerId < threads; workerId++ {
       go func(id int) {
          defer wg.Done()
          for item := range workQueue {
@@ -163,7 +163,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       }(workerId)
    }
    doneChan := make(chan error, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), numWorkers, key, remux, file)
+   go processAndWriteSegments(doneChan, results, len(requests), threads, key, remux, file)
    for reqIndex, req := range requests {
       workQueue <- workItem{index: reqIndex, request: req}
    }

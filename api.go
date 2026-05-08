@@ -123,14 +123,6 @@ type proxyRoundTripper struct {
    index      uint32
 }
 
-///
-
-// typeInfo holds the determined properties of a media stream.
-type typeInfo struct {
-   Extension string
-   IsFmp4    bool
-}
-
 func ListDash(baseUrl *url.URL) (*Dash, error) {
    resp, err := Get(baseUrl, nil)
    if err != nil {
@@ -191,10 +183,6 @@ type Dash struct {
 }
 
 func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
    manifest, err := parseDash(m.Body, m.Url)
    if err != nil {
       return err
@@ -214,10 +202,6 @@ type Hls struct {
 }
 
 func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
    playlist, err := parseHls(m.Body, m.Url)
    if err != nil {
       return err
@@ -234,9 +218,10 @@ func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
 type LicenseFetcher func([]byte) ([]byte, error)
 
 type Job struct {
-   Threads   int
-   Widevine  string
-   PlayReady string
    Dash      string
    Hls       int
+   PlayReady string
+   Widevine  string
+
+   Threads int
 }
