@@ -88,14 +88,7 @@ type protectionInfo struct {
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func playReadyKey(folder string, keyId []byte, contentId string, fetcher LicenseFetcher) ([]byte, error) {
-   if fetcher == nil {
-      return nil, errors.New("fetch function cannot be nil")
-   }
-
-   if folder == "" {
-      return nil, errors.New("playready requires a folder path")
-   }
-
+   log.Println("PlayReady:", folder)
    data, err := os.ReadFile(filepath.Join(folder, "bdevcert.dat"))
    if err != nil {
       return nil, err
@@ -159,14 +152,7 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
 }
 
 func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher) ([]byte, error) {
-   if fetcher == nil {
-      return nil, errors.New("fetch function cannot be nil")
-   }
-
-   if folder == "" {
-      return nil, errors.New("widevine requires a folder path")
-   }
-
+   log.Println("Widevine:", folder)
    client_id, err := os.ReadFile(filepath.Join(folder, "client_id.bin"))
    if err != nil {
       return nil, err
