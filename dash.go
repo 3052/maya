@@ -12,7 +12,7 @@ import (
 
 // getMiddleBitrate calculates an accurate bitrate for a representation and stores it...
 func getMiddleBitrate(rep *dash.Representation) error {
-   log.Println("update", rep.Id)
+   log.Println("update:", rep.Id)
    if rep.SegmentBase != nil {
       baseUrl, err := rep.ResolveBaseUrl()
       if err != nil {

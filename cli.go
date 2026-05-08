@@ -12,6 +12,23 @@ import (
    "strconv"
 )
 
+// Decode reads the XML from the cache directory and populates the structs.
+// It stops and returns an error on the first failure.
+func (c *Cache) Decode(values ...any) error {
+   for _, v := range values {
+      filename := c.GetFilePath(v)
+      data, err := os.ReadFile(filename)
+      if err != nil {
+         return err
+      }
+      err = xml.Unmarshal(data, v)
+      if err != nil {
+         return fmt.Errorf("failed to decode XML for %T: %w", v, err)
+      }
+   }
+   return nil
+}
+
 // Cache holds the pre-computed OS path for the cache directory.
 type Cache struct {
    FullPath string
@@ -29,31 +46,11 @@ func (c *Cache) Encode(values ...any) error {
          return fmt.Errorf("failed to encode XML for %T: %w", v, err)
       }
 
-      log.Println("Saving:", filename)
+      log.Println("create:", filename)
 
       err = os.WriteFile(filename, data, os.ModePerm)
       if err != nil {
          return fmt.Errorf("failed to write file %s: %w", filename, err)
-      }
-   }
-
-   return nil
-}
-
-// Decode reads the XML from the cache directory and populates the structs.
-// It stops and returns an error on the first failure.
-func (c *Cache) Decode(values ...any) error {
-   for _, v := range values {
-      filename := c.GetFilePath(v)
-
-      data, err := os.ReadFile(filename)
-      if err != nil {
-         return fmt.Errorf("failed to read file %s: %w", filename, err)
-      }
-
-      err = xml.Unmarshal(data, v)
-      if err != nil {
-         return fmt.Errorf("failed to decode XML for %T: %w", v, err)
       }
    }
 
@@ -99,123 +96,86 @@ type Flag struct {
 
 var flags []*Flag
 
-func FuncFlag(name, usage string, fn func(string) error) *Flag {
-   option := &Flag{
-      Name:  name,
-      Set:   fn,
-      Usage: fmt.Sprintf(" value\n\t%s", usage),
+func PrintFlags(groups [][]*Flag) error {
+   printed := make(map[*Flag]bool)
+   for index, group := range groups {
+      if index > 0 {
+         fmt.Fprintln(os.Stderr)
+      }
+      for _, option := range group {
+         fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
+         printed[option] = true
+      }
    }
-
-   flags = append(flags, option)
-   return option
+   for _, option := range flags {
+      if !printed[option] {
+         return fmt.Errorf("flag -%s is missing from PrintFlags groups", option.Name)
+      }
+   }
+   return nil
 }
 
-func StringFlag(pointer *string, name, usage string) *Flag {
-   usage = fmt.Sprintf(" string\n\t%s", usage)
-   if *pointer != "" {
-      usage += fmt.Sprintf("\n\tdefault %s", *pointer)
+func ParseFlags() error {
+   for index := 1; index < len(os.Args); index++ {
+      arg := os.Args[index]
+      if len(arg) < 2 || arg[0] != '-' {
+         return fmt.Errorf("unexpected argument: %s", arg)
+      }
+      name := arg[1:]
+      idx := slices.IndexFunc(flags, func(option *Flag) bool {
+         return option.Name == name
+      })
+      if idx == -1 {
+         return fmt.Errorf("provided but not defined: -%s", name)
+      }
+      option := flags[idx]
+      if !option.IsBool {
+         index++
+         if index >= len(os.Args) {
+            return fmt.Errorf("flag needs an argument: -%s", name)
+         }
+         if err := option.Set(os.Args[index]); err != nil {
+            return fmt.Errorf("invalid value for flag -%s: %v", name, err)
+         }
+      }
+      option.IsSet = true
    }
-
-   option := &Flag{
-      Name: name,
-      Set: func(val string) error {
-         *pointer = val
-         return nil
-      },
-      Usage: usage,
-   }
-
-   flags = append(flags, option)
-   return option
+   return nil
 }
 
 func BoolFlag(name, usage string) *Flag {
    option := &Flag{
       Name:   name,
       IsBool: true,
-      Usage:  fmt.Sprintf("\n\t%s", usage),
+      Usage:  "\n\t" + usage,
    }
+   flags = append(flags, option)
+   return option
+}
 
+func StringFlag(pointer *string, name, usage string) *Flag {
+   option := &Flag{
+      Name: name,
+      Set: func(value string) error {
+         *pointer = value
+         return nil
+      },
+      Usage: " string\n\t" + usage,
+   }
    flags = append(flags, option)
    return option
 }
 
 func IntFlag(pointer *int, name, usage string) *Flag {
-   usage = fmt.Sprintf(" int\n\t%s", usage)
-   if *pointer != 0 {
-      usage += fmt.Sprintf("\n\tdefault %d", *pointer)
-   }
-
    option := &Flag{
       Name: name,
-      Set: func(val string) (err error) {
-         *pointer, err = strconv.Atoi(val)
-         return
+      Set: func(value string) error {
+         var err error
+         *pointer, err = strconv.Atoi(value)
+         return err
       },
-      Usage: usage,
+      Usage: " int\n\t" + usage,
    }
-
    flags = append(flags, option)
    return option
-}
-
-func ParseFlags() error {
-   for index := 1; index < len(os.Args); index++ {
-      arg := os.Args[index]
-
-      if len(arg) < 2 || arg[0] != '-' {
-         return fmt.Errorf("unexpected argument: %s", arg)
-      }
-
-      name := arg[1:]
-
-      idx := slices.IndexFunc(flags, func(option *Flag) bool {
-         return option.Name == name
-      })
-
-      if idx == -1 {
-         return fmt.Errorf("provided but not defined: -%s", name)
-      }
-      option := flags[idx]
-
-      if !option.IsBool {
-         index++
-         if index >= len(os.Args) {
-            return fmt.Errorf("flag needs an argument: -%s", name)
-         }
-
-         if err := option.Set(os.Args[index]); err != nil {
-            return fmt.Errorf("invalid value for flag -%s: %v", name, err)
-         }
-      }
-
-      option.IsSet = true
-
-   }
-
-   return nil
-}
-
-func PrintFlags(groups [][]*Flag) error {
-   printed := make(map[*Flag]bool)
-
-   for index, group := range groups {
-      if index > 0 {
-         fmt.Fprintln(os.Stderr)
-      }
-
-      for _, option := range group {
-         fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
-         printed[option] = true
-      }
-
-   }
-
-   for _, option := range flags {
-      if !printed[option] {
-         return fmt.Errorf("flag -%s is missing from PrintFlags groups", option.Name)
-      }
-
-   }
-   return nil
 }

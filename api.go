@@ -101,7 +101,7 @@ func SetProxy(proxiesCsv string) error {
          prt.transports = append(prt.transports, transport)
       }
 
-      log.Println("Overriding http.DefaultTransport with proxies")
+      log.Println("overriding http.DefaultTransport with proxies")
       http.DefaultTransport = prt
    }
 
@@ -121,14 +121,6 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 type proxyRoundTripper struct {
    transports []*http.Transport
    index      uint32
-}
-
-///
-
-// typeInfo holds the determined properties of a media stream.
-type typeInfo struct {
-   Extension string
-   IsFmp4    bool
 }
 
 func ListDash(baseUrl *url.URL) (*Dash, error) {
@@ -190,11 +182,7 @@ type Dash struct {
    Body []byte
 }
 
-func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
+func (m *Dash) Download(streamId string, jobSetup *Job, fetcher LicenseFetcher) error {
    manifest, err := parseDash(m.Body, m.Url)
    if err != nil {
       return err
@@ -205,7 +193,7 @@ func (m *Dash) Download(jobSetup *Job, fetcher LicenseFetcher) error {
       return err
    }
 
-   return downloadDash(manifest, jobSetup.Threads, jobSetup.Dash, kFetcher)
+   return downloadDash(manifest, jobSetup.Threads, streamId, kFetcher)
 }
 
 type Hls struct {
@@ -213,11 +201,7 @@ type Hls struct {
    Body string
 }
 
-func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
-   if jobSetup == nil {
-      jobSetup = &Job{}
-   }
-
+func (m *Hls) Download(streamId int, jobSetup *Job, fetcher LicenseFetcher) error {
    playlist, err := parseHls(m.Body, m.Url)
    if err != nil {
       return err
@@ -228,15 +212,14 @@ func (m *Hls) Download(jobSetup *Job, fetcher LicenseFetcher) error {
       return err
    }
 
-   return downloadHls(playlist, jobSetup.Threads, jobSetup.Hls, kFetcher)
+   return downloadHls(playlist, jobSetup.Threads, streamId, kFetcher)
 }
 
 type LicenseFetcher func([]byte) ([]byte, error)
 
 type Job struct {
-   Threads   int
-   Widevine  string
    PlayReady string
-   Dash      string
-   Hls       int
+   Widevine  string
+
+   Threads int
 }

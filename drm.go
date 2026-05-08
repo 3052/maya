@@ -88,14 +88,7 @@ type protectionInfo struct {
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func playReadyKey(folder string, keyId []byte, contentId string, fetcher LicenseFetcher) ([]byte, error) {
-   if fetcher == nil {
-      return nil, errors.New("fetch function cannot be nil")
-   }
-
-   if folder == "" {
-      return nil, errors.New("playready requires a folder path")
-   }
-
+   log.Println("PlayReady:", folder)
    data, err := os.ReadFile(filepath.Join(folder, "bdevcert.dat"))
    if err != nil {
       return nil, err
@@ -154,19 +147,12 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   log.Printf("key %x", key)
+   log.Printf("key: %x", key)
    return key, nil
 }
 
 func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher) ([]byte, error) {
-   if fetcher == nil {
-      return nil, errors.New("fetch function cannot be nil")
-   }
-
-   if folder == "" {
-      return nil, errors.New("widevine requires a folder path")
-   }
-
+   log.Println("Widevine:", folder)
    client_id, err := os.ReadFile(filepath.Join(folder, "client_id.bin"))
    if err != nil {
       return nil, err
@@ -215,7 +201,7 @@ func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher)
       return nil, errors.New("zero key received")
    }
 
-   log.Printf("key %x", foundKey)
+   log.Printf("key: %x", foundKey)
    return foundKey, nil
 }
 
@@ -235,7 +221,7 @@ func getKeyForStream(fetcher keyFetcher, manifestProtection, initProtection *pro
    }
 
    if keyId == nil {
-      log.Println("No key ID found in MP4 'tenc' box; assuming stream is not encrypted.")
+      log.Println("no key ID found in MP4 'tenc' box; assuming stream is not encrypted")
       return nil, nil
    }
 

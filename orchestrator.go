@@ -15,6 +15,12 @@ import (
    "strings"
 )
 
+// typeInfo holds the determined properties of a media stream
+type typeInfo struct {
+   Extension string
+   IsFmp4    bool
+}
+
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
@@ -134,6 +140,6 @@ func createFile(name string) (*os.File, error) {
    if err != nil {
       return nil, err
    }
-   log.Println("Creating file:", name)
+   log.Println("create:", name)
    return os.Create(name)
 }
