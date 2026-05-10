@@ -6,7 +6,6 @@ import (
    "errors"
    "fmt"
    "log"
-   "net/url"
    "slices"
 )
 
@@ -181,14 +180,4 @@ func listStreamsDash(manifest *dash.Mpd) error {
       fmt.Println(representation)
    }
    return nil
-}
-
-// parseDash is an internal helper to parse a DASH manifest.
-func parseDash(body []byte, baseUrl *url.URL) (*dash.Mpd, error) {
-   manifest, err := dash.Parse(body)
-   if err != nil {
-      return nil, fmt.Errorf("failed to parse DASH manifest: %w", err)
-   }
-   manifest.MpdUrl = baseUrl
-   return manifest, nil
 }

@@ -94,41 +94,34 @@ type Flag struct {
    Usage  string
 }
 
-var flags []*Flag
+type FlagSet []*Flag
 
-func PrintFlags(groups [][]*Flag) error {
-   printed := make(map[*Flag]bool)
+func PrintFlags(groups []FlagSet) error {
    for index, group := range groups {
       if index > 0 {
          fmt.Fprintln(os.Stderr)
       }
       for _, option := range group {
          fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
-         printed[option] = true
-      }
-   }
-   for _, option := range flags {
-      if !printed[option] {
-         return fmt.Errorf("flag -%s is missing from PrintFlags groups", option.Name)
       }
    }
    return nil
 }
 
-func ParseFlags() error {
+func (fs *FlagSet) Parse() error {
    for index := 1; index < len(os.Args); index++ {
       arg := os.Args[index]
       if len(arg) < 2 || arg[0] != '-' {
          return fmt.Errorf("unexpected argument: %s", arg)
       }
       name := arg[1:]
-      idx := slices.IndexFunc(flags, func(option *Flag) bool {
+      idx := slices.IndexFunc(*fs, func(option *Flag) bool {
          return option.Name == name
       })
       if idx == -1 {
          return fmt.Errorf("provided but not defined: -%s", name)
       }
-      option := flags[idx]
+      option := (*fs)[idx]
       if !option.IsBool {
          index++
          if index >= len(os.Args) {
@@ -143,17 +136,17 @@ func ParseFlags() error {
    return nil
 }
 
-func BoolFlag(name, usage string) *Flag {
+func (fs *FlagSet) Bool(name, usage string) *Flag {
    option := &Flag{
       Name:   name,
       IsBool: true,
       Usage:  "\n\t" + usage,
    }
-   flags = append(flags, option)
+   *fs = append(*fs, option)
    return option
 }
 
-func StringFlag(pointer *string, name, usage string) *Flag {
+func (fs *FlagSet) String(pointer *string, name, usage string) *Flag {
    option := &Flag{
       Name: name,
       Set: func(value string) error {
@@ -162,11 +155,11 @@ func StringFlag(pointer *string, name, usage string) *Flag {
       },
       Usage: " string\n\t" + usage,
    }
-   flags = append(flags, option)
+   *fs = append(*fs, option)
    return option
 }
 
-func IntFlag(pointer *int, name, usage string) *Flag {
+func (fs *FlagSet) Int(pointer *int, name, usage string) *Flag {
    option := &Flag{
       Name: name,
       Set: func(value string) error {
@@ -176,6 +169,6 @@ func IntFlag(pointer *int, name, usage string) *Flag {
       },
       Usage: " int\n\t" + usage,
    }
-   flags = append(flags, option)
+   *fs = append(*fs, option)
    return option
 }
