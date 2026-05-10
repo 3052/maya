@@ -15,29 +15,32 @@ import (
    "strings"
 )
 
-// getFetcher determines the appropriate key retrieval logic based on which DRM folder is present.
-func (j *Job) getFetcher(fetcher LicenseFetcher) (keyFetcher, error) {
-   if fetcher != nil {
-      if j.Widevine != "" {
-         if j.PlayReady == "" {
-            return func(keyId, contentId []byte) ([]byte, error) {
-               return widevineKey(j.Widevine, keyId, contentId, fetcher)
-            }, nil
-         }
-
-      } else if j.PlayReady != "" {
-         return func(keyId, contentId []byte) ([]byte, error) {
-            return playReadyKey(j.PlayReady, keyId, string(contentId), fetcher)
-         }, nil
-      }
-
-   } else if j.Widevine == "" {
-      if j.PlayReady == "" {
-         return nil, nil
-      }
-
+// getKeyFetcher determines the appropriate key retrieval logic based on the DRM options.
+func (optionsData *Options) getKeyFetcher() (keyFetcher, error) {
+   if optionsData == nil || optionsData.Drm == DrmNone {
+      return nil, nil
    }
-   return nil, errors.New("must specify exactly one DRM (Widevine/PlayReady) with a fetch function, or neither with no fetch function")
+
+   if optionsData.License == nil {
+      return nil, errors.New("a License function is required when DRM is specified")
+   }
+
+   if optionsData.Device == "" {
+      return nil, errors.New("a Device path is required when DRM is specified")
+   }
+
+   switch optionsData.Drm {
+   case DrmWidevine:
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return widevineKey(optionsData.Device, keyId, contentId, optionsData.License)
+      }, nil
+   case DrmPlayReady:
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return playReadyKey(optionsData.Device, keyId, string(contentId), optionsData.License)
+      }, nil
+   default:
+      return nil, fmt.Errorf("unsupported DRM system: %v", optionsData.Drm)
+   }
 }
 
 // getDashProtection extracts Widevine PSSH data from a representation.
@@ -87,9 +90,9 @@ type protectionInfo struct {
 
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
-func playReadyKey(folder string, keyId []byte, contentId string, fetcher LicenseFetcher) ([]byte, error) {
-   log.Println("PlayReady:", folder)
-   data, err := os.ReadFile(filepath.Join(folder, "bdevcert.dat"))
+func playReadyKey(device Device, keyId []byte, contentId string, fetchLicense func([]byte) ([]byte, error)) ([]byte, error) {
+   log.Println("PlayReady Device:", device)
+   data, err := os.ReadFile(filepath.Join(string(device), "bdevcert.dat"))
    if err != nil {
       return nil, err
    }
@@ -99,7 +102,7 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   data, err = os.ReadFile(filepath.Join(folder, "zprivsig.dat"))
+   data, err = os.ReadFile(filepath.Join(string(device), "zprivsig.dat"))
    if err != nil {
       return nil, err
    }
@@ -109,7 +112,7 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   data, err = os.ReadFile(filepath.Join(folder, "zprivencr.dat"))
+   data, err = os.ReadFile(filepath.Join(string(device), "zprivencr.dat"))
    if err != nil {
       return nil, err
    }
@@ -125,7 +128,7 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
       return nil, err
    }
 
-   data, err = fetcher(data)
+   data, err = fetchLicense(data)
    if err != nil {
       return nil, err
    }
@@ -151,14 +154,14 @@ func playReadyKey(folder string, keyId []byte, contentId string, fetcher License
    return key, nil
 }
 
-func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher) ([]byte, error) {
-   log.Println("Widevine:", folder)
-   client_id, err := os.ReadFile(filepath.Join(folder, "client_id.bin"))
+func widevineKey(device Device, keyId, contentId []byte, fetchLicense func([]byte) ([]byte, error)) ([]byte, error) {
+   log.Println("Widevine Device:", device)
+   client_id, err := os.ReadFile(filepath.Join(string(device), "client_id.bin"))
    if err != nil {
       return nil, err
    }
 
-   pem_data, err := os.ReadFile(filepath.Join(folder, "private_key.pem"))
+   pem_data, err := os.ReadFile(filepath.Join(string(device), "private_key.pem"))
    if err != nil {
       return nil, err
    }
@@ -181,7 +184,7 @@ func widevineKey(folder string, keyId, contentId []byte, fetcher LicenseFetcher)
       return nil, err
    }
 
-   resp_data, err := fetcher(signed_data)
+   resp_data, err := fetchLicense(signed_data)
    if err != nil {
       return nil, err
    }
