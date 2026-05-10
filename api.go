@@ -2,6 +2,8 @@
 package maya
 
 import (
+   "41.neocities.org/luna/dash"
+   "41.neocities.org/luna/hls"
    "bytes"
    "errors"
    "io"
@@ -123,7 +125,27 @@ type proxyRoundTripper struct {
    index      uint32
 }
 
-func ListDash(baseUrl *url.URL) (*Dash, error) {
+type Manifest struct {
+   Url  *url.URL
+   Body []byte
+}
+
+type DrmSystem int
+
+const (
+   DrmNone DrmSystem = iota
+   DrmPlayReady
+   DrmWidevine
+)
+
+type Options struct {
+   Threads int
+   Drm     DrmSystem
+   Device  string
+   License func([]byte) ([]byte, error)
+}
+
+func ListDash(baseUrl *url.URL) (*Manifest, error) {
    resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
@@ -139,7 +161,7 @@ func ListDash(baseUrl *url.URL) (*Dash, error) {
    }
 
    finalUrl := resp.Request.URL
-   manifest, err := parseDash(body, finalUrl)
+   manifest, err := dash.Parse(body, finalUrl)
    if err != nil {
       return nil, err
    }
@@ -148,10 +170,10 @@ func ListDash(baseUrl *url.URL) (*Dash, error) {
       return nil, err
    }
 
-   return &Dash{Url: finalUrl, Body: body}, nil
+   return &Manifest{Url: finalUrl, Body: body}, nil
 }
 
-func ListHls(baseUrl *url.URL) (*Hls, error) {
+func ListHls(baseUrl *url.URL) (*Manifest, error) {
    resp, err := Get(baseUrl, nil)
    if err != nil {
       return nil, err
@@ -160,66 +182,56 @@ func ListHls(baseUrl *url.URL) (*Hls, error) {
    if resp.StatusCode != http.StatusOK {
       return nil, errors.New(resp.Status)
    }
-   var builder strings.Builder
-   _, err = io.Copy(&builder, resp.Body)
+
+   body, err := io.ReadAll(resp.Body)
    if err != nil {
       return nil, err
    }
-   body := builder.String()
+
    finalUrl := resp.Request.URL
-   playlist, err := parseHls(body, finalUrl)
+   playlist, err := hls.DecodeMaster(string(body), finalUrl)
    if err != nil {
       return nil, err
    }
    if err := listStreamsHls(playlist); err != nil {
       return nil, err
    }
-   return &Hls{Url: finalUrl, Body: body}, nil
+
+   return &Manifest{Url: finalUrl, Body: body}, nil
 }
 
-type Dash struct {
-   Url  *url.URL
-   Body []byte
-}
+func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
+   if optionsData == nil {
+      optionsData = &Options{}
+   }
 
-func (m *Dash) Download(streamId string, jobSetup *Job, fetcher LicenseFetcher) error {
-   manifest, err := parseDash(m.Body, m.Url)
+   manifest, err := dash.Parse(manifestData.Body, manifestData.Url)
    if err != nil {
       return err
    }
 
-   kFetcher, err := jobSetup.getFetcher(fetcher)
+   kFetcher, err := optionsData.getKeyFetcher()
    if err != nil {
       return err
    }
 
-   return downloadDash(manifest, jobSetup.Threads, streamId, kFetcher)
+   return downloadDash(manifest, optionsData.Threads, streamId, kFetcher)
 }
 
-type Hls struct {
-   Url  *url.URL
-   Body string
-}
+func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
+   if optionsData == nil {
+      optionsData = &Options{}
+   }
 
-func (m *Hls) Download(streamId int, jobSetup *Job, fetcher LicenseFetcher) error {
-   playlist, err := parseHls(m.Body, m.Url)
+   playlist, err := hls.DecodeMaster(string(manifestData.Body), manifestData.Url)
    if err != nil {
       return err
    }
 
-   kFetcher, err := jobSetup.getFetcher(fetcher)
+   kFetcher, err := optionsData.getKeyFetcher()
    if err != nil {
       return err
    }
 
-   return downloadHls(playlist, jobSetup.Threads, streamId, kFetcher)
-}
-
-type LicenseFetcher func([]byte) ([]byte, error)
-
-type Job struct {
-   PlayReady string
-   Widevine  string
-
-   Threads int
+   return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
 }

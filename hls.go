@@ -9,19 +9,8 @@ import (
    "net/url"
    "path"
    "slices"
-   "strconv"
    "strings"
 )
-
-// parseHls is an internal helper to parse an HLS master playlist.
-func parseHls(body string, baseUrl *url.URL) (*hls.MasterPlaylist, error) {
-   master, err := hls.DecodeMaster(body)
-   if err != nil {
-      return nil, fmt.Errorf("failed to parse HLS playlist: %w", err)
-   }
-   master.ResolveUris(baseUrl)
-   return master, nil
-}
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
@@ -47,7 +36,7 @@ func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
 }
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchKey keyFetcher) error {
+func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
    targetUri, err := getHlsStreamUrl(playlist, streamId)
    if err != nil {
       return err
@@ -75,7 +64,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
       }
    }
    job := &downloadJob{
-      outputFileNameBase: strconv.Itoa(streamId),
+      outputFileNameBase: streamId,
       typeInfo:           typeInfo,
       allRequests:        allRequests,
       initSegmentData:    initData,
@@ -87,7 +76,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId int, fetchK
 }
 
 // getHlsStreamUrl finds the correct stream in an HLS playlist by its ID and returns its URI.
-func getHlsStreamUrl(playlist *hls.MasterPlaylist, streamId int) (*url.URL, error) {
+func getHlsStreamUrl(playlist *hls.MasterPlaylist, streamId string) (*url.URL, error) {
    for _, variant := range playlist.StreamInfs {
       if variant.Id == streamId {
          return variant.Uri, nil
@@ -98,7 +87,7 @@ func getHlsStreamUrl(playlist *hls.MasterPlaylist, streamId int) (*url.URL, erro
          return rendition.Uri, nil
       }
    }
-   return nil, fmt.Errorf("stream with ID not found: %d", streamId)
+   return nil, fmt.Errorf("stream with ID not found: %s", streamId)
 }
 
 // determineHlsType extracts the file extension directly from the segment URL.
