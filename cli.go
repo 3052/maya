@@ -86,89 +86,94 @@ func (c *Cache) Setup(dirName string) error {
    return nil
 }
 
+// Flag holds the metadata and state.
+// String flags populate Value. Bool flags only toggle Set to true.
 type Flag struct {
    Name   string
-   IsBool bool
-   IsSet  bool
-   Set    func(string) error
    Usage  string
+   IsBool bool
+   Value  string
+   Set    bool
 }
 
+// Int returns the value as an int.
+func (f *Flag) Int() (int, error) {
+   value, err := strconv.Atoi(f.Value)
+   if err != nil {
+      return 0, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+   }
+   return value, nil
+}
+
+// FlagSet holds a collection of defined flags.
 type FlagSet []*Flag
 
-func PrintFlags(groups []FlagSet) error {
-   for index, group := range groups {
-      if index > 0 {
-         fmt.Fprintln(os.Stderr)
-      }
-      for _, option := range group {
-         fmt.Fprintf(os.Stderr, "-%s%s\n", option.Name, option.Usage)
-      }
+func (fs *FlagSet) String(name string, usage string) *Flag {
+   f := &Flag{
+      Name:  name,
+      Usage: usage,
    }
-   return nil
+   *fs = append(*fs, f)
+   return f
 }
 
-func (fs *FlagSet) Parse() error {
-   for index := 1; index < len(os.Args); index++ {
-      arg := os.Args[index]
-      if len(arg) < 2 || arg[0] != '-' {
-         return fmt.Errorf("unexpected argument: %s", arg)
-      }
-      name := arg[1:]
-      idx := slices.IndexFunc(*fs, func(option *Flag) bool {
-         return option.Name == name
-      })
-      if idx == -1 {
-         return fmt.Errorf("provided but not defined: -%s", name)
-      }
-      option := (*fs)[idx]
-      if !option.IsBool {
-         index++
-         if index >= len(os.Args) {
-            return fmt.Errorf("flag needs an argument: -%s", name)
-         }
-         if err := option.Set(os.Args[index]); err != nil {
-            return fmt.Errorf("invalid value for flag -%s: %v", name, err)
-         }
-      }
-      option.IsSet = true
-   }
-   return nil
-}
-
-func (fs *FlagSet) Bool(name, usage string) *Flag {
-   option := &Flag{
+func (fs *FlagSet) Bool(name string, usage string) *Flag {
+   f := &Flag{
       Name:   name,
+      Usage:  usage,
       IsBool: true,
-      Usage:  "\n\t" + usage,
    }
-   *fs = append(*fs, option)
-   return option
+   *fs = append(*fs, f)
+   return f
 }
 
-func (fs *FlagSet) String(pointer *string, name, usage string) *Flag {
-   option := &Flag{
-      Name: name,
-      Set: func(value string) error {
-         *pointer = value
-         return nil
-      },
-      Usage: " string\n\t" + usage,
+// PrintFlags takes groups of flags and prints them formatted.
+func PrintFlags(groups []FlagSet) error {
+   for i, group := range groups {
+      if i > 0 {
+         fmt.Println()
+      }
+      for _, f := range group {
+         if f.IsBool {
+            fmt.Printf("-%s\n\t%s\n", f.Name, f.Usage)
+         } else {
+            fmt.Printf("-%s string\n\t%s\n", f.Name, f.Usage)
+         }
+      }
    }
-   *fs = append(*fs, option)
-   return option
+   return nil
 }
 
-func (fs *FlagSet) Int(pointer *int, name, usage string) *Flag {
-   option := &Flag{
-      Name: name,
-      Set: func(value string) error {
-         var err error
-         *pointer, err = strconv.Atoi(value)
-         return err
-      },
-      Usage: " int\n\t" + usage,
+// Parse loops through os.Args directly and returns an error if parsing fails.
+func (fs FlagSet) Parse() error {
+   for i := 1; i < len(os.Args); i++ {
+      arg := os.Args[i]
+
+      if len(arg) < 2 || arg[0] != '-' {
+         return fmt.Errorf("unexpected argument or invalid flag format: %s", arg)
+      }
+
+      parsedName := arg[1:]
+
+      j := slices.IndexFunc(fs, func(f *Flag) bool {
+         return f.Name == parsedName
+      })
+
+      if j == -1 {
+         return fmt.Errorf("flag provided but not defined: %s", arg)
+      }
+
+      f := fs[j]
+      f.Set = true
+
+      if !f.IsBool {
+         if i+1 < len(os.Args) {
+            f.Value = os.Args[i+1]
+            i++ // consume the value so it isn't processed as a flag in the next iteration
+         } else {
+            return fmt.Errorf("flag '-%s' requires a value", f.Name)
+         }
+      }
    }
-   *fs = append(*fs, option)
-   return option
+   return nil
 }
