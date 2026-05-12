@@ -98,11 +98,11 @@ type Flag struct {
 
 // Int returns the value as an int.
 func (f *Flag) Int() (int, error) {
-   value, err := strconv.Atoi(f.Value)
+   parsed, err := strconv.Atoi(f.Value)
    if err != nil {
-      return 0, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+      return 0, fmt.Errorf("invalid value %q for flag -%s: parse error", f.Value, f.Name)
    }
-   return value, nil
+   return parsed, nil
 }
 
 // FlagSet holds a collection of defined flags.
@@ -137,7 +137,7 @@ func PrintFlags(groups []FlagSet) error {
          if f.IsBool {
             fmt.Printf("-%s\n\t%s\n", f.Name, f.Usage)
          } else {
-            fmt.Printf("-%s string\n\t%s\n", f.Name, f.Usage)
+            fmt.Printf("-%s value\n\t%s\n", f.Name, f.Usage)
          }
       }
    }
