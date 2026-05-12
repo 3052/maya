@@ -5,6 +5,7 @@ import (
    "encoding/xml"
    "fmt"
    "log"
+   "net/url"
    "os"
    "path/filepath"
    "reflect"
@@ -87,41 +88,52 @@ func (c *Cache) Setup(dirName string) error {
 }
 
 // Flag holds the metadata and state.
-// String flags populate Value. Bool flags only toggle Set to true.
+// AddValue flags populate Value. Add flags only toggle Set to true.
 type Flag struct {
-   Name   string
-   Usage  string
-   IsBool bool
-   Value  string
-   Set    bool
+   Name     string
+   Usage    string
+   HasValue bool
+   Value    string
+   Set      bool
 }
 
 // Int returns the value as an int.
 func (f *Flag) Int() (int, error) {
-   value, err := strconv.Atoi(f.Value)
+   parsed, err := strconv.Atoi(f.Value)
    if err != nil {
       return 0, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
    }
-   return value, nil
+   return parsed, nil
+}
+
+// Url returns the value as a parsed *url.URL.
+func (f *Flag) Url() (*url.URL, error) {
+   parsed, err := url.Parse(f.Value)
+   if err != nil {
+      return nil, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+   }
+   return parsed, nil
 }
 
 // FlagSet holds a collection of defined flags.
 type FlagSet []*Flag
 
-func (fs *FlagSet) String(name string, usage string) *Flag {
+// AddValue registers a flag that requires a value.
+func (fs *FlagSet) AddValue(name string, usage string) *Flag {
    f := &Flag{
-      Name:  name,
-      Usage: usage,
+      Name:     name,
+      Usage:    usage,
+      HasValue: true,
    }
    *fs = append(*fs, f)
    return f
 }
 
-func (fs *FlagSet) Bool(name string, usage string) *Flag {
+// Add registers a boolean flag that acts as a switch.
+func (fs *FlagSet) Add(name string, usage string) *Flag {
    f := &Flag{
-      Name:   name,
-      Usage:  usage,
-      IsBool: true,
+      Name:  name,
+      Usage: usage,
    }
    *fs = append(*fs, f)
    return f
@@ -134,10 +146,10 @@ func PrintFlags(groups []FlagSet) error {
          fmt.Println()
       }
       for _, f := range group {
-         if f.IsBool {
-            fmt.Printf("-%s\n\t%s\n", f.Name, f.Usage)
+         if f.HasValue {
+            fmt.Printf("-%s value\n\t%s\n", f.Name, f.Usage)
          } else {
-            fmt.Printf("-%s string\n\t%s\n", f.Name, f.Usage)
+            fmt.Printf("-%s\n\t%s\n", f.Name, f.Usage)
          }
       }
    }
@@ -166,7 +178,7 @@ func (fs FlagSet) Parse() error {
       f := fs[j]
       f.Set = true
 
-      if !f.IsBool {
+      if f.HasValue {
          if i+1 < len(os.Args) {
             f.Value = os.Args[i+1]
             i++ // consume the value so it isn't processed as a flag in the next iteration
