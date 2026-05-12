@@ -5,11 +5,12 @@ import (
    "encoding/xml"
    "fmt"
    "log"
+   "net/url"
    "os"
    "path/filepath"
    "reflect"
-   "slices"
    "strconv"
+   "strings"
 )
 
 // Decode reads the XML from the cache directory and populates the structs.
@@ -87,61 +88,99 @@ func (c *Cache) Setup(dirName string) error {
 }
 
 // Flag holds the metadata and state.
-// String flags populate Value. Bool flags only toggle Set to true.
+// AddValue flags populate Value. Add flags only toggle Set to true.
 type Flag struct {
-   Name   string
-   Usage  string
-   IsBool bool
-   Value  string
-   Set    bool
+   Name     string
+   Usage    string
+   HasValue bool
+   Value    string
+   Set      bool
 }
 
-// Int returns the value as an int.
-func (f *Flag) Int() (int, error) {
-   value, err := strconv.Atoi(f.Value)
+// String returns the formatted help text for the flag.
+func (f *Flag) String() string {
+   if f.HasValue {
+      return fmt.Sprintf("-%s value\n\t%s", f.Name, f.Usage)
+   }
+   return fmt.Sprintf("-%s\n\t%s", f.Name, f.Usage)
+}
+
+// ParseInt parses the value as an int.
+func (f *Flag) ParseInt() (int, error) {
+   parsed, err := strconv.Atoi(f.Value)
    if err != nil {
       return 0, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
    }
-   return value, nil
+   return parsed, nil
 }
 
-// FlagSet holds a collection of defined flags.
-type FlagSet []*Flag
+// ParseUrl parses the value as a *url.URL.
+func (f *Flag) ParseUrl() (*url.URL, error) {
+   parsed, err := url.Parse(f.Value)
+   if err != nil {
+      return nil, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+   }
+   return parsed, nil
+}
 
-func (fs *FlagSet) String(name string, usage string) *Flag {
+// FlagSet holds groups of defined flags.
+type FlagSet [][]*Flag
+
+// AddGroup creates a new empty group. Subsequent flags will be appended here.
+func (fs *FlagSet) AddGroup() {
+   *fs = append(*fs, []*Flag{})
+}
+
+// AddValue registers a flag that requires a value.
+func (fs *FlagSet) AddValue(name string, usage string) *Flag {
+   f := &Flag{
+      Name:     name,
+      Usage:    usage,
+      HasValue: true,
+   }
+   last := len(*fs) - 1
+   (*fs)[last] = append((*fs)[last], f)
+   return f
+}
+
+// Add registers a boolean flag that acts as a switch.
+func (fs *FlagSet) Add(name string, usage string) *Flag {
    f := &Flag{
       Name:  name,
       Usage: usage,
    }
-   *fs = append(*fs, f)
+   last := len(*fs) - 1
+   (*fs)[last] = append((*fs)[last], f)
    return f
 }
 
-func (fs *FlagSet) Bool(name string, usage string) *Flag {
-   f := &Flag{
-      Name:   name,
-      Usage:  usage,
-      IsBool: true,
-   }
-   *fs = append(*fs, f)
-   return f
-}
-
-// PrintFlags takes groups of flags and prints them formatted.
-func PrintFlags(groups []FlagSet) error {
-   for i, group := range groups {
-      if i > 0 {
-         fmt.Println()
-      }
+// Lookup returns the Flag with the specified name, or nil if not found.
+func (fs FlagSet) Lookup(name string) *Flag {
+   for _, group := range fs {
       for _, f := range group {
-         if f.IsBool {
-            fmt.Printf("-%s\n\t%s\n", f.Name, f.Usage)
-         } else {
-            fmt.Printf("-%s string\n\t%s\n", f.Name, f.Usage)
+         if f.Name == name {
+            return f
          }
       }
    }
    return nil
+}
+
+// String returns the formatted help text for all flags, separated by groups.
+func (fs FlagSet) String() string {
+   data := &strings.Builder{}
+   for i, group := range fs {
+      if i > 0 {
+         fmt.Fprint(data, "\n\n")
+      }
+      for j, f := range group {
+         if j > 0 {
+            fmt.Fprintln(data)
+         }
+         fmt.Fprint(data, f)
+      }
+   }
+   return data.String()
 }
 
 // Parse loops through os.Args directly and returns an error if parsing fails.
@@ -154,24 +193,20 @@ func (fs FlagSet) Parse() error {
       }
 
       parsedName := arg[1:]
+      found := fs.Lookup(parsedName)
 
-      j := slices.IndexFunc(fs, func(f *Flag) bool {
-         return f.Name == parsedName
-      })
-
-      if j == -1 {
+      if found == nil {
          return fmt.Errorf("flag provided but not defined: %s", arg)
       }
 
-      f := fs[j]
-      f.Set = true
+      found.Set = true
 
-      if !f.IsBool {
+      if found.HasValue {
          if i+1 < len(os.Args) {
-            f.Value = os.Args[i+1]
+            found.Value = os.Args[i+1]
             i++ // consume the value so it isn't processed as a flag in the next iteration
          } else {
-            return fmt.Errorf("flag '-%s' requires a value", f.Name)
+            return fmt.Errorf("flag '-%s' requires a value", found.Name)
          }
       }
    }
