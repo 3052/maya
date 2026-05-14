@@ -132,24 +132,19 @@ func (f *Flag) ParseUrl() (*url.URL, error) {
 type FlagSet []*Flag
 
 // AddValue registers a flag that requires a value.
-func (fs *FlagSet) AddValue(name string, usage string) *Flag {
-   f := &Flag{
-      Name:     name,
-      Usage:    usage,
-      HasValue: true,
-   }
+func (fs *FlagSet) AddValue(f *Flag, name string, usage string) {
+   f.Name = name
+   f.Usage = usage
+   f.HasValue = true
    *fs = append(*fs, f)
-   return f
 }
 
 // Add registers a switch flag that does not take a value.
-func (fs *FlagSet) Add(name string, usage string) *Flag {
-   f := &Flag{
-      Name:  name,
-      Usage: usage,
-   }
+func (fs *FlagSet) Add(f *Flag, name string, usage string) {
+   f.Name = name
+   f.Usage = usage
+   f.HasValue = false
    *fs = append(*fs, f)
-   return f
 }
 
 // Lookup returns the Flag with the specified name, or nil if not found.
