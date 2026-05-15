@@ -53,12 +53,23 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
 
    allRequests := make([]segment, len(mediaPl.Segments))
    for index, hlsSeg := range mediaPl.Segments {
-      allRequests[index] = segment{url: hlsSeg.Uri}
+      allRequests[index] = segment{
+         url: hlsSeg.Uri,
+      }
    }
 
    var initData []byte
    if typeInfo.IsFmp4 && mediaPl.Map != nil {
-      initData, err = getBytes(mediaPl.Map, "")
+      resp, err := Get(mediaPl.Map, nil)
+      if err != nil {
+         return fmt.Errorf("failed to get HLS initialization segment: %w", err)
+      }
+      defer resp.Body.Close()
+
+      if resp.StatusCode != 200 {
+         return fmt.Errorf("failed to get HLS initialization segment: %s", resp.Status)
+      }
+      initData, err = io.ReadAll(resp.Body)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
       }

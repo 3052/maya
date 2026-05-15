@@ -42,10 +42,10 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
          endOffset := currentOffset - 1
 
          segments = append(segments, segment{
-            url:       baseUrl,
-            byteRange: dash.FormatRange(chunkStart, endOffset),
-            duration:  chunkDuration,
-            sizeBits:  (currentOffset - chunkStart) * 8,
+            url:      baseUrl,
+            headers:  map[string]string{"Range": "bytes=" + dash.FormatRange(chunkStart, endOffset)},
+            duration: chunkDuration,
+            sizeBits: (currentOffset - chunkStart) * 8,
          })
 
          chunkStart = currentOffset

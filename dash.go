@@ -5,6 +5,7 @@ import (
    "41.neocities.org/luna/dash"
    "errors"
    "fmt"
+   "io"
    "log"
    "slices"
 )
@@ -18,7 +19,17 @@ func getMiddleBitrate(rep *dash.Representation) error {
          return err
       }
 
-      sidxData, err := getBytes(baseUrl, rep.SegmentBase.IndexRange)
+      headers := map[string]string{"Range": "bytes=" + rep.SegmentBase.IndexRange}
+      resp, err := Get(baseUrl, headers)
+      if err != nil {
+         return err
+      }
+      defer resp.Body.Close()
+
+      if resp.StatusCode != 206 {
+         return errors.New(resp.Status)
+      }
+      sidxData, err := io.ReadAll(resp.Body)
       if err != nil {
          return err
       }
@@ -52,10 +63,21 @@ func getMiddleBitrate(rep *dash.Representation) error {
       return nil
    }
    mid := segs[len(segs)/2]
-   data, err := getBytes(mid.url, mid.byteRange)
+
+   resp, err := Get(mid.url, mid.headers)
    if err != nil {
       return err
    }
+   defer resp.Body.Close()
+
+   if resp.StatusCode != 200 && resp.StatusCode != 206 {
+      return errors.New(resp.Status)
+   }
+   data, err := io.ReadAll(resp.Body)
+   if err != nil {
+      return err
+   }
+
    sizeBits := uint64(len(data)) * 8
    if mid.duration <= 0 {
       return errors.New("invalid duration for bitrate calculation")
@@ -75,7 +97,16 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, err
       }
-      return getBytes(baseUrl, rep.SegmentBase.Initialization.Range)
+      headers := map[string]string{"Range": "bytes=" + rep.SegmentBase.Initialization.Range}
+      resp, err := Get(baseUrl, headers)
+      if err != nil {
+         return nil, err
+      }
+      defer resp.Body.Close()
+      if resp.StatusCode != 206 {
+         return nil, errors.New(resp.Status)
+      }
+      return io.ReadAll(resp.Body)
    }
    // Case 2: Initialization defined in SegmentTemplate
    if template := rep.GetSegmentTemplate(); template != nil && template.Initialization != "" {
@@ -83,7 +114,15 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, fmt.Errorf("failed to resolve DASH SegmentTemplate initialization URL: %w", err)
       }
-      return getBytes(initUrl, "")
+      resp, err := Get(initUrl, nil)
+      if err != nil {
+         return nil, err
+      }
+      defer resp.Body.Close()
+      if resp.StatusCode != 200 {
+         return nil, errors.New(resp.Status)
+      }
+      return io.ReadAll(resp.Body)
    }
    // Case 3: Initialization defined in SegmentList
    if sl := rep.SegmentList; sl != nil && sl.Initialization != nil {
@@ -91,7 +130,15 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
       if err != nil {
          return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
-      return getBytes(initUrl, "")
+      resp, err := Get(initUrl, nil)
+      if err != nil {
+         return nil, err
+      }
+      defer resp.Body.Close()
+      if resp.StatusCode != 200 {
+         return nil, errors.New(resp.Status)
+      }
+      return io.ReadAll(resp.Body)
    }
    return nil, nil
 }
@@ -116,7 +163,17 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       if err != nil {
          return err
       }
-      sidxData, err = getBytes(baseUrl, rep.SegmentBase.IndexRange)
+      headers := map[string]string{"Range": "bytes=" + rep.SegmentBase.IndexRange}
+      resp, err := Get(baseUrl, headers)
+      if err != nil {
+         return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
+      }
+      defer resp.Body.Close()
+
+      if resp.StatusCode != 206 {
+         return fmt.Errorf("failed to pre-fetch sidx data: %s", resp.Status)
+      }
+      sidxData, err = io.ReadAll(resp.Body)
       if err != nil {
          return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
       }

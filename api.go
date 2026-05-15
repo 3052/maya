@@ -7,7 +7,6 @@ import (
    "bytes"
    "errors"
    "io"
-   "log"
    "net/http"
    "net/url"
    "strings"
@@ -29,8 +28,6 @@ func SetProxy(proxiesCsv string) error {
          transport := &http.Transport{}
          transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
-
-         log.Println("proxy:", proxyStr)
       }
 
       http.DefaultTransport = prt
@@ -66,7 +63,6 @@ func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) 
       Header: reqHeader,
    }
 
-   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
 }
 
@@ -85,7 +81,6 @@ func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Res
       req.Body = io.NopCloser(bytes.NewReader(body))
    }
 
-   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
 }
 
@@ -100,30 +95,7 @@ func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error)
       Header: reqHeader,
    }
 
-   log.Println(req.Method, req.URL)
    return http.DefaultClient.Do(req)
-}
-
-// getBytes performs an HTTP GET request and returns its body.
-func getBytes(targetUrl *url.URL, byteRange string) ([]byte, error) {
-   req := http.Request{
-      URL:    targetUrl,
-      Header: make(http.Header),
-   }
-   if byteRange != "" {
-      req.Header.Set("Range", "bytes="+byteRange)
-   }
-
-   resp, err := http.DefaultClient.Do(&req)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-
-   if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-      return nil, errors.New(resp.Status)
-   }
-   return io.ReadAll(resp.Body)
 }
 
 type Manifest struct {

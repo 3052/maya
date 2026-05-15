@@ -157,7 +157,18 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       go func(id int) {
          defer wg.Done()
          for item := range workQueue {
-            data, err := getBytes(item.request.url, item.request.byteRange)
+            data, err := func() ([]byte, error) {
+               resp, reqErr := Get(item.request.url, item.request.headers)
+               if reqErr != nil {
+                  return nil, reqErr
+               }
+               defer resp.Body.Close()
+
+               if resp.StatusCode != 200 && resp.StatusCode != 206 {
+                  return nil, errors.New(resp.Status)
+               }
+               return io.ReadAll(resp.Body)
+            }()
             results <- result{index: item.index, workerId: id, data: data, err: err}
          }
       }(workerId)
