@@ -5,33 +5,22 @@ import (
    "41.neocities.org/luna/hls"
    "errors"
    "fmt"
-   "io"
    "net/url"
    "path"
    "slices"
-   "strings"
 )
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
 func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
-   resp, err := Get(mediaUrl, nil)
+   data, err := FetchData(mediaUrl, nil)
    if err != nil {
       return nil, err
    }
-   defer resp.Body.Close()
-   if resp.StatusCode != 200 {
-      return nil, errors.New(resp.Status)
-   }
-   var data strings.Builder
-   _, err = io.Copy(&data, resp.Body)
+   mediaPl, err := hls.DecodeMedia(string(data))
    if err != nil {
       return nil, err
    }
-   mediaPl, err := hls.DecodeMedia(data.String())
-   if err != nil {
-      return nil, err
-   }
-   mediaPl.ResolveUris(resp.Request.URL)
+   mediaPl.ResolveUris(mediaUrl)
    return mediaPl, nil
 }
 
@@ -60,16 +49,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
 
    var initData []byte
    if typeInfo.IsFmp4 && mediaPl.Map != nil {
-      resp, err := Get(mediaPl.Map, nil)
-      if err != nil {
-         return fmt.Errorf("failed to get HLS initialization segment: %w", err)
-      }
-      defer resp.Body.Close()
-
-      if resp.StatusCode != 200 {
-         return fmt.Errorf("failed to get HLS initialization segment: %s", resp.Status)
-      }
-      initData, err = io.ReadAll(resp.Body)
+      initData, err = FetchData(mediaPl.Map, nil)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
       }
