@@ -8,10 +8,33 @@ import (
    "io"
    "log"
    "os"
-   "strconv"
    "sync"
    "time"
 )
+
+type progressTracker struct {
+   total int
+   done  int
+   start time.Time
+   last  time.Time
+}
+
+func (t *progressTracker) record() {
+   t.done++
+   now := time.Now()
+
+   if now.Sub(t.last) >= time.Second || t.done == t.total {
+      left := t.total - t.done
+      elapsed := now.Sub(t.start)
+      var eta time.Duration
+      if t.done > 0 {
+         avg := elapsed / time.Duration(t.done)
+         eta = avg * time.Duration(left)
+      }
+      log.Printf("segments done: %d | left: %d | eta: %v", t.done, left, eta.Truncate(time.Second))
+      t.last = now
+   }
+}
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
 // remuxes, and writes data
@@ -26,7 +49,13 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
          sofia.Decrypt(data, sample, block)
       }
    }
-   prog := newProgress(totalSegments, threads)
+
+   tracker := progressTracker{
+      total: totalSegments,
+      start: time.Now(),
+      last:  time.Now(),
+   }
+
    pending := make(map[int]result)
    nextIndex := 0
    for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
@@ -52,7 +81,9 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
                return
             }
          }
-         prog.update(item.workerId)
+
+         tracker.record()
+
          delete(pending, nextIndex)
          nextIndex++
       }
@@ -66,15 +97,6 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
    doneChan <- nil
 }
 
-// progress tracks and logs the status of a multi-threaded download
-type progress struct {
-   total     int
-   processed int
-   counts    []int64
-   start     time.Time
-   lastLog   time.Time
-}
-
 // workItem is a request bundled with its index for out-of-order processing.
 type workItem struct {
    index   int
@@ -83,51 +105,9 @@ type workItem struct {
 
 // result is the outcome of a download attempt from a worker.
 type result struct {
-   index    int
-   workerId int
-   data     []byte
-   err      error
-}
-
-func (p *progress) update(workerId int) {
-   p.processed++
-   if workerId >= 0 && workerId < len(p.counts) {
-      p.counts[workerId]++
-   }
-
-   now := time.Now()
-   if now.Sub(p.lastLog) > time.Second {
-      segments_left := p.total - p.processed
-      elapsed := now.Sub(p.start)
-      var timeLeft time.Duration
-      if p.processed > 0 {
-         avg_per_seg := elapsed / time.Duration(p.processed)
-         timeLeft = avg_per_seg * time.Duration(segments_left)
-      }
-
-      var done []byte
-      for index, count := range p.counts {
-         if index > 0 {
-            done = append(done, ' ')
-         }
-         done = strconv.AppendInt(done, count, 10)
-      }
-
-      log.Printf(
-         "segments done %s | left %d | time left %v",
-         done, segments_left, timeLeft.Truncate(time.Second),
-      )
-      p.lastLog = now
-   }
-}
-
-func newProgress(total, threads int) *progress {
-   return &progress{
-      total:   total,
-      counts:  make([]int64, threads),
-      start:   time.Now(),
-      lastLog: time.Now(),
-   }
+   index int
+   data  []byte
+   err   error
 }
 
 // executeDownload runs the concurrent worker pool to download all segments.
@@ -154,24 +134,13 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
    var wg sync.WaitGroup
    wg.Add(threads)
    for workerId := 0; workerId < threads; workerId++ {
-      go func(id int) {
+      go func() {
          defer wg.Done()
          for item := range workQueue {
-            data, err := func() ([]byte, error) {
-               resp, reqErr := Get(item.request.url, item.request.headers)
-               if reqErr != nil {
-                  return nil, reqErr
-               }
-               defer resp.Body.Close()
-
-               if resp.StatusCode != 200 && resp.StatusCode != 206 {
-                  return nil, errors.New(resp.Status)
-               }
-               return io.ReadAll(resp.Body)
-            }()
-            results <- result{index: item.index, workerId: id, data: data, err: err}
+            data, err := fetchData(item.request.url, item.request.headers, false)
+            results <- result{index: item.index, data: data, err: err}
          }
-      }(workerId)
+      }()
    }
    doneChan := make(chan error, 1)
    go processAndWriteSegments(doneChan, results, len(requests), threads, key, remux, file)

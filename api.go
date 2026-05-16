@@ -7,10 +7,17 @@ import (
    "bytes"
    "errors"
    "io"
+   "log"
    "net/http"
    "net/url"
    "strings"
+   "sync"
    "sync/atomic"
+)
+
+var (
+   activeProxies  []string
+   logProxiesOnce sync.Once
 )
 
 // SetProxy overrides the global http.DefaultTransport with the proxy routing
@@ -28,6 +35,8 @@ func SetProxy(proxiesCsv string) error {
          transport := &http.Transport{}
          transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
+
+         activeProxies = append(activeProxies, proxyStr)
       }
 
       http.DefaultTransport = prt
@@ -51,29 +60,20 @@ type proxyRoundTripper struct {
    index      uint32
 }
 
-// Get performs an HTTP GET request by manually constructing the http.Request
-func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
+// doRequest is an internal helper to construct and execute requests with optional logging
+func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
+   logProxiesOnce.Do(func() {
+      for _, p := range activeProxies {
+         log.Println("proxy:", p)
+      }
+   })
+
    reqHeader := make(http.Header)
    for key, value := range headers {
       reqHeader.Set(key, value)
    }
    req := &http.Request{
-      Method: http.MethodGet,
-      URL:    targetUrl,
-      Header: reqHeader,
-   }
-
-   return http.DefaultClient.Do(req)
-}
-
-// Post performs an HTTP POST request by manually constructing the http.Request
-func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
-   reqHeader := make(http.Header)
-   for key, value := range headers {
-      reqHeader.Set(key, value)
-   }
-   req := &http.Request{
-      Method: http.MethodPost,
+      Method: method,
       URL:    targetUrl,
       Header: reqHeader,
    }
@@ -81,21 +81,38 @@ func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Res
       req.Body = io.NopCloser(bytes.NewReader(body))
    }
 
+   if logReq {
+      log.Println(req.Method, req.URL)
+   }
    return http.DefaultClient.Do(req)
 }
 
-func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
-   reqHeader := make(http.Header)
-   for key, value := range headers {
-      reqHeader.Set(key, value)
-   }
-   req := &http.Request{
-      Method: http.MethodHead,
-      URL:    targetUrl,
-      Header: reqHeader,
-   }
+// Get performs an HTTP GET request and logs it
+func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
+   return doRequest(http.MethodGet, targetUrl, headers, nil, true)
+}
 
-   return http.DefaultClient.Do(req)
+// Post performs an HTTP POST request and logs it
+func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
+   return doRequest(http.MethodPost, targetUrl, headers, body, true)
+}
+
+// Head performs an HTTP HEAD request and logs it
+func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
+   return doRequest(http.MethodHead, targetUrl, headers, nil, true)
+}
+
+func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
+   resp, err := doRequest(http.MethodGet, targetUrl, headers, nil, logReq)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+
+   if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+      return nil, errors.New(resp.Status)
+   }
+   return io.ReadAll(resp.Body)
 }
 
 type Manifest struct {
@@ -119,22 +136,12 @@ type Options struct {
 }
 
 func ListDash(baseUrl *url.URL) (*Manifest, error) {
-   resp, err := Get(baseUrl, nil)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return nil, errors.New(resp.Status)
-   }
-
-   body, err := io.ReadAll(resp.Body)
+   body, err := fetchData(baseUrl, nil, true)
    if err != nil {
       return nil, err
    }
 
-   finalUrl := resp.Request.URL
-   manifest, err := dash.Parse(body, finalUrl)
+   manifest, err := dash.Parse(body, baseUrl)
    if err != nil {
       return nil, err
    }
@@ -143,26 +150,16 @@ func ListDash(baseUrl *url.URL) (*Manifest, error) {
       return nil, err
    }
 
-   return &Manifest{Url: finalUrl, Body: body}, nil
+   return &Manifest{Url: baseUrl, Body: body}, nil
 }
 
 func ListHls(baseUrl *url.URL) (*Manifest, error) {
-   resp, err := Get(baseUrl, nil)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-   if resp.StatusCode != http.StatusOK {
-      return nil, errors.New(resp.Status)
-   }
-
-   body, err := io.ReadAll(resp.Body)
+   body, err := fetchData(baseUrl, nil, true)
    if err != nil {
       return nil, err
    }
 
-   finalUrl := resp.Request.URL
-   playlist, err := hls.DecodeMaster(string(body), finalUrl)
+   playlist, err := hls.DecodeMaster(string(body), baseUrl)
    if err != nil {
       return nil, err
    }
@@ -170,7 +167,7 @@ func ListHls(baseUrl *url.URL) (*Manifest, error) {
       return nil, err
    }
 
-   return &Manifest{Url: finalUrl, Body: body}, nil
+   return &Manifest{Url: baseUrl, Body: body}, nil
 }
 
 func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
