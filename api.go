@@ -11,36 +11,28 @@ import (
    "net/http"
    "net/url"
    "strings"
-   "sync"
    "sync/atomic"
-)
-
-var (
-   activeProxies  []string
-   logProxiesOnce sync.Once
 )
 
 // SetProxy overrides the global http.DefaultTransport with the proxy routing
 // logic
 func SetProxy(proxiesCsv string) error {
-   if proxiesCsv != "" {
-      prt := &proxyRoundTripper{}
+   prt := &proxyRoundTripper{}
 
-      for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-         parsedUrl, err := url.Parse(proxyStr)
-         if err != nil {
-            return err // Standard Go short-circuit on error
-         }
-
-         transport := &http.Transport{}
-         transport.Proxy = http.ProxyURL(parsedUrl)
-         prt.transports = append(prt.transports, transport)
-
-         activeProxies = append(activeProxies, proxyStr)
+   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+      parsedUrl, err := url.Parse(proxyStr)
+      if err != nil {
+         return err // Standard Go short-circuit on error
       }
 
-      http.DefaultTransport = prt
+      transport := &http.Transport{}
+      transport.Proxy = http.ProxyURL(parsedUrl)
+      prt.transports = append(prt.transports, transport)
+
+      log.Println("proxy:", proxyStr)
    }
+
+   http.DefaultTransport = prt
 
    return nil
 }
@@ -62,12 +54,6 @@ type proxyRoundTripper struct {
 
 // doRequest is an internal helper to construct and execute requests with optional logging
 func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
-   logProxiesOnce.Do(func() {
-      for _, p := range activeProxies {
-         log.Println("proxy:", p)
-      }
-   })
-
    reqHeader := make(http.Header)
    for key, value := range headers {
       reqHeader.Set(key, value)

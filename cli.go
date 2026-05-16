@@ -87,114 +87,105 @@ func (c *Cache) Setup(dirName string) error {
    return nil
 }
 
-// Flag holds the metadata and state.
-// AddValue flags populate Value. Add flags only toggle Set to true.
 type Flag struct {
-   Name     string
    Usage    string
    HasValue bool
-   Value    string
    Set      bool
+   Value    string
 }
 
-// String returns the formatted help text for the flag.
-// It safely handles nil flags by returning an empty string (useful for spacing).
 func (f *Flag) String() string {
    if f == nil {
       return ""
    }
+   var builder strings.Builder
+   builder.WriteString(f.Usage)
    if f.HasValue {
-      return fmt.Sprintf("-%s value\n\t%s", f.Name, f.Usage)
+      builder.WriteString(" (requires value)")
    }
-   return fmt.Sprintf("-%s\n\t%s", f.Name, f.Usage)
+   return builder.String()
 }
 
-// ParseInt parses the value as an int.
 func (f *Flag) ParseInt() (int, error) {
-   parsed, err := strconv.Atoi(f.Value)
+   result, err := strconv.Atoi(f.Value)
    if err != nil {
-      return 0, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+      return 0, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Usage, err)
    }
-   return parsed, nil
+   return result, nil
 }
 
-// ParseUrl parses the value as a *url.URL.
 func (f *Flag) ParseUrl() (*url.URL, error) {
-   parsed, err := url.Parse(f.Value)
+   result, err := url.Parse(f.Value)
    if err != nil {
-      return nil, fmt.Errorf("invalid value %q for flag -%s", f.Value, f.Name)
+      return nil, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Usage, err)
    }
-   return parsed, nil
+   return result, nil
 }
 
-// FlagSet is a flat collection of defined flags.
-// You can append nil to this slice to create visual line breaks in the output.
 type FlagSet []*Flag
 
-// AddValue registers a flag that requires a value.
-func (fs *FlagSet) AddValue(f *Flag, name string, usage string) {
-   f.Name = name
-   f.Usage = usage
-   f.HasValue = true
-   *fs = append(*fs, f)
-}
-
-// Add registers a switch flag that does not take a value.
-func (fs *FlagSet) Add(f *Flag, name string, usage string) {
-   f.Name = name
+func (fs *FlagSet) Add(f *Flag, usage string) {
    f.Usage = usage
    f.HasValue = false
    *fs = append(*fs, f)
 }
 
-// Lookup returns the Flag with the specified name, or nil if not found.
-func (fs FlagSet) Lookup(name string) *Flag {
+func (fs *FlagSet) AddValue(f *Flag, usage string) {
+   f.Usage = usage
+   f.HasValue = true
+   *fs = append(*fs, f)
+}
+
+// Lookup returns the Flag that matches the given key within its Usage string.
+// It returns an error if zero flags match, or if multiple flags match.
+func (fs FlagSet) Lookup(key string) (*Flag, error) {
+   var matched *Flag
+   var matchCount int
+
    for _, f := range fs {
-      if f != nil && f.Name == name {
-         return f
+      if strings.Contains(f.Usage, key) {
+         matched = f
+         matchCount++
       }
    }
-   return nil
-}
 
-// String returns the formatted help text for this specific set of flags.
-func (fs FlagSet) String() string {
-   data := &strings.Builder{}
-   for i, f := range fs {
-      if i > 0 {
-         fmt.Fprintln(data)
-      }
-      fmt.Fprint(data, f)
+   if matchCount == 0 {
+      return nil, fmt.Errorf("unknown flag: %s", key)
    }
-   return data.String()
+   if matchCount > 1 {
+      return nil, fmt.Errorf("ambiguous flag: %s matches multiple definitions", key)
+   }
+
+   return matched, nil
 }
 
-// Parse loops through os.Args directly and checks against the FlagSet.
 func (fs FlagSet) Parse() error {
    for i := 1; i < len(os.Args); i++ {
-      arg := os.Args[i]
+      key := os.Args[i]
 
-      if len(arg) < 2 || arg[0] != '-' {
-         return fmt.Errorf("unexpected argument or invalid flag format: %s", arg)
+      matched, err := fs.Lookup(key)
+      if err != nil {
+         return err
       }
 
-      parsedName := arg[1:]
-      found := fs.Lookup(parsedName)
+      matched.Set = true
 
-      if found == nil {
-         return fmt.Errorf("flag provided but not defined: %s", arg)
-      }
-
-      found.Set = true
-
-      if found.HasValue {
-         if i+1 < len(os.Args) {
-            found.Value = os.Args[i+1]
-            i++ // consume the value so it isn't processed as a flag in the next iteration
-         } else {
-            return fmt.Errorf("flag '-%s' requires a value", found.Name)
+      if matched.HasValue {
+         if i+1 >= len(os.Args) {
+            return fmt.Errorf("flag '%s' requires a value", key)
          }
+         i++
+         matched.Value = os.Args[i]
       }
    }
    return nil
+}
+
+func (fs FlagSet) String() string {
+   var builder strings.Builder
+   builder.WriteString("Usage (provide any unique substring to match a flag):")
+   for _, f := range fs {
+      fmt.Fprintf(&builder, "\n- %s", f)
+   }
+   return builder.String()
 }
