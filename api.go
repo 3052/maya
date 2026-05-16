@@ -11,13 +11,7 @@ import (
    "net/http"
    "net/url"
    "strings"
-   "sync"
    "sync/atomic"
-)
-
-var (
-   activeProxies  []string
-   logProxiesOnce sync.Once
 )
 
 // SetProxy overrides the global http.DefaultTransport with the proxy routing
@@ -36,7 +30,7 @@ func SetProxy(proxiesCsv string) error {
          transport.Proxy = http.ProxyURL(parsedUrl)
          prt.transports = append(prt.transports, transport)
 
-         activeProxies = append(activeProxies, proxyStr)
+         log.Println("proxy:", proxyStr)
       }
 
       http.DefaultTransport = prt
@@ -62,12 +56,6 @@ type proxyRoundTripper struct {
 
 // doRequest is an internal helper to construct and execute requests with optional logging
 func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
-   logProxiesOnce.Do(func() {
-      for _, p := range activeProxies {
-         log.Println("proxy:", p)
-      }
-   })
-
    reqHeader := make(http.Header)
    for key, value := range headers {
       reqHeader.Set(key, value)
