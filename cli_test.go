@@ -5,12 +5,23 @@ import (
    "testing"
 )
 
-func TestPrintFlagSetString(t *testing.T) {
-   var fs FlagSet
-   var fDebug, fFile Flag
+func TestFlagSet_String(t *testing.T) {
+   fmt.Println("--- Multiple Groups ---")
+   var fsMulti FlagSet
 
-   fs.Add(&fDebug, "enable debug mode")
-   fs.AddValue(&fFile, "set output file")
+   fsMulti.Add(1, "help-menu")
+   fsMulti.Add(1, "verbose-logging-output")
 
-   fmt.Println(fs.String())
+   fsMulti.AddValue(2, "database-username")
+   fsMulti.AddValue(2, "database-password")
+
+   fmt.Println(fsMulti.String())
+
+   fmt.Println("\n--- Single Group ---")
+   var fsSingle FlagSet
+
+   fsSingle.Add(1, "help-menu")
+   fsSingle.AddValue(1, "target-url")
+
+   fmt.Println(fsSingle.String())
 }

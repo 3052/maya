@@ -88,20 +88,19 @@ func (c *Cache) Setup(dirName string) error {
 }
 
 type Flag struct {
-   Usage    string
+   Group    int
+   Name     string
    HasValue bool
    Set      bool
    Value    string
 }
 
 func (f *Flag) String() string {
-   if f == nil {
-      return ""
-   }
    var builder strings.Builder
-   builder.WriteString(f.Usage)
+   builder.WriteByte('\t')
+   builder.WriteString(f.Name)
    if f.HasValue {
-      builder.WriteString(" (requires value)")
+      builder.WriteString(" value")
    }
    return builder.String()
 }
@@ -109,7 +108,7 @@ func (f *Flag) String() string {
 func (f *Flag) ParseInt() (int, error) {
    result, err := strconv.Atoi(f.Value)
    if err != nil {
-      return 0, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Usage, err)
+      return 0, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Name, err)
    }
    return result, nil
 }
@@ -117,33 +116,41 @@ func (f *Flag) ParseInt() (int, error) {
 func (f *Flag) ParseUrl() (*url.URL, error) {
    result, err := url.Parse(f.Value)
    if err != nil {
-      return nil, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Usage, err)
+      return nil, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Name, err)
    }
    return result, nil
 }
 
 type FlagSet []*Flag
 
-func (fs *FlagSet) Add(f *Flag, usage string) {
-   f.Usage = usage
-   f.HasValue = false
+func (fs *FlagSet) Add(group int, name string) *Flag {
+   f := &Flag{
+      Group:    group,
+      HasValue: false,
+      Name:     name,
+   }
    *fs = append(*fs, f)
+   return f
 }
 
-func (fs *FlagSet) AddValue(f *Flag, usage string) {
-   f.Usage = usage
-   f.HasValue = true
+func (fs *FlagSet) AddValue(group int, name string) *Flag {
+   f := &Flag{
+      Group:    group,
+      HasValue: true,
+      Name:     name,
+   }
    *fs = append(*fs, f)
+   return f
 }
 
-// Lookup returns the Flag that matches the given key within its Usage string.
+// Lookup returns the Flag that matches the given key within its Name string.
 // It returns an error if zero flags match, or if multiple flags match.
 func (fs FlagSet) Lookup(key string) (*Flag, error) {
    var matched *Flag
    var matchCount int
 
    for _, f := range fs {
-      if strings.Contains(f.Usage, key) {
+      if strings.Contains(f.Name, key) {
          matched = f
          matchCount++
       }
@@ -181,11 +188,35 @@ func (fs FlagSet) Parse() error {
    return nil
 }
 
+func (fs FlagSet) hasMultipleGroups() bool {
+   for i := 1; i < len(fs); i++ {
+      if fs[i].Group != fs[0].Group {
+         return true
+      }
+   }
+   return false
+}
+
 func (fs FlagSet) String() string {
    var builder strings.Builder
-   builder.WriteString("Usage (provide any unique substring to match a flag):")
+   builder.WriteString("Usage: provide any unique substring to match a flag")
+
+   multi := fs.hasMultipleGroups()
+   var currentGroup int
+   first := true
+
    for _, f := range fs {
-      fmt.Fprintf(&builder, "\n- %s", f)
+      if multi && (first || f.Group != currentGroup) {
+         if !first {
+            builder.WriteByte('\n')
+         }
+         fmt.Fprintf(&builder, "\nGroup %d:", f.Group)
+         currentGroup = f.Group
+      }
+      builder.WriteByte('\n')
+      fmt.Fprint(&builder, f)
+      first = false
    }
+
    return builder.String()
 }
