@@ -2,22 +2,41 @@ package myflag
 
 import (
    "fmt"
+   "net/url"
    "os"
    "reflect"
+   "strconv"
    "strings"
 )
 
 // Flag represents a single command-line flag.
 type Flag struct {
-   Name  string
+   Name  string // The canonical name of the flag
    Set   bool   // Determines if the flag was used
    Value string // The raw value passed after the flag (if value:"true" tag was used)
-   Group string // The group this flag belongs to
 }
 
-// Parse reads os.Args and populates the provided struct pointer.
+// ParseInt converts the flag's string value into an integer.
+func (f *Flag) ParseInt() (int, error) {
+   number, err := strconv.Atoi(f.Value)
+   if err != nil {
+      return 0, fmt.Errorf("invalid value %q for flag %s: %v", f.Value, f.Name, err)
+   }
+   return number, nil
+}
+
+// ParseUrl converts the flag's string value into a parsed URL.
+func (f *Flag) ParseUrl() (*url.URL, error) {
+   address, err := url.Parse(f.Value)
+   if err != nil {
+      return nil, fmt.Errorf("invalid value %q for flag %s: %v", f.Value, f.Name, err)
+   }
+   return address, nil
+}
+
+// ParseFlags reads os.Args and populates the provided struct pointer.
 // It automatically binds to any fields of type Flag, allowing partial string matches.
-func Parse(target any) error {
+func ParseFlags(target any) error {
    rv := reflect.ValueOf(target)
 
    // Ensure we were passed a pointer to a struct
@@ -26,7 +45,7 @@ func Parse(target any) error {
    }
 
    elem := rv.Elem()
-   t := elem.Type()
+   targetType := elem.Type()
 
    type flagInfo struct {
       index    int
@@ -38,8 +57,8 @@ func Parse(target any) error {
    flagType := reflect.TypeOf(Flag{})
 
    // 1. Inspect the struct and build our map of flags based on field names
-   for i := 0; i < t.NumField(); i++ {
-      field := t.Field(i)
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
 
       // Skip any fields that aren't exactly of type Flag
       if field.Type != flagType {
@@ -48,12 +67,9 @@ func Parse(target any) error {
 
       name := field.Name
       hasValue := field.Tag.Get("value") == "true"
-      group := field.Tag.Get("group")
 
-      // Auto-populate the Name and Group fields
-      fieldVal := elem.Field(i)
-      fieldVal.FieldByName("Name").SetString(name)
-      fieldVal.FieldByName("Group").SetString(group)
+      // Auto-populate the Name field so it's available for error messages
+      elem.Field(i).FieldByName("Name").SetString(name)
 
       registeredFlags[name] = flagInfo{
          index:    i,
@@ -66,26 +82,20 @@ func Parse(target any) error {
       argName := os.Args[i]
       var matchedName string
 
-      // First, check for an exact match
-      if _, exists := registeredFlags[argName]; exists {
-         matchedName = argName
-      } else {
-         // If no exact match, look for partial matches using strings.Contains
-         var matches []string
-         for regName := range registeredFlags {
-            if strings.Contains(regName, argName) {
-               matches = append(matches, regName)
-            }
+      var matches []string
+      for regName := range registeredFlags {
+         if strings.Contains(regName, argName) {
+            matches = append(matches, regName)
          }
-
-         if len(matches) == 0 {
-            return fmt.Errorf("unknown flag: %s", argName)
-         }
-         if len(matches) > 1 {
-            return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
-         }
-         matchedName = matches[0]
       }
+
+      if len(matches) == 0 {
+         return fmt.Errorf("unknown flag: %s", argName)
+      }
+      if len(matches) > 1 {
+         return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
+      }
+      matchedName = matches[0]
 
       fInfo := registeredFlags[matchedName]
       fieldVal := elem.Field(fInfo.index)
@@ -107,9 +117,9 @@ func Parse(target any) error {
    return nil
 }
 
-// Usage inspects the provided struct pointer and prints an auto-generated
+// FormatFlags inspects the provided struct pointer and prints an auto-generated
 // help menu to stdout, organized by group.
-func Usage(target any) error {
+func FormatFlags(target any) error {
    rv := reflect.ValueOf(target)
 
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
@@ -117,7 +127,7 @@ func Usage(target any) error {
    }
 
    elem := rv.Elem()
-   t := elem.Type()
+   targetType := elem.Type()
    flagType := reflect.TypeOf(Flag{})
 
    fmt.Printf("Usage: flags can be matched by any unique substring\n")
@@ -131,8 +141,8 @@ func Usage(target any) error {
    grouped := make(map[string][]displayFlag)
    var groupOrder []string // Preserves the order groups are discovered in the struct
 
-   for i := 0; i < t.NumField(); i++ {
-      field := t.Field(i)
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
 
       if field.Type != flagType {
          continue
