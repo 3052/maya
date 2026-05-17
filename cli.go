@@ -87,135 +87,177 @@ func (c *Cache) Setup(dirName string) error {
    return nil
 }
 
+// Flag represents a command-line flag with no value.
 type Flag struct {
-   Group    int
-   Name     string
-   HasValue bool
-   Set      bool
-   Value    string
+   Set bool // Determines if the flag was used
 }
 
-func (f *Flag) String() string {
-   var builder strings.Builder
-   builder.WriteByte('\t')
-   builder.WriteString(f.Name)
-   if f.HasValue {
-      builder.WriteString(" value")
+// StringFlag represents a command-line flag with a string value.
+type StringFlag struct {
+   Set   bool
+   Value string
+}
+
+// IntFlag represents a command-line flag with an integer value.
+type IntFlag struct {
+   Set   bool
+   Value int
+}
+
+// UrlFlag represents a command-line flag with a parsed URL value.
+type UrlFlag struct {
+   Set   bool
+   Value *url.URL
+}
+
+var (
+   typeFlag       = reflect.TypeOf(Flag{})
+   typeStringFlag = reflect.TypeOf(StringFlag{})
+   typeIntFlag    = reflect.TypeOf(IntFlag{})
+   typeUrlFlag    = reflect.TypeOf(UrlFlag{})
+)
+
+// ParseFlags reads os.Args and populates the provided struct pointer.
+// It automatically binds to any fields of the supported flag types, allowing partial string matches.
+func ParseFlags(target any) error {
+   rv := reflect.ValueOf(target)
+
+   // Ensure we were passed a pointer to a struct
+   if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
+      return fmt.Errorf("expected a pointer to a struct")
    }
-   return builder.String()
-}
 
-func (f *Flag) ParseInt() (int, error) {
-   result, err := strconv.Atoi(f.Value)
-   if err != nil {
-      return 0, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Name, err)
+   elem := rv.Elem()
+   targetType := elem.Type()
+
+   type flagInfo struct {
+      index    int
+      hasValue bool
+      fType    reflect.Type
    }
-   return result, nil
-}
 
-func (f *Flag) ParseUrl() (*url.URL, error) {
-   result, err := url.Parse(f.Value)
-   if err != nil {
-      return nil, fmt.Errorf("invalid value %q for flag %q: %v", f.Value, f.Name, err)
-   }
-   return result, nil
-}
+   // Map flag name to its index, value requirement, and exact type
+   registeredFlags := make(map[string]flagInfo)
 
-type FlagSet []*Flag
+   // 1. Inspect the struct and build our map of flags based on field names
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
 
-func (fs *FlagSet) Add(name string, hasValue bool) *Flag {
-   f := &Flag{
-      Name:     name,
-      HasValue: hasValue,
-   }
-   *fs = append(*fs, f)
-   return f
-}
+      isFlag := field.Type == typeFlag || field.Type == typeStringFlag ||
+         field.Type == typeIntFlag || field.Type == typeUrlFlag
 
-func (fs *FlagSet) AddGroup(name string, hasValue bool, group int) *Flag {
-   f := &Flag{
-      Group:    group,
-      Name:     name,
-      HasValue: hasValue,
-   }
-   *fs = append(*fs, f)
-   return f
-}
+      if !isFlag {
+         continue
+      }
 
-// Lookup returns the Flag that matches the given key within its Name string.
-// It returns an error if zero flags match, or if multiple flags match.
-func (fs FlagSet) Lookup(key string) (*Flag, error) {
-   var matched *Flag
-   var matchCount int
+      name := field.Name
+      // If it's not the base Flag (boolean), it intrinsically needs a value
+      hasValue := field.Type != typeFlag
 
-   for _, f := range fs {
-      if strings.Contains(f.Name, key) {
-         matched = f
-         matchCount++
+      registeredFlags[name] = flagInfo{
+         index:    i,
+         hasValue: hasValue,
+         fType:    field.Type,
       }
    }
 
-   if matchCount == 0 {
-      return nil, fmt.Errorf("unknown flag: %s", key)
-   }
-   if matchCount > 1 {
-      return nil, fmt.Errorf("ambiguous flag: %s matches multiple definitions", key)
-   }
-
-   return matched, nil
-}
-
-func (fs FlagSet) Parse() error {
+   // 2. Parse os.Args
    for i := 1; i < len(os.Args); i++ {
-      key := os.Args[i]
+      argName := os.Args[i]
+      var matchedName string
 
-      matched, err := fs.Lookup(key)
-      if err != nil {
-         return err
+      var matches []string
+      for regName := range registeredFlags {
+         if strings.Contains(regName, argName) {
+            matches = append(matches, regName)
+         }
       }
 
-      matched.Set = true
+      if len(matches) == 0 {
+         return fmt.Errorf("unknown flag: %s", argName)
+      }
+      if len(matches) > 1 {
+         return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
+      }
+      matchedName = matches[0]
 
-      if matched.HasValue {
-         if i+1 >= len(os.Args) {
-            return fmt.Errorf("flag '%s' requires a value", key)
+      fInfo := registeredFlags[matchedName]
+      fieldVal := elem.Field(fInfo.index)
+
+      // Mark the flag as used
+      fieldVal.FieldByName("Set").SetBool(true)
+
+      // If this flag requires a value, grab the next argument and parse it
+      if fInfo.hasValue {
+         if i+1 < len(os.Args) {
+            i++ // move to the next arg
+            valStr := os.Args[i]
+
+            switch fInfo.fType {
+            case typeStringFlag:
+               fieldVal.FieldByName("Value").SetString(valStr)
+            case typeIntFlag:
+               number, err := strconv.Atoi(valStr)
+               if err != nil {
+                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedName, err)
+               }
+               fieldVal.FieldByName("Value").SetInt(int64(number))
+            case typeUrlFlag:
+               address, err := url.Parse(valStr)
+               if err != nil {
+                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedName, err)
+               }
+               fieldVal.FieldByName("Value").Set(reflect.ValueOf(address))
+            }
+         } else {
+            return fmt.Errorf("flag %s requires a value", matchedName)
          }
-         i++
-         matched.Value = os.Args[i]
       }
    }
+
    return nil
 }
 
-func (fs FlagSet) hasMultipleGroups() bool {
-   for i := 1; i < len(fs); i++ {
-      if fs[i].Group != fs[0].Group {
-         return true
-      }
-   }
-   return false
-}
+// FormatFlags inspects the provided struct pointer and prints an auto-generated
+// help menu to stdout, relying on the struct's field order for grouping.
+func FormatFlags(target any) error {
+   rv := reflect.ValueOf(target)
 
-func (fs FlagSet) String() string {
-   var builder strings.Builder
-   builder.WriteString("Usage: provide any unique substring to match a flag")
-
-   multi := fs.hasMultipleGroups()
-   var currentGroup int
-   first := true
-
-   for _, f := range fs {
-      if multi && (first || f.Group != currentGroup) {
-         if !first {
-            builder.WriteByte('\n')
-         }
-         fmt.Fprintf(&builder, "\nGroup %d:", f.Group)
-         currentGroup = f.Group
-      }
-      builder.WriteByte('\n')
-      fmt.Fprint(&builder, f)
-      first = false
+   if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
+      return fmt.Errorf("expected a pointer to a struct")
    }
 
-   return builder.String()
+   targetType := rv.Elem().Type()
+
+   fmt.Printf("Usage: flags can be matched by any unique substring\n")
+
+   var currentGroup string
+
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
+
+      isFlag := field.Type == typeFlag || field.Type == typeStringFlag ||
+         field.Type == typeIntFlag || field.Type == typeUrlFlag
+
+      if !isFlag {
+         continue
+      }
+
+      group := field.Tag.Get("group")
+
+      // If the group changed and isn't empty, print the new group header
+      if group != "" && group != currentGroup {
+         currentGroup = group
+         fmt.Printf("\n%s:\n", group)
+      }
+
+      // Determine formatting based on whether it needs a value
+      if field.Type == typeFlag {
+         fmt.Printf("\t%s\n", field.Name)
+      } else {
+         fmt.Printf("\t%s value\n", field.Name)
+      }
+   }
+
+   return nil
 }
