@@ -4,19 +4,19 @@ import (
    "fmt"
    "os"
    "reflect"
+   "strings"
 )
 
 // Flag represents a single command-line flag.
 type Flag struct {
-   Name     string
-   HasValue bool   // Determines if the flag expects an accompanying value
-   Set      bool   // Determines if the flag was used
-   Value    string // The raw value passed after the flag (if HasValue is true)
-   Group    string // The group this flag belongs to
+   Name  string
+   Set   bool   // Determines if the flag was used
+   Value string // The raw value passed after the flag (if value:"true" tag was used)
+   Group string // The group this flag belongs to
 }
 
 // Parse reads os.Args and populates the provided struct pointer.
-// It automatically binds to any fields of type Flag using the exact field name.
+// It automatically binds to any fields of type Flag, allowing partial string matches.
 func Parse(target any) error {
    rv := reflect.ValueOf(target)
 
@@ -28,8 +28,13 @@ func Parse(target any) error {
    elem := rv.Elem()
    t := elem.Type()
 
-   // Map flag name to its field index in the struct
-   registeredFlags := make(map[string]int)
+   type flagInfo struct {
+      index    int
+      hasValue bool
+   }
+
+   // Map flag name to its index and value requirement
+   registeredFlags := make(map[string]flagInfo)
    flagType := reflect.TypeOf(Flag{})
 
    // 1. Inspect the struct and build our map of flags based on field names
@@ -42,39 +47,59 @@ func Parse(target any) error {
       }
 
       name := field.Name
-      hasValue := field.Tag.Get("flag") == "value"
+      hasValue := field.Tag.Get("value") == "true"
       group := field.Tag.Get("group")
 
-      // Auto-populate the Name, HasValue, and Group fields
+      // Auto-populate the Name and Group fields
       fieldVal := elem.Field(i)
       fieldVal.FieldByName("Name").SetString(name)
-      fieldVal.FieldByName("HasValue").SetBool(hasValue)
       fieldVal.FieldByName("Group").SetString(group)
 
-      registeredFlags[name] = i
+      registeredFlags[name] = flagInfo{
+         index:    i,
+         hasValue: hasValue,
+      }
    }
 
    // 2. Parse os.Args
    for i := 1; i < len(os.Args); i++ {
-      name := os.Args[i]
+      argName := os.Args[i]
+      var matchedName string
 
-      fieldIndex, exists := registeredFlags[name]
-      if !exists {
-         return fmt.Errorf("unknown flag: %s", name)
+      // First, check for an exact match
+      if _, exists := registeredFlags[argName]; exists {
+         matchedName = argName
+      } else {
+         // If no exact match, look for partial matches using strings.Contains
+         var matches []string
+         for regName := range registeredFlags {
+            if strings.Contains(regName, argName) {
+               matches = append(matches, regName)
+            }
+         }
+
+         if len(matches) == 0 {
+            return fmt.Errorf("unknown flag: %s", argName)
+         }
+         if len(matches) > 1 {
+            return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
+         }
+         matchedName = matches[0]
       }
 
-      fieldVal := elem.Field(fieldIndex)
+      fInfo := registeredFlags[matchedName]
+      fieldVal := elem.Field(fInfo.index)
 
       // Mark the flag as used
       fieldVal.FieldByName("Set").SetBool(true)
 
       // If this flag requires a value, grab the next argument
-      if fieldVal.FieldByName("HasValue").Bool() {
+      if fInfo.hasValue {
          if i+1 < len(os.Args) {
             i++ // move to the next arg
             fieldVal.FieldByName("Value").SetString(os.Args[i])
          } else {
-            return fmt.Errorf("flag %s requires a value", name)
+            return fmt.Errorf("flag %s requires a value", matchedName)
          }
       }
    }
@@ -83,20 +108,19 @@ func Parse(target any) error {
 }
 
 // Usage inspects the provided struct pointer and prints an auto-generated
-// help menu to stderr, organized by group.
-func Usage(target any) {
+// help menu to stdout, organized by group.
+func Usage(target any) error {
    rv := reflect.ValueOf(target)
 
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
-      return
+      return fmt.Errorf("expected a pointer to a struct")
    }
 
    elem := rv.Elem()
    t := elem.Type()
    flagType := reflect.TypeOf(Flag{})
 
-   progName := os.Args[0]
-   fmt.Fprintf(os.Stderr, "Usage of %s:\n", progName)
+   fmt.Printf("Usage: flags can be matched by any unique substring\n")
 
    type displayFlag struct {
       name     string
@@ -105,7 +129,7 @@ func Usage(target any) {
 
    var ungrouped []displayFlag
    grouped := make(map[string][]displayFlag)
-   var groupOrder []string
+   var groupOrder []string // Preserves the order groups are discovered in the struct
 
    for i := 0; i < t.NumField(); i++ {
       field := t.Field(i)
@@ -115,16 +139,18 @@ func Usage(target any) {
       }
 
       group := field.Tag.Get("group")
+      hasValue := field.Tag.Get("value") == "true"
+
       df := displayFlag{
          name:     field.Name,
-         hasValue: field.Tag.Get("flag") == "value",
+         hasValue: hasValue,
       }
 
       if group == "" {
          ungrouped = append(ungrouped, df)
       } else {
          if _, exists := grouped[group]; !exists {
-            groupOrder = append(groupOrder, group) // Keep insertion order for headers
+            groupOrder = append(groupOrder, group)
          }
          grouped[group] = append(grouped[group], df)
       }
@@ -133,21 +159,23 @@ func Usage(target any) {
    // Print ungrouped flags first
    for _, f := range ungrouped {
       if f.hasValue {
-         fmt.Fprintf(os.Stderr, "  %s value\n", f.name)
+         fmt.Printf("\t%s value\n", f.name)
       } else {
-         fmt.Fprintf(os.Stderr, "  %s\n", f.name)
+         fmt.Printf("\t%s\n", f.name)
       }
    }
 
-   // Print grouped flags with headers
-   for _, g := range groupOrder {
-      fmt.Fprintf(os.Stderr, "\n%s:\n", g)
-      for _, f := range grouped[g] {
+   // Print grouped flags with headers (in the order they appeared in the struct)
+   for _, group := range groupOrder {
+      fmt.Printf("\n%s:\n", group)
+      for _, f := range grouped[group] {
          if f.hasValue {
-            fmt.Fprintf(os.Stderr, "  %s value\n", f.name)
+            fmt.Printf("\t%s value\n", f.name)
          } else {
-            fmt.Fprintf(os.Stderr, "  %s\n", f.name)
+            fmt.Printf("\t%s\n", f.name)
          }
       }
    }
+
+   return nil
 }

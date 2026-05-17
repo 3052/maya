@@ -10,51 +10,61 @@ func TestParse(t *testing.T) {
    defer func() { os.Args = originalArgs }()
 
    type Config struct {
-      Verbose Flag
-      Name    Flag `flag:"value" group:"User"`
-      Port    Flag `flag:"value" group:"Server"`
-      Ignored string
+      VerboseOutput Flag
+      HelloWorld    Flag `value:"true" group:"User"`
+      ServerPort    Flag `value:"true" group:"Server"`
    }
 
-   // 1. Valid flags
-   os.Args = []string{"app", "Verbose", "Name", "John", "Port", "8080"}
+   // 1. Valid flags using partial matches
+   // "Verbose"   -> matches "VerboseOutput"
+   // "World"     -> matches "HelloWorld"
+   // "ServerPort"-> exact match (bypasses ambiguity checks)
+   os.Args = []string{"app", "Verbose", "World", "John", "ServerPort", "8080"}
    var cfg Config
 
    if err := Parse(&cfg); err != nil {
       t.Fatalf("expected successful parse, got err: %v", err)
    }
 
-   if !cfg.Verbose.Set || !cfg.Name.Set || cfg.Name.Value != "John" || cfg.Port.Value != "8080" {
+   if !cfg.VerboseOutput.Set || !cfg.HelloWorld.Set || cfg.HelloWorld.Value != "John" || cfg.ServerPort.Value != "8080" {
       t.Fatalf("parse state incorrect: %+v", cfg)
    }
 
-   // Assert that groups were populated
-   if cfg.Name.Group != "User" || cfg.Port.Group != "Server" {
-      t.Fatalf("groups parsed incorrectly. Name group: %s, Port group: %s", cfg.Name.Group, cfg.Port.Group)
+   // Assert that groups were populated directly as strings
+   if cfg.HelloWorld.Group != "User" || cfg.ServerPort.Group != "Server" {
+      t.Fatalf("groups parsed incorrectly. HelloWorld group: %s, ServerPort group: %s", cfg.HelloWorld.Group, cfg.ServerPort.Group)
    }
 }
 
-func TestUsage(t *testing.T) {
-   originalArgs := os.Args
-   defer func() { os.Args = originalArgs }()
-
+func TestUsage_NoGroups(t *testing.T) {
    type Config struct {
-      Verbose Flag
-      Name    Flag `flag:"value" group:"User Options"`
-      Age     Flag `flag:"value" group:"User Options"`
-      Host    Flag `flag:"value" group:"Server Settings"`
-      Port    Flag `flag:"value" group:"Server Settings"`
+      VerboseOutput Flag
+      HelloWorld    Flag `value:"true"`
+      ServerPort    Flag `value:"true"`
    }
 
-   // Mock the program name for the usage output
-   os.Args = []string{"my_awesome_app"}
    var cfg Config
 
-   // Output a newline to make the console output cleaner during go test
-   os.Stderr.WriteString("\n--- USAGE OUTPUT ---\n")
+   os.Stdout.WriteString("\n--- USAGE OUTPUT (NO GROUPS) ---\n")
+   if err := Usage(&cfg); err != nil {
+      t.Fatalf("expected no error from Usage, got: %v", err)
+   }
+   os.Stdout.WriteString("--------------------------------\n\n")
+}
 
-   // This will print directly to the console (os.Stderr)
-   Usage(&cfg)
+func TestUsage_AllGroups(t *testing.T) {
+   type Config struct {
+      HelloWorld  Flag `value:"true" group:"User Options"`
+      HelloPlanet Flag `value:"true" group:"User Options"`
+      ServerHost  Flag `value:"true" group:"Server Settings"`
+      ServerPort  Flag `value:"true" group:"Server Settings"`
+   }
 
-   os.Stderr.WriteString("--------------------\n\n")
+   var cfg Config
+
+   os.Stdout.WriteString("\n--- USAGE OUTPUT (ALL GROUPS) ---\n")
+   if err := Usage(&cfg); err != nil {
+      t.Fatalf("expected no error from Usage, got: %v", err)
+   }
+   os.Stdout.WriteString("---------------------------------\n\n")
 }
