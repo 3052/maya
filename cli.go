@@ -5,7 +5,6 @@ import (
    "encoding/xml"
    "fmt"
    "log"
-   "net/url"
    "os"
    "path/filepath"
    "reflect"
@@ -90,48 +89,25 @@ func (c *Cache) Setup(dirName string) error {
 // FlagSpace is a zero-byte struct used to create visual breaks in the FormatFlags output.
 type FlagSpace struct{}
 
-// Flag represents a command-line flag with no value.
-type Flag struct {
-   Set bool // Determines if the flag was used
-}
-
-// StringFlag represents a command-line flag with a string value.
-type StringFlag struct {
+// Flag represents a command-line flag. T determines the expected value type.
+type Flag[T bool | string | int] struct {
    Set   bool
-   Value string
+   Value T
 }
 
-// IntFlag represents a command-line flag with an integer value.
-type IntFlag struct {
-   Set   bool
-   Value int
-}
-
-// UrlFlag represents a command-line flag with a parsed URL value.
-type UrlFlag struct {
-   Set   bool
-   Value *url.URL
-}
-
-var (
-   typeFlagSpace  = reflect.TypeOf(FlagSpace{})
-   typeFlag       = reflect.TypeOf(Flag{})
-   typeStringFlag = reflect.TypeOf(StringFlag{})
-   typeIntFlag    = reflect.TypeOf(IntFlag{})
-   typeUrlFlag    = reflect.TypeOf(UrlFlag{})
-)
-
-// isFlagType checks if the given type is one of our supported flag structs.
+// isFlagType checks if the given type is a Flag[T] by inspecting its structure.
 func isFlagType(t reflect.Type) bool {
-   return t == typeFlag || t == typeStringFlag || t == typeIntFlag || t == typeUrlFlag
+   return t.Kind() == reflect.Struct &&
+      t.NumField() == 2 &&
+      t.Field(0).Name == "Set" &&
+      t.Field(1).Name == "Value"
 }
 
-// ParseFlags reads os.Args and populates the provided struct pointer.
-// It automatically binds to any fields of the supported flag types, allowing partial string matches.
-func ParseFlags(target any) error {
+// ParseFlags reads the provided args and populates the struct pointer.
+// It automatically binds to any fields of type Flag[T], allowing partial string matches.
+func ParseFlags(target any, args []string) error {
    rv := reflect.ValueOf(target)
 
-   // Ensure we were passed a pointer to a struct
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
       return fmt.Errorf("expected a pointer to a struct")
    }
@@ -139,9 +115,8 @@ func ParseFlags(target any) error {
    elem := rv.Elem()
    targetType := elem.Type()
 
-   // Parse os.Args
-   for i := 1; i < len(os.Args); i++ {
-      argName := os.Args[i]
+   for i := 0; i < len(args); i++ {
+      argName := args[i]
 
       var matchedIndex int
       var matches []string
@@ -173,26 +148,24 @@ func ParseFlags(target any) error {
       // Mark the flag as used
       fieldVal.FieldByName("Set").SetBool(true)
 
-      // If it's not the base Flag (boolean), it needs a value parsed
-      if matchedField.Type != typeFlag {
-         if i+1 < len(os.Args) {
-            valStr := os.Args[i+1]
+      valueField := fieldVal.FieldByName("Value")
+      valueType := valueField.Type()
 
-            switch matchedField.Type {
-            case typeStringFlag:
-               fieldVal.FieldByName("Value").SetString(valStr)
-            case typeIntFlag:
+      // If it's a bool flag, it doesn't need an accompanying CLI value
+      if valueType.Kind() == reflect.Bool {
+         valueField.SetBool(true)
+      } else {
+         if i+1 < len(args) {
+            valStr := args[i+1]
+
+            if valueType.Kind() == reflect.String {
+               valueField.SetString(valStr)
+            } else if valueType.Kind() == reflect.Int {
                number, err := strconv.Atoi(valStr)
                if err != nil {
                   return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedField.Name, err)
                }
-               fieldVal.FieldByName("Value").SetInt(int64(number))
-            case typeUrlFlag:
-               address, err := url.Parse(valStr)
-               if err != nil {
-                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedField.Name, err)
-               }
-               fieldVal.FieldByName("Value").Set(reflect.ValueOf(address))
+               valueField.SetInt(int64(number))
             }
 
             i++ // skip the value argument in the main loop
@@ -206,8 +179,8 @@ func ParseFlags(target any) error {
 }
 
 // FormatFlags inspects the provided struct pointer and prints an auto-generated
-// help menu to stdout, utilizing FlagSpace fields for visual grouping.
-func FormatFlags(target any) error {
+// human-readable help menu to stdout. Examples are optional.
+func FormatFlags(target any, examples ...string) error {
    rv := reflect.ValueOf(target)
 
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
@@ -215,13 +188,14 @@ func FormatFlags(target any) error {
    }
 
    targetType := rv.Elem().Type()
+   typeFlagSpace := reflect.TypeOf(FlagSpace{})
 
-   fmt.Printf("Usage: flags can be matched by any unique substring\n\n")
+   fmt.Printf("Overview: flags can be matched by any unique substring\n\n")
+   fmt.Println("Index:")
 
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
 
-      // If we hit a space field, print a blank line
       if field.Type == typeFlagSpace {
          fmt.Println()
          continue
@@ -231,11 +205,19 @@ func FormatFlags(target any) error {
          continue
       }
 
-      // Determine formatting based on whether it needs a value
-      if field.Type == typeFlag {
+      valueType := field.Type.Field(1).Type
+
+      if valueType.Kind() == reflect.Bool {
          fmt.Printf("\t%s\n", field.Name)
       } else {
-         fmt.Printf("\t%s value\n", field.Name)
+         fmt.Printf("\t%s %s\n", field.Name, valueType)
+      }
+   }
+
+   if len(examples) > 0 {
+      fmt.Printf("\nExamples:\n")
+      for _, example := range examples {
+         fmt.Printf("\t%s\n", example)
       }
    }
 
