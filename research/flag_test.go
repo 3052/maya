@@ -7,23 +7,19 @@ import (
 )
 
 func TestParseFlags(t *testing.T) {
-   originalArgs := os.Args
-   defer func() { os.Args = originalArgs }()
-
    type Config struct {
-      VerboseOutput Flag
+      VerboseOutput Flag[bool]
       _             FlagSpace
-      HelloWorld    StringFlag
+      HelloWorld    Flag[string]
       _             FlagSpace
-      ServerPort    IntFlag
-      ApiEndpoint   UrlFlag
+      ServerPort    Flag[int]
    }
 
    // 1. Valid flags using partial matches
-   os.Args = []string{"app", "Verbose", "World", "John", "ServerPort", "8080", "ApiEndpoint", "https://api.example.com/v1"}
+   args := []string{"Verbose", "World", "John", "ServerPort", "8080"}
    var cfg Config
 
-   if err := ParseFlags(&cfg); err != nil {
+   if err := ParseFlags(&cfg, args); err != nil {
       t.Fatalf("expected successful parse, got err: %v", err)
    }
 
@@ -34,24 +30,17 @@ func TestParseFlags(t *testing.T) {
    if cfg.ServerPort.Value != 8080 {
       t.Fatalf("ParseInt failed: got %d", cfg.ServerPort.Value)
    }
-
-   if cfg.ApiEndpoint.Value.Scheme != "https" || cfg.ApiEndpoint.Value.Host != "api.example.com" {
-      t.Fatalf("ParseUrl failed: got %+v", cfg.ApiEndpoint.Value)
-   }
 }
 
 func TestParseFlags_IntError(t *testing.T) {
-   originalArgs := os.Args
-   defer func() { os.Args = originalArgs }()
-
    type Config struct {
-      ServerPort IntFlag
+      ServerPort Flag[int]
    }
 
-   os.Args = []string{"app", "ServerPort", "not_a_number"}
+   args := []string{"ServerPort", "not_a_number"}
    var cfg Config
 
-   err := ParseFlags(&cfg)
+   err := ParseFlags(&cfg, args)
    if err == nil {
       t.Fatalf("expected ParseFlags to fail for invalid int, got nil")
    }
@@ -61,35 +50,13 @@ func TestParseFlags_IntError(t *testing.T) {
    }
 }
 
-func TestParseFlags_UrlError(t *testing.T) {
-   originalArgs := os.Args
-   defer func() { os.Args = originalArgs }()
-
-   type Config struct {
-      ApiUrl UrlFlag
-   }
-
-   // Control characters force url.Parse to fail
-   os.Args = []string{"app", "ApiUrl", "http://example.com/api\x00"}
-   var cfg Config
-
-   err := ParseFlags(&cfg)
-   if err == nil {
-      t.Fatalf("expected ParseFlags to fail for invalid url, got nil")
-   }
-
-   if !strings.Contains(err.Error(), `invalid value "http://example.com/api\x00" for flag ApiUrl`) {
-      t.Fatalf("unexpected ParseUrl error format: %v", err)
-   }
-}
-
 func TestFormatFlags_WithExamples(t *testing.T) {
    type Config struct {
-      HelloWorld  StringFlag
-      HelloPlanet Flag
+      HelloWorld  Flag[string]
+      HelloPlanet Flag[bool]
       _           FlagSpace
-      ServerHost  StringFlag
-      ServerPort  IntFlag
+      ServerHost  Flag[string]
+      ServerPort  Flag[int]
    }
 
    var cfg Config
@@ -107,8 +74,8 @@ func TestFormatFlags_WithExamples(t *testing.T) {
 
 func TestFormatFlags_NoExamples(t *testing.T) {
    type Config struct {
-      VerboseOutput Flag
-      HelloWorld    StringFlag
+      VerboseOutput Flag[bool]
+      HelloWorld    Flag[string]
    }
 
    var cfg Config
