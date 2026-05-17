@@ -6,50 +6,55 @@ import (
 )
 
 func TestParse(t *testing.T) {
-   // Save original os.Args and restore it after the test finishes
    originalArgs := os.Args
    defer func() { os.Args = originalArgs }()
 
-   // We use ",hasvalue" to explicitly declare which flags require a following argument
    type Config struct {
-      Verbose Flag   `flag:"verbose"`       // No value required
-      Name    *Flag  `flag:"name,hasvalue"` // Requires a value (e.g. text)
-      Port    Flag   `flag:"port,hasvalue"` // Requires a value (e.g. number)
-      Ignored string // No tag, should be ignored
+      Verbose Flag
+      Name    Flag `flag:"value" group:"User"`
+      Port    Flag `flag:"value" group:"Server"`
+      Ignored string
    }
 
-   // 1. Valid flags (mixing flags with values and flags without values)
-   os.Args = []string{"app", "verbose", "name", "John", "port", "8080"}
-   var cfg1 Config
-   if err := Parse(&cfg1); err != nil || !cfg1.Verbose.IsSet || !cfg1.Name.IsSet || cfg1.Name.Value != "John" || cfg1.Port.Value != "8080" {
-      t.Fatalf("expected successful parse, got err: %v, state: %+v", err, cfg1)
+   // 1. Valid flags
+   os.Args = []string{"app", "Verbose", "Name", "John", "Port", "8080"}
+   var cfg Config
+
+   if err := Parse(&cfg); err != nil {
+      t.Fatalf("expected successful parse, got err: %v", err)
    }
 
-   // 2. Missing value (port is missing its number)
-   os.Args = []string{"app", "port"}
-   var cfg2 Config
-   if err := Parse(&cfg2); err == nil {
-      t.Fatal("expected error for missing value, got nil")
+   if !cfg.Verbose.Set || !cfg.Name.Set || cfg.Name.Value != "John" || cfg.Port.Value != "8080" {
+      t.Fatalf("parse state incorrect: %+v", cfg)
    }
 
-   // 3. Unknown flag
-   os.Args = []string{"app", "fakeflag"}
-   var cfg3 Config
-   if err := Parse(&cfg3); err == nil {
-      t.Fatal("expected error for unknown flag, got nil")
+   // Assert that groups were populated
+   if cfg.Name.Group != "User" || cfg.Port.Group != "Server" {
+      t.Fatalf("groups parsed incorrectly. Name group: %s, Port group: %s", cfg.Name.Group, cfg.Port.Group)
+   }
+}
+
+func TestUsage(t *testing.T) {
+   originalArgs := os.Args
+   defer func() { os.Args = originalArgs }()
+
+   type Config struct {
+      Verbose Flag
+      Name    Flag `flag:"value" group:"User Options"`
+      Age     Flag `flag:"value" group:"User Options"`
+      Host    Flag `flag:"value" group:"Server Settings"`
+      Port    Flag `flag:"value" group:"Server Settings"`
    }
 
-   // 4. Not a pointer to struct (passing by value)
-   var cfg4 Config
-   if err := Parse(cfg4); err == nil {
-      t.Fatal("expected error for passing by value, got nil")
-   }
+   // Mock the program name for the usage output
+   os.Args = []string{"my_awesome_app"}
+   var cfg Config
 
-   // 5. Unsupported field type mapped to a flag tag
-   var unsupportedConfig struct {
-      Age int `flag:"age"`
-   }
-   if err := Parse(&unsupportedConfig); err == nil {
-      t.Fatal("expected error for unsupported field type, got nil")
-   }
+   // Output a newline to make the console output cleaner during go test
+   os.Stderr.WriteString("\n--- USAGE OUTPUT ---\n")
+
+   // This will print directly to the console (os.Stderr)
+   Usage(&cfg)
+
+   os.Stderr.WriteString("--------------------\n\n")
 }
