@@ -89,7 +89,7 @@ func (c *Cache) Setup(dirName string) error {
 
 // Flag represents a command-line flag with no value.
 type Flag struct {
-   Set bool // Determines if the flag was used
+   Set bool
 }
 
 // StringFlag represents a command-line flag with a string value.
@@ -117,17 +117,15 @@ var (
    typeUrlFlag    = reflect.TypeOf(UrlFlag{})
 )
 
-// isFlagType checks if the given type is one of our supported flag structs.
 func isFlagType(t reflect.Type) bool {
    return t == typeFlag || t == typeStringFlag || t == typeIntFlag || t == typeUrlFlag
 }
 
 // ParseFlags reads os.Args and populates the provided struct pointer.
-// It automatically binds to any fields of the supported flag types, allowing partial string matches.
+// It automatically binds to flags directly or inside nested group structs.
 func ParseFlags(target any) error {
    rv := reflect.ValueOf(target)
 
-   // Ensure we were passed a pointer to a struct
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
       return fmt.Errorf("expected a pointer to a struct")
    }
@@ -135,24 +133,41 @@ func ParseFlags(target any) error {
    elem := rv.Elem()
    targetType := elem.Type()
 
-   // Parse os.Args
    for i := 1; i < len(os.Args); i++ {
       argName := os.Args[i]
 
-      var matchedIndex int
       var matches []string
+      var matchedVal reflect.Value
+      var matchedType reflect.Type
+      var matchedName string
 
-      // Scan the struct fields for matching flag names
+      // Scan top-level fields and nested struct fields
       for j := 0; j < targetType.NumField(); j++ {
          field := targetType.Field(j)
+         fieldVal := elem.Field(j)
 
-         if !isFlagType(field.Type) {
-            continue
-         }
+         if isFlagType(field.Type) {
+            if strings.Contains(field.Name, argName) {
+               matches = append(matches, field.Name)
+               matchedVal = fieldVal
+               matchedType = field.Type
+               matchedName = field.Name
+            }
+         } else if field.Type.Kind() == reflect.Struct {
+            // Search inside the nested group struct
+            for k := 0; k < field.Type.NumField(); k++ {
+               subField := field.Type.Field(k)
+               subFieldVal := fieldVal.Field(k)
 
-         if strings.Contains(field.Name, argName) {
-            matches = append(matches, field.Name)
-            matchedIndex = j
+               if isFlagType(subField.Type) {
+                  if strings.Contains(subField.Name, argName) {
+                     matches = append(matches, subField.Name)
+                     matchedVal = subFieldVal
+                     matchedType = subField.Type
+                     matchedName = subField.Name
+                  }
+               }
+            }
          }
       }
 
@@ -163,37 +178,34 @@ func ParseFlags(target any) error {
          return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
       }
 
-      matchedField := targetType.Field(matchedIndex)
-      fieldVal := elem.Field(matchedIndex)
-
       // Mark the flag as used
-      fieldVal.FieldByName("Set").SetBool(true)
+      matchedVal.FieldByName("Set").SetBool(true)
 
-      // If it's not the base Flag (boolean), it needs a value parsed
-      if matchedField.Type != typeFlag {
+      // Parse the value if it's not a boolean flag
+      if matchedType != typeFlag {
          if i+1 < len(os.Args) {
             valStr := os.Args[i+1]
 
-            switch matchedField.Type {
+            switch matchedType {
             case typeStringFlag:
-               fieldVal.FieldByName("Value").SetString(valStr)
+               matchedVal.FieldByName("Value").SetString(valStr)
             case typeIntFlag:
                number, err := strconv.Atoi(valStr)
                if err != nil {
-                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedField.Name, err)
+                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedName, err)
                }
-               fieldVal.FieldByName("Value").SetInt(int64(number))
+               matchedVal.FieldByName("Value").SetInt(int64(number))
             case typeUrlFlag:
                address, err := url.Parse(valStr)
                if err != nil {
-                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedField.Name, err)
+                  return fmt.Errorf("invalid value %q for flag %s: %v", valStr, matchedName, err)
                }
-               fieldVal.FieldByName("Value").Set(reflect.ValueOf(address))
+               matchedVal.FieldByName("Value").Set(reflect.ValueOf(address))
             }
 
             i++ // skip the value argument in the main loop
          } else {
-            return fmt.Errorf("flag %s requires a value", matchedField.Name)
+            return fmt.Errorf("flag %s requires a value", matchedName)
          }
       }
    }
@@ -202,7 +214,7 @@ func ParseFlags(target any) error {
 }
 
 // FormatFlags inspects the provided struct pointer and prints an auto-generated
-// help menu to stdout, relying on the struct's field order for grouping.
+// help menu to stdout, relying on the struct's layout for grouping.
 func FormatFlags(target any) error {
    rv := reflect.ValueOf(target)
 
@@ -214,28 +226,29 @@ func FormatFlags(target any) error {
 
    fmt.Printf("Usage: flags can be matched by any unique substring\n")
 
-   var currentGroup string
-
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
 
-      if !isFlagType(field.Type) {
-         continue
-      }
+      if isFlagType(field.Type) {
+         if field.Type == typeFlag {
+            fmt.Printf("\t%s\n", field.Name)
+         } else {
+            fmt.Printf("\t%s value\n", field.Name)
+         }
+      } else if field.Type.Kind() == reflect.Struct {
+         // Print the nested struct's name as the group header
+         fmt.Printf("\n%s:\n", field.Name)
 
-      group := field.Tag.Get("group")
-
-      // If the group changed and isn't empty, print the new group header
-      if group != "" && group != currentGroup {
-         currentGroup = group
-         fmt.Printf("\n%s:\n", group)
-      }
-
-      // Determine formatting based on whether it needs a value
-      if field.Type == typeFlag {
-         fmt.Printf("\t%s\n", field.Name)
-      } else {
-         fmt.Printf("\t%s value\n", field.Name)
+         for j := 0; j < field.Type.NumField(); j++ {
+            subField := field.Type.Field(j)
+            if isFlagType(subField.Type) {
+               if subField.Type == typeFlag {
+                  fmt.Printf("\t%s\n", subField.Name)
+               } else {
+                  fmt.Printf("\t%s value\n", subField.Name)
+               }
+            }
+         }
       }
    }
 
