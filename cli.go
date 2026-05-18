@@ -102,7 +102,6 @@ func isFlagType(t reflect.Type) bool {
 }
 
 // ParseFlags reads the provided args and populates the struct pointer.
-// It automatically binds to any fields of type Flag[T], allowing partial prefix matches.
 func ParseFlags(args []string, target any) error {
    rv := reflect.ValueOf(target)
 
@@ -177,8 +176,8 @@ func ParseFlags(args []string, target any) error {
 }
 
 // FormatFlags inspects the provided struct pointer and prints an auto-generated
-// human-readable help menu to the provided io.Writer. Examples are optional.
-func FormatFlags(w io.Writer, target any, examples ...string) error {
+// human-readable help menu to the provided io.Writer.
+func FormatFlags(w io.Writer, cmdName string, target any) error {
    rv := reflect.ValueOf(target)
 
    if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
@@ -190,6 +189,53 @@ func FormatFlags(w io.Writer, target any, examples ...string) error {
    fmt.Fprintf(w, "Overview: flags can be matched by any unique prefix\n\n")
    fmt.Fprintln(w, "Index:")
 
+   // Pass 0: Count occurrences of the first letter (byte) of every flag
+   firstLetterCount := make(map[byte]int)
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
+      if isFlagType(field.Type) && len(field.Name) > 0 {
+         firstLetterCount[field.Name[0]]++
+      }
+   }
+
+   // Store a string representation of how each flag looks when used.
+   dummies := make(map[string]string)
+
+   // Pass 1: Print the Index and build the dummy value strings
+   for i := 0; i < targetType.NumField(); i++ {
+      field := targetType.Field(i)
+
+      if !isFlagType(field.Type) || len(field.Name) == 0 {
+         continue
+      }
+
+      valueType := field.Type.Field(1).Type
+
+      // Decide if we should use the single letter or full word for the example
+      firstLetter := field.Name[0]
+      exampleFlagName := field.Name
+      if firstLetterCount[firstLetter] == 1 {
+         exampleFlagName = string(firstLetter) // Only convert to string here when actually needed for output
+      }
+
+      if valueType.Kind() == reflect.Bool {
+         fmt.Fprintf(w, "\t%s\n", field.Name)
+         dummies[field.Name] = exampleFlagName // Bools don't need values
+      } else {
+         fmt.Fprintf(w, "\t%s %s\n", field.Name, valueType)
+
+         // Assign dummy values based on type
+         if valueType.Kind() == reflect.String {
+            dummies[field.Name] = exampleFlagName + " xyz"
+         } else if valueType.Kind() == reflect.Int {
+            dummies[field.Name] = exampleFlagName + " 123"
+         }
+      }
+   }
+
+   fmt.Fprintf(w, "\nExamples:\n")
+
+   // Pass 2: Generate the examples based on the 'depends' tag
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
 
@@ -197,19 +243,15 @@ func FormatFlags(w io.Writer, target any, examples ...string) error {
          continue
       }
 
-      valueType := field.Type.Field(1).Type
+      myDummy := dummies[field.Name]
+      depends := field.Tag.Get("depends")
 
-      if valueType.Kind() == reflect.Bool {
-         fmt.Fprintf(w, "\t%s\n", field.Name)
+      // If it has a dependency, print command + parent dummy + my dummy
+      if depends != "" && dummies[depends] != "" {
+         fmt.Fprintf(w, "\t%s %s %s\n", cmdName, dummies[depends], myDummy)
       } else {
-         fmt.Fprintf(w, "\t%s %s\n", field.Name, valueType)
-      }
-   }
-
-   if len(examples) > 0 {
-      fmt.Fprintf(w, "\nExamples:\n")
-      for _, example := range examples {
-         fmt.Fprintf(w, "\t%s\n", example)
+         // Otherwise print command + my dummy
+         fmt.Fprintf(w, "\t%s %s\n", cmdName, myDummy)
       }
    }
 
