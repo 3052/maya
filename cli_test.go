@@ -60,15 +60,15 @@ func TestFormatFlags_WithExamples(t *testing.T) {
 
    var cfg Config
 
-   os.Stdout.WriteString("\n--- FORMAT OUTPUT (WITH EXAMPLES) ---\n")
-   err := FormatFlags(os.Stdout, &cfg,
+   os.Stderr.WriteString("\n--- FORMAT OUTPUT (WITH EXAMPLES) ---\n")
+   err := FormatFlags(os.Stderr, &cfg,
       "program HelloP",
       "program ServerH example.com",
    )
    if err != nil {
       t.Fatalf("expected no error from FormatFlags, got: %v", err)
    }
-   os.Stdout.WriteString("-------------------------------------\n\n")
+   os.Stderr.WriteString("-------------------------------------\n\n")
 }
 
 func TestFormatFlags_NoExamples(t *testing.T) {
@@ -79,9 +79,9 @@ func TestFormatFlags_NoExamples(t *testing.T) {
 
    var cfg Config
 
-   os.Stdout.WriteString("\n--- FORMAT OUTPUT (NO EXAMPLES) ---\n")
-   if err := FormatFlags(os.Stdout, &cfg); err != nil {
+   os.Stderr.WriteString("\n--- FORMAT OUTPUT (NO EXAMPLES) ---\n")
+   if err := FormatFlags(os.Stderr, &cfg); err != nil {
       t.Fatalf("expected no error from FormatFlags, got: %v", err)
    }
-   os.Stdout.WriteString("-----------------------------------\n\n")
+   os.Stderr.WriteString("-----------------------------------\n\n")
 }
