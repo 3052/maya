@@ -210,17 +210,19 @@ func FormatFlags(w io.Writer, cmdName string, target any) error {
       }
 
       valueType := field.Type.Field(1).Type
+      usage := field.Tag.Get("usage")
 
       // Decide if we should use the single letter or full word for the example
       firstLetter := field.Name[0]
       exampleFlagName := field.Name
       if firstLetterCount[firstLetter] == 1 {
-         exampleFlagName = string(firstLetter) // Only convert to string here when actually needed for output
+         exampleFlagName = string(firstLetter)
       }
 
+      // Print the flag name using a tab
       if valueType.Kind() == reflect.Bool {
          fmt.Fprintf(w, "\t%s\n", field.Name)
-         dummies[field.Name] = exampleFlagName // Bools don't need values
+         dummies[field.Name] = exampleFlagName
       } else {
          fmt.Fprintf(w, "\t%s %s\n", field.Name, valueType)
 
@@ -230,6 +232,11 @@ func FormatFlags(w io.Writer, cmdName string, target any) error {
          } else if valueType.Kind() == reflect.Int {
             dummies[field.Name] = exampleFlagName + " 123"
          }
+      }
+
+      // Print usage on the next line indented with two tabs to offset from the flag
+      if usage != "" {
+         fmt.Fprintf(w, "\t\t%s\n", usage)
       }
    }
 
