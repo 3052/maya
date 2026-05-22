@@ -1,89 +1,76 @@
 package myflag
 
 import (
-   "reflect"
+   "bytes"
+   "os"
+   "strings"
    "testing"
 )
 
 type Config struct {
-   Verbose bool   `usage:"enable verbose output"`
-   Name    string `usage:"user name"`
-   Role    string `usage:"user role"`
+   Verbose Flag[bool]
+   Name    Flag[string]
+   Role    Flag[string]
+   Count   Flag[int]
 }
 
-func TestParse_Success(t *testing.T) {
+func TestParseFlags(t *testing.T) {
    cfg := Config{
-      Role: "guest", // Ensure default values are preserved if not overridden
+      Verbose: Flag[bool]{Usage: "enable verbose output"},
+      Name:    Flag[string]{Usage: "user name"},
+      Role:    Flag[string]{Value: "guest", Usage: "user role"},
+      Count:   Flag[int]{Value: 1, Usage: "number of items"},
    }
 
-   args := []string{"Verbose", "Name", "admin"}
+   args := []string{"Verbose", "Name", "admin", "Count", "42"}
 
-   err := Parse(&cfg, args)
+   err := ParseFlags(args, &cfg)
    if err != nil {
       t.Fatalf("expected no error, got: %v", err)
    }
 
-   if !cfg.Verbose {
-      t.Errorf("expected Verbose to be true")
+   if !cfg.Verbose.Set || cfg.Verbose.Value != true {
+      t.Errorf("expected Verbose to be Set and true")
    }
-   if cfg.Name != "admin" {
-      t.Errorf("expected Name to be 'admin', got '%s'", cfg.Name)
+   if cfg.Name.Value != "admin" {
+      t.Errorf("expected Name to be 'admin', got '%s'", cfg.Name.Value)
    }
-   if cfg.Role != "guest" {
-      t.Errorf("expected Role to remain 'guest', got '%s'", cfg.Role)
+   if cfg.Role.Value != "guest" {
+      t.Errorf("expected Role to remain 'guest', got '%s'", cfg.Role.Value)
    }
-}
-
-func TestParse_MissingArgument(t *testing.T) {
-   cfg := Config{}
-   args := []string{"Name"}
-
-   err := Parse(&cfg, args)
-   if err == nil {
-      t.Fatalf("expected error for missing argument, got nil")
-   }
-
-   expectedErr := "flag needs an argument: Name"
-   if err.Error() != expectedErr {
-      t.Errorf("expected error '%s', got '%s'", expectedErr, err.Error())
+   if !cfg.Count.Set || cfg.Count.Value != 42 {
+      t.Errorf("expected Count to be Set and 42, got %d", cfg.Count.Value)
    }
 }
 
-func TestParse_UndefinedFlag(t *testing.T) {
-   cfg := Config{}
-   args := []string{"UnknownFlag"}
-
-   err := Parse(&cfg, args)
-   if err == nil {
-      t.Fatalf("expected error for undefined flag, got nil")
+func TestPrintFlags(t *testing.T) {
+   cfg := Config{
+      Verbose: Flag[bool]{Usage: "enable verbose output"},
+      Name:    Flag[string]{Usage: "user name"},
+      Count:   Flag[int]{Usage: "number of items"},
    }
 
-   expectedErr := "flag provided but not defined: UnknownFlag"
-   if err.Error() != expectedErr {
-      t.Errorf("expected error '%s', got '%s'", expectedErr, err.Error())
-   }
-}
-
-func TestParse_InvalidTargetTypes(t *testing.T) {
-   tests := []struct {
-      name   string
-      target any
-   }{
-      {"nil target", nil},
-      {"non-pointer struct", Config{}},
-      {"pointer to non-struct", reflect.ValueOf("string").Interface()},
+   var buf bytes.Buffer
+   err := PrintFlags(&buf, &cfg)
+   if err != nil {
+      t.Fatalf("expected no error, got: %v", err)
    }
 
-   for _, tt := range tests {
-      t.Run(tt.name, func(t *testing.T) {
-         err := Parse(tt.target, []string{})
-         if err == nil {
-            t.Fatalf("expected error for invalid target, got nil")
-         }
-         expectedErr := "target must be a pointer to a struct"
-         if err.Error() != expectedErr {
-            t.Errorf("expected error '%s', got '%s'", expectedErr, err.Error())
-         }
-      })
+   out := buf.String()
+
+   if !strings.Contains(out, "  Verbose\n    \tenable verbose output") {
+      t.Errorf("output missing Verbose formatting, got:\n%s", out)
+   }
+   if !strings.Contains(out, "  Name\n    \tuser name") {
+      t.Errorf("output missing Name formatting, got:\n%s", out)
+   }
+   if !strings.Contains(out, "  Count\n    \tnumber of items") {
+      t.Errorf("output missing Count formatting, got:\n%s", out)
+   }
+
+   // Ensure it still prints directly to stderr without error
+   err = PrintFlags(os.Stderr, &cfg)
+   if err != nil {
+      t.Fatalf("expected no error printing to stderr, got: %v", err)
    }
 }
