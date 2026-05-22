@@ -5,12 +5,20 @@ import (
    "io"
    "reflect"
    "strconv"
+   "strings"
 )
 
 type Flag[T bool | string | int] struct {
-   Usage string
-   Value T
-   Set   bool
+   Usage    string
+   Value    T
+   Set      bool
+   Requires []string
+}
+
+var flagTypes = map[reflect.Type]bool{
+   reflect.TypeOf(Flag[bool]{}):   true,
+   reflect.TypeOf(Flag[string]{}): true,
+   reflect.TypeOf(Flag[int]{}):    true,
 }
 
 func ParseFlags(arguments []string, target any) error {
@@ -24,46 +32,57 @@ func ParseFlags(arguments []string, target any) error {
    for i := 0; i < len(arguments); i++ {
       name := arguments[i]
 
-      var found bool
+      var matchCount, matchIndex int
+
       for j := 0; j < targetType.NumField(); j++ {
-         if targetType.Field(j).Name == name {
-            found = true
-            fieldVal := value.Field(j)
+         structField := targetType.Field(j)
 
-            setField := fieldVal.FieldByName("Set")
-            valueField := fieldVal.FieldByName("Value")
+         if !flagTypes[structField.Type] {
+            continue
+         }
 
-            if !setField.IsValid() || !valueField.IsValid() {
-               return fmt.Errorf("field %s is not a valid flag", name)
-            }
-
-            setField.SetBool(true)
-
-            if valueField.Kind() == reflect.Bool {
-               valueField.SetBool(true)
-            } else if valueField.Kind() == reflect.String {
-               if i+1 >= len(arguments) {
-                  return fmt.Errorf("flag needs an argument: %s", name)
-               }
-               i++
-               valueField.SetString(arguments[i])
-            } else if valueField.Kind() == reflect.Int {
-               if i+1 >= len(arguments) {
-                  return fmt.Errorf("flag needs an argument: %s", name)
-               }
-               i++
-               parsedInt, err := strconv.ParseInt(arguments[i], 10, 64)
-               if err != nil {
-                  return fmt.Errorf("invalid integer value %q for flag %s", arguments[i], name)
-               }
-               valueField.SetInt(parsedInt)
-            }
+         if structField.Name == name {
+            matchIndex = j
+            matchCount = 1
             break
+         }
+
+         if strings.HasPrefix(structField.Name, name) {
+            matchIndex = j
+            matchCount++
          }
       }
 
-      if !found {
+      if matchCount == 0 {
          return fmt.Errorf("flag provided but not defined: %s", name)
+      }
+      if matchCount > 1 {
+         return fmt.Errorf("flag %q is ambiguous", name)
+      }
+
+      fieldVal := value.Field(matchIndex)
+      fieldVal.FieldByName("Set").SetBool(true)
+      valueField := fieldVal.FieldByName("Value")
+
+      switch valueField.Kind() {
+      case reflect.Bool:
+         valueField.SetBool(true)
+      case reflect.String:
+         if i+1 >= len(arguments) {
+            return fmt.Errorf("flag needs an argument: %s", name)
+         }
+         i++
+         valueField.SetString(arguments[i])
+      case reflect.Int:
+         if i+1 >= len(arguments) {
+            return fmt.Errorf("flag needs an argument: %s", name)
+         }
+         i++
+         parsedInt, err := strconv.ParseInt(arguments[i], 10, 64)
+         if err != nil {
+            return fmt.Errorf("invalid integer value %q for flag %s", arguments[i], name)
+         }
+         valueField.SetInt(parsedInt)
       }
    }
 
@@ -81,15 +100,13 @@ func PrintFlags(w io.Writer, target any) error {
    targetType := value.Type()
 
    for i := 0; i < targetType.NumField(); i++ {
-      fieldVal := value.Field(i)
+      structField := targetType.Field(i)
 
-      if fieldVal.Kind() == reflect.Struct {
-         usageField := fieldVal.FieldByName("Usage")
-         if usageField.IsValid() && usageField.Kind() == reflect.String {
-            _, err := fmt.Fprintf(w, "  %s\n    \t%s\n", targetType.Field(i).Name, usageField.String())
-            if err != nil {
-               return err
-            }
+      if flagTypes[structField.Type] {
+         usage := value.Field(i).FieldByName("Usage").String()
+         _, err := fmt.Fprintf(w, "  %s\n    \t%s\n", structField.Name, usage)
+         if err != nil {
+            return err
          }
       }
    }
