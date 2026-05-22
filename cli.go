@@ -93,12 +93,12 @@ type Flag[T bool | string | int] struct {
    Value T
 }
 
-// isFlagType checks if the given type is a Flag[T] by inspecting its structure.
-func isFlagType(t reflect.Type) bool {
-   return t.Kind() == reflect.Struct &&
-      t.NumField() == 2 &&
-      t.Field(0).Name == "Set" &&
-      t.Field(1).Name == "Value"
+// isFlagType acts as a highly efficient, type-safe set to check if a type
+// is one of the valid instantiations of Flag[T].
+var isFlagType = map[reflect.Type]bool{
+   reflect.TypeOf(Flag[bool]{}):   true,
+   reflect.TypeOf(Flag[string]{}): true,
+   reflect.TypeOf(Flag[int]{}):    true,
 }
 
 // ParseFlags reads the provided args and populates the struct pointer.
@@ -122,7 +122,7 @@ func ParseFlags(args []string, target any) error {
       for j := 0; j < targetType.NumField(); j++ {
          field := targetType.Field(j)
 
-         if !isFlagType(field.Type) {
+         if !isFlagType[field.Type] {
             continue
          }
 
@@ -193,7 +193,7 @@ func FormatFlags(w io.Writer, cmdName string, target any) error {
    firstLetterCount := make(map[byte]int)
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
-      if isFlagType(field.Type) && len(field.Name) > 0 {
+      if isFlagType[field.Type] && len(field.Name) > 0 {
          firstLetterCount[field.Name[0]]++
       }
    }
@@ -205,7 +205,7 @@ func FormatFlags(w io.Writer, cmdName string, target any) error {
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
 
-      if !isFlagType(field.Type) || len(field.Name) == 0 {
+      if !isFlagType[field.Type] || len(field.Name) == 0 {
          continue
       }
 
@@ -246,7 +246,7 @@ func FormatFlags(w io.Writer, cmdName string, target any) error {
    for i := 0; i < targetType.NumField(); i++ {
       field := targetType.Field(i)
 
-      if !isFlagType(field.Type) {
+      if !isFlagType[field.Type] {
          continue
       }
 
