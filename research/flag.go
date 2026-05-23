@@ -9,10 +9,11 @@ import (
 )
 
 type Flag[T bool | string | int] struct {
-   Usage    string
-   Value    T
    Set      bool
-   Requires []string
+   HasEqual bool
+   Value    T
+   Usage    string
+   Requires string
 }
 
 var flagTypes = map[reflect.Type]bool{
@@ -30,7 +31,8 @@ func ParseFlags(arguments []string, target any) error {
    targetType := value.Type()
 
    for i := 0; i < len(arguments); i++ {
-      name := arguments[i]
+      arg := arguments[i]
+      name, val, hasEqual := strings.Cut(arg, "=")
 
       var matchCount, matchIndex int
 
@@ -62,27 +64,32 @@ func ParseFlags(arguments []string, target any) error {
 
       fieldVal := value.Field(matchIndex)
       fieldVal.FieldByName("Set").SetBool(true)
+      fieldVal.FieldByName("HasEqual").SetBool(hasEqual)
       valueField := fieldVal.FieldByName("Value")
 
       switch valueField.Kind() {
       case reflect.Bool:
-         valueField.SetBool(true)
+         if val == "" {
+            valueField.SetBool(false)
+         } else {
+            parsedBool, err := strconv.ParseBool(val)
+            if err != nil {
+               return fmt.Errorf("invalid boolean value %q for flag %s", val, name)
+            }
+            valueField.SetBool(parsedBool)
+         }
       case reflect.String:
-         if i+1 >= len(arguments) {
-            return fmt.Errorf("flag needs an argument: %s", name)
-         }
-         i++
-         valueField.SetString(arguments[i])
+         valueField.SetString(val)
       case reflect.Int:
-         if i+1 >= len(arguments) {
-            return fmt.Errorf("flag needs an argument: %s", name)
+         if val == "" {
+            valueField.SetInt(0)
+         } else {
+            parsedInt, err := strconv.ParseInt(val, 10, 64)
+            if err != nil {
+               return fmt.Errorf("invalid integer value %q for flag %s", val, name)
+            }
+            valueField.SetInt(parsedInt)
          }
-         i++
-         parsedInt, err := strconv.ParseInt(arguments[i], 10, 64)
-         if err != nil {
-            return fmt.Errorf("invalid integer value %q for flag %s", arguments[i], name)
-         }
-         valueField.SetInt(parsedInt)
       }
    }
 
@@ -103,8 +110,22 @@ func PrintFlags(w io.Writer, target any) error {
       structField := targetType.Field(i)
 
       if flagTypes[structField.Type] {
-         usage := value.Field(i).FieldByName("Usage").String()
-         _, err := fmt.Fprintf(w, "  %s\n    \t%s\n", structField.Name, usage)
+         fieldVal := value.Field(i)
+         usage := fieldVal.FieldByName("Usage").String()
+
+         valField := fieldVal.FieldByName("Value")
+         defVal := valField.Interface()
+         zeroVal := reflect.Zero(valField.Type()).Interface()
+
+         var err error
+         if defVal == zeroVal {
+            _, err = fmt.Fprintf(w, "%s\n\t%s\n", structField.Name, usage)
+         } else if valField.Kind() == reflect.String {
+            _, err = fmt.Fprintf(w, "%s\n\t%s (default %q)\n", structField.Name, usage, defVal)
+         } else {
+            _, err = fmt.Fprintf(w, "%s\n\t%s (default %v)\n", structField.Name, usage, defVal)
+         }
+
          if err != nil {
             return err
          }
