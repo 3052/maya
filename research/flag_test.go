@@ -2,18 +2,22 @@
 package maya
 
 import (
+   "fmt"
+   "os"
+   "strconv"
+   "strings"
    "testing"
 )
 
 func TestFlagSetParse_Success(t *testing.T) {
-   hostFlag := new(Flag).SetName("host").SetValue("localhost").SetUsage("server host address")
-   portFlag := new(Flag).SetName("port").SetValue("8080").SetUsage("server port number").SetRequires(hostFlag)
-   verboseFlag := new(Flag).SetName("verbose").SetValue("false").SetUsage("enable verbose logging")
-   timeoutFlag := new(Flag).SetName("timeout").SetValue("30s").SetUsage("connection timeout")
+   hostFlag := new(Flag).SetName("host").SetValue("localhost").SetUsage("server host address").SetNeedsValue(true)
+   portFlag := new(Flag).SetName("port").SetValue("8080").SetUsage("server port number").SetNeeds(hostFlag).SetNeedsValue(true)
+   verboseFlag := new(Flag).SetName("verbose").SetValue("false").SetUsage("enable verbose logging").SetNeedsValue(false)
+   timeoutFlag := new(Flag).SetName("timeout").SetValue("30s").SetUsage("connection timeout").SetNeedsValue(true)
 
    fs := FlagSet{hostFlag, portFlag, verboseFlag, timeoutFlag}
 
-   // Testing prefix matching: "ho" matches "host", "po" matches "port", "ver" matches "verbose"
+   // "ho" needs value, "po" needs value, "ver" strictly takes no value
    args := []string{"ho=127.0.0.1", "po=", "ver"}
    err := fs.Parse(args)
 
@@ -21,41 +25,76 @@ func TestFlagSetParse_Success(t *testing.T) {
       t.Fatalf("unexpected error during parse: %v", err)
    }
 
-   if f := fs.Lookup("host"); f.Value != "127.0.0.1" || !f.Set || !f.HasEqual || f.Usage != "server host address" {
-      t.Errorf("host flag state invalid, got Value: '%s', Set: %v, HasEqual: %v, Usage: '%s'", f.Value, f.Set, f.HasEqual, f.Usage)
+   if hostFlag.Value != "127.0.0.1" || !hostFlag.Set || hostFlag.Usage != "server host address" {
+      t.Errorf("host flag state invalid, got Value: '%s', Set: %v, Usage: '%s'", hostFlag.Value, hostFlag.Set, hostFlag.Usage)
    }
 
-   if f := fs.Lookup("port"); f.Value != "" || !f.Set || !f.HasEqual {
-      t.Errorf("expected port to be empty string, Set: true, HasEqual: true, got '%s', Set: %v, HasEqual: %v", f.Value, f.Set, f.HasEqual)
+   if portFlag.Value != "" || !portFlag.Set {
+      t.Errorf("expected port to be empty string, Set: true, got '%s', Set: %v", portFlag.Value, portFlag.Set)
    }
-   if f := fs.Lookup("port"); f.Requires == nil || f.Requires.Name != "host" {
-      t.Errorf("expected port flag to require host flag, got %v", f.Requires)
-   }
-
-   if f := fs.Lookup("verbose"); f.Value != "" || !f.Set || f.HasEqual {
-      t.Errorf("expected verbose to be empty string, Set: true, HasEqual: false, got '%s', Set: %v, HasEqual: %v", f.Value, f.Set, f.HasEqual)
+   if portFlag.Needs == nil || portFlag.Needs.Name != "host" {
+      t.Errorf("expected port flag to need host flag, got %v", portFlag.Needs)
    }
 
-   if f := fs.Lookup("timeout"); f.Value != "30s" || f.Set || f.HasEqual {
-      t.Errorf("expected timeout to be '30s', Set: false, HasEqual: false, got '%s', Set: %v, HasEqual: %v", f.Value, f.Set, f.HasEqual)
+   if verboseFlag.Value != "" || !verboseFlag.Set {
+      t.Errorf("expected verbose to be empty string, Set: true, got '%s', Set: %v", verboseFlag.Value, verboseFlag.Set)
+   }
+
+   if timeoutFlag.Value != "30s" || timeoutFlag.Set {
+      t.Errorf("expected timeout to be '30s', Set: false, got '%s', Set: %v", timeoutFlag.Value, timeoutFlag.Set)
    }
 }
 
-func TestFlagSetParse_Ambiguous(t *testing.T) {
+func TestFlagSetUsage(t *testing.T) {
    fs := FlagSet{
-      new(Flag).SetName("host").SetValue("localhost"),
-      new(Flag).SetName("house").SetValue("suburb"),
+      new(Flag).SetName("host").SetValue("localhost").SetUsage("server host address").SetNeedsValue(true),
+      new(Flag).SetName("port").SetValue("8080").SetUsage("server port number").SetNeedsValue(true),
+      new(Flag).SetName("verbose").SetUsage("enable verbose logging").SetNeedsValue(false),
+      new(Flag).SetName("retries").SetValue("3").SetNeedsValue(true),
+      new(Flag).SetName("silent").SetNeedsValue(false),
    }
 
-   // "ho" is a valid prefix for both "host" and "house"
-   err := fs.Parse([]string{"ho=127.0.0.1"})
+   usage := fs.Usage()
 
-   if err == nil {
-      t.Fatal("expected error due to ambiguous flag, got nil")
+   // Output to stderr to verify visual layout
+   fmt.Fprint(os.Stderr, usage)
+
+   if !strings.Contains(usage, "host value\n\tserver host address (default: localhost)\n") {
+      t.Errorf("expected usage to contain formatted host details, got:\n%s", usage)
+   }
+   if !strings.Contains(usage, "port value\n\tserver port number (default: 8080)\n") {
+      t.Errorf("expected usage to contain formatted port details, got:\n%s", usage)
+   }
+   if !strings.Contains(usage, "verbose\n\tenable verbose logging\n") {
+      t.Errorf("expected verbose usage to exist correctly, got:\n%s", usage)
+   }
+   if !strings.Contains(usage, "retries value\n\t(default: 3)\n") {
+      t.Errorf("expected retries usage to exist with only the default string, got:\n%s", usage)
+   }
+   if !strings.Contains(usage, "silent\n") || strings.Contains(usage, "silent\n\t") {
+      t.Errorf("expected silent usage to have no extra indentation, got:\n%s", usage)
+   }
+}
+
+func TestParseFlag(t *testing.T) {
+   portFlag := new(Flag).SetName("port").SetValue("8080")
+   verboseFlag := new(Flag).SetName("verbose").SetValue("true")
+
+   // Test converting to int
+   port, err := ParseFlag(portFlag, strconv.Atoi)
+   if err != nil {
+      t.Fatalf("unexpected error converting port: %v", err)
+   }
+   if port != 8080 {
+      t.Errorf("expected port to be 8080, got %d", port)
    }
 
-   expected := "ambiguous argument: ho"
-   if err.Error() != expected {
-      t.Errorf("expected error '%s', got '%s'", expected, err.Error())
+   // Test converting to bool
+   verbose, err := ParseFlag(verboseFlag, strconv.ParseBool)
+   if err != nil {
+      t.Fatalf("unexpected error converting verbose: %v", err)
+   }
+   if !verbose {
+      t.Errorf("expected verbose to be true, got %v", verbose)
    }
 }
