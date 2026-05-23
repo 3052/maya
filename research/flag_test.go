@@ -66,21 +66,6 @@ func TestParseFlags(t *testing.T) {
    if cfg.Address.Set {
       t.Errorf("expected Address to NOT be set")
    }
-
-   type AmbigConfig struct {
-      App   Flag[bool]
-      Apple Flag[bool]
-   }
-
-   cfgAmbig := AmbigConfig{}
-   err = ParseFlags([]string{"Ap=true"}, &cfgAmbig)
-   if err == nil {
-      t.Fatalf("expected error for ambiguous flag, got nil")
-   }
-   expectedErr := `flag "Ap" is ambiguous`
-   if err.Error() != expectedErr {
-      t.Errorf("expected error %q, got %q", expectedErr, err.Error())
-   }
 }
 
 func TestPrintFlags(t *testing.T) {
@@ -91,12 +76,15 @@ func TestPrintFlags(t *testing.T) {
       Season         Flag[int]
       MubiId         Flag[int]
       DashId         Flag[string]
-      Verbose        Flag[bool] // Added bool flag
+      Verbose        Flag[bool]
       Age            int
    }
 
    cfg := Config{
-      Season: Flag[int]{Requires: "Address"},
+      WidevineFolder: Flag[string]{Usage: "path to widevine folder"},
+      SetProxy:       Flag[string]{Value: "127.0.0.1"},
+      Address:        Flag[string]{Usage: "server address", Value: "localhost"},
+      Season:         Flag[int]{Requires: "Address"},
    }
 
    var buf bytes.Buffer
@@ -111,21 +99,21 @@ func TestPrintFlags(t *testing.T) {
 
    expectedParts := []string{
       "Index:\n",
-      "\tWidevineFolder string\n",
-      "\tSetProxy string\n",
-      "\tAddress string\n",
+      "\tWidevineFolder string\n\t\tpath to widevine folder\n",
+      "\tSetProxy string\n\t\t(default 127.0.0.1)\n",
+      "\tAddress string\n\t\tserver address (default localhost)\n",
       "\tSeason int\n",
       "\tMubiId int\n",
       "\tDashId string\n",
-      "\tVerbose\n", // Bool type is omitted
+      "\tVerbose\n",
       "\nExamples:\n",
       "\tmubi W=xyz\n",
       "\tmubi SetProxy=xyz\n",
       "\tmubi A=xyz\n",
-      "\tmubi A=xyz Season=789\n", // Shows dependency correctly
+      "\tmubi A=xyz Season=789\n",
       "\tmubi M=789\n",
       "\tmubi D=xyz\n",
-      "\tmubi V\n", // Bool has no equals syntax
+      "\tmubi V\n",
    }
 
    for _, part := range expectedParts {

@@ -117,6 +117,10 @@ func PrintFlags(w io.Writer, progName string, target any) error {
    for _, structField := range validFields {
       fieldVal := value.FieldByName(structField.Name)
       valField := fieldVal.FieldByName("Value")
+      usage := fieldVal.FieldByName("Usage").String()
+
+      defVal := valField.Interface()
+      zeroVal := reflect.Zero(valField.Type()).Interface()
 
       nameAndType := structField.Name
       if valField.Kind() != reflect.Bool {
@@ -124,58 +128,51 @@ func PrintFlags(w io.Writer, progName string, target any) error {
       }
 
       fmt.Fprintf(data, "\t%s\n", nameAndType)
+
+      if usage == "" {
+         if defVal != zeroVal {
+            fmt.Fprintf(data, "\t\t(default %v)\n", defVal)
+         }
+      } else {
+         if defVal == zeroVal {
+            fmt.Fprintf(data, "\t\t%s\n", usage)
+         } else {
+            fmt.Fprintf(data, "\t\t%s (default %v)\n", usage, defVal)
+         }
+      }
    }
 
    fmt.Fprintf(data, "\nExamples:\n")
 
-   type fieldInfo struct {
-      shortName string
-      dummy     string
-      requires  string
-      isBool    bool
-   }
-   infoMap := make(map[string]fieldInfo)
-
-   for _, structField := range validFields {
-      shortName := structField.Name
-      if firstLetterCounts[structField.Name[0]] == 1 {
-         shortName = string(structField.Name[0])
+   formatExample := func(name string) string {
+      short := name
+      if firstLetterCounts[name[0]] == 1 {
+         short = string(name[0])
       }
 
-      fieldVal := value.FieldByName(structField.Name)
-      valField := fieldVal.FieldByName("Value")
-      reqField := fieldVal.FieldByName("Requires")
-
-      dummy := "xyz"
-      if valField.Kind() == reflect.Int {
-         dummy = "789"
+      switch value.FieldByName(name).FieldByName("Value").Kind() {
+      case reflect.Bool:
+         return short
+      case reflect.Int:
+         return short + "=789"
       }
-
-      infoMap[structField.Name] = fieldInfo{
-         shortName: shortName,
-         dummy:     dummy,
-         requires:  reqField.String(),
-         isBool:    valField.Kind() == reflect.Bool,
-      }
+      return short + "=xyz"
    }
 
    for _, structField := range validFields {
-      info := infoMap[structField.Name]
-
-      currentStr := info.shortName
-      if !info.isBool {
-         currentStr += "=" + info.dummy
-      }
+      currentStr := formatExample(structField.Name)
 
       reqStr := ""
-      if info.requires != "" {
-         if reqInfo, ok := infoMap[info.requires]; ok {
-            reqStr = reqInfo.shortName
-            if !reqInfo.isBool {
-               reqStr += "=" + reqInfo.dummy
-            }
-            reqStr += " "
+      requires := value.FieldByName(structField.Name).FieldByName("Requires").String()
+      if requires != "" {
+         reqStructField, ok := targetType.FieldByName(requires)
+         if !ok {
+            return fmt.Errorf("required flag %q not found", requires)
          }
+         if !flagTypes[reqStructField.Type] {
+            return fmt.Errorf("required flag %q is not a valid flag type", requires)
+         }
+         reqStr = formatExample(requires) + " "
       }
 
       fmt.Fprintf(data, "\t%s %s%s\n", progName, reqStr, currentStr)
