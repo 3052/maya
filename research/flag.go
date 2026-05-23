@@ -1,3 +1,4 @@
+// maya.go
 package maya
 
 import (
@@ -6,13 +7,31 @@ import (
 )
 
 type Flag struct {
-   Name  string
-   Value string
+   Name     string
+   Value    string
+   Usage    string
+   Set      bool
+   HasEqual bool
+   Requires *Flag
 }
 
-func (f *Flag) Define(name string, value string) *Flag {
+func (f *Flag) SetName(name string) *Flag {
    f.Name = name
+   return f
+}
+
+func (f *Flag) SetValue(value string) *Flag {
    f.Value = value
+   return f
+}
+
+func (f *Flag) SetUsage(usage string) *Flag {
+   f.Usage = usage
+   return f
+}
+
+func (f *Flag) SetRequires(other *Flag) *Flag {
+   f.Requires = other
    return f
 }
 
@@ -28,15 +47,30 @@ func (fs FlagSet) Lookup(name string) *Flag {
 }
 
 func (fs FlagSet) Parse(args []string) error {
-   for i := 0; i < len(args); i++ {
-      name, value, _ := strings.Cut(args[i], "=")
+   for _, arg := range args {
+      name, value, hasEqual := strings.Cut(arg, "=")
 
-      flag := fs.Lookup(name)
-      if flag == nil {
+      var match *Flag
+      var matches int
+
+      for _, f := range fs {
+         if strings.HasPrefix(f.Name, name) {
+            match = f
+            matches++
+         }
+      }
+
+      if matches > 1 {
+         return fmt.Errorf("ambiguous argument: %s", name)
+      }
+      if matches == 0 {
          return fmt.Errorf("unknown argument: %s", name)
       }
 
-      flag.Value = value
+      match.Value = value
+      match.Set = true
+      match.HasEqual = hasEqual
    }
+
    return nil
 }
