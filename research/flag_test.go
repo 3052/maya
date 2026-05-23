@@ -66,51 +66,74 @@ func TestParseFlags(t *testing.T) {
    if cfg.Address.Set {
       t.Errorf("expected Address to NOT be set")
    }
+
+   type AmbigConfig struct {
+      App   Flag[bool]
+      Apple Flag[bool]
+   }
+
+   cfgAmbig := AmbigConfig{}
+   err = ParseFlags([]string{"Ap=true"}, &cfgAmbig)
+   if err == nil {
+      t.Fatalf("expected error for ambiguous flag, got nil")
+   }
+   expectedErr := `flag "Ap" is ambiguous`
+   if err.Error() != expectedErr {
+      t.Errorf("expected error %q, got %q", expectedErr, err.Error())
+   }
 }
 
 func TestPrintFlags(t *testing.T) {
    type Config struct {
-      Verbose Flag[bool]
-      Name    Flag[string]
-      Count   Flag[int]
-      Limit   Flag[int]
-      Season  Flag[string]
-      Age     int
+      WidevineFolder Flag[string]
+      SetProxy       Flag[string]
+      Address        Flag[string]
+      Season         Flag[int]
+      MubiId         Flag[int]
+      DashId         Flag[string]
+      Verbose        Flag[bool] // Added bool flag
+      Age            int
    }
 
    cfg := Config{
-      Verbose: Flag[bool]{Usage: "enable verbose output", Value: true},
-      Name:    Flag[string]{Usage: "user name", Value: "guest"},
-      Count:   Flag[int]{Usage: "number of items", Value: 10},
-      Limit:   Flag[int]{Usage: "limit of items"}, // Zero value implicitly set to 0
-      Season:  Flag[string]{Usage: "season", Requires: "Address", Value: "Fall"},
+      Season: Flag[int]{Requires: "Address"},
    }
 
    var buf bytes.Buffer
    w := io.MultiWriter(os.Stderr, &buf)
 
-   err := PrintFlags(w, &cfg)
+   err := PrintFlags(w, "mubi", &cfg)
    if err != nil {
       t.Fatalf("expected no error, got: %v", err)
    }
 
    out := buf.String()
 
-   if !strings.Contains(out, "Verbose\n\tenable verbose output (default true)") {
-      t.Errorf("output missing Verbose formatting, got:\n%s", out)
+   expectedParts := []string{
+      "Index:\n",
+      "\tWidevineFolder string\n",
+      "\tSetProxy string\n",
+      "\tAddress string\n",
+      "\tSeason int\n",
+      "\tMubiId int\n",
+      "\tDashId string\n",
+      "\tVerbose\n", // Bool type is omitted
+      "\nExamples:\n",
+      "\tmubi W=xyz\n",
+      "\tmubi SetProxy=xyz\n",
+      "\tmubi A=xyz\n",
+      "\tmubi A=xyz Season=789\n", // Shows dependency correctly
+      "\tmubi M=789\n",
+      "\tmubi D=xyz\n",
+      "\tmubi V\n", // Bool has no equals syntax
    }
-   if !strings.Contains(out, "Name\n\tuser name (default \"guest\")") {
-      t.Errorf("output missing Name formatting, got:\n%s", out)
+
+   for _, part := range expectedParts {
+      if !strings.Contains(out, part) {
+         t.Errorf("output missing expected part: %q\nGot:\n%s", part, out)
+      }
    }
-   if !strings.Contains(out, "Count\n\tnumber of items (default 10)") {
-      t.Errorf("output missing Count formatting, got:\n%s", out)
-   }
-   if !strings.Contains(out, "Limit\n\tlimit of items\n") {
-      t.Errorf("output missing Limit formatting (should hide default 0), got:\n%s", out)
-   }
-   if !strings.Contains(out, "Season\n\tseason (default \"Fall\")") {
-      t.Errorf("output missing Season formatting, got:\n%s", out)
-   }
+
    if strings.Contains(out, "Age") {
       t.Errorf("output incorrectly included Age field")
    }
