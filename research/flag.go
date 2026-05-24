@@ -1,108 +1,149 @@
-package flag
+// maya.go
+package maya
 
 import (
    "fmt"
-   "strconv"
+   "io"
    "strings"
 )
 
-type Value interface {
-   string | int | bool
+type Flag struct {
+   Name       string
+   Value      string
+   Usage      string
+   Set        bool
+   NeedsValue bool
+   Needs      *Flag
 }
 
-type Flag[T Value] struct {
-   Name  string
-   Value T
-   Usage string
-   Needs string
-   Set   bool
-   index int
+func (f *Flag) SetName(name string) *Flag {
+   f.Name = name
+   return f
 }
 
-type FlagSet struct {
-   Strings []*Flag[string]
-   Ints    []*Flag[int]
-   Bools   []*Flag[bool]
+func (f *Flag) SetValue(value string) *Flag {
+   f.Value = value
+   return f
 }
 
-func (f *FlagSet) nextIndex() int {
-   return len(f.Strings) + len(f.Ints) + len(f.Bools)
+func (f *Flag) SetUsage(usage string) *Flag {
+   f.Usage = usage
+   return f
 }
 
-func (f *FlagSet) String(newFlag *Flag[string]) {
-   newFlag.index = f.nextIndex()
-   f.Strings = append(f.Strings, newFlag)
+func (f *Flag) SetNeedsValue(needsValue bool) *Flag {
+   f.NeedsValue = needsValue
+   return f
 }
 
-func (f *FlagSet) Int(newFlag *Flag[int]) {
-   newFlag.index = f.nextIndex()
-   f.Ints = append(f.Ints, newFlag)
+func (f *Flag) SetNeeds(other *Flag) *Flag {
+   f.Needs = other
+   return f
 }
 
-func (f *FlagSet) Bool(newFlag *Flag[bool]) {
-   newFlag.index = f.nextIndex()
-   f.Bools = append(f.Bools, newFlag)
-}
+type FlagSet []*Flag
 
-func (f *FlagSet) Parse(args []string) error {
+func (fs FlagSet) Parse(args []string) error {
    for _, arg := range args {
-      name, value, hasValue := strings.Cut(arg, "=")
+      name, value, hasEqual := strings.Cut(arg, "=")
 
-      var matchedString *Flag[string]
-      var matchedInt *Flag[int]
-      var matchedBool *Flag[bool]
-      matchCount := 0
+      var match *Flag
+      var matches int
 
-      for _, stringFlag := range f.Strings {
-         if strings.HasPrefix(stringFlag.Name, name) {
-            matchedString = stringFlag
-            matchCount++
+      for _, f := range fs {
+         if f.Name == "" {
+            return fmt.Errorf("flag name cannot be empty")
+         }
+         if strings.HasPrefix(f.Name, name) {
+            match = f
+            matches++
          }
       }
 
-      for _, intFlag := range f.Ints {
-         if strings.HasPrefix(intFlag.Name, name) {
-            matchedInt = intFlag
-            matchCount++
-         }
+      if matches > 1 {
+         return fmt.Errorf("ambiguous argument: %s", name)
+      }
+      if matches == 0 {
+         return fmt.Errorf("unknown argument: %s", name)
       }
 
-      for _, boolFlag := range f.Bools {
-         if strings.HasPrefix(boolFlag.Name, name) {
-            matchedBool = boolFlag
-            matchCount++
-         }
+      if match.NeedsValue && !hasEqual {
+         return fmt.Errorf("argument requires a value: %s", name)
+      }
+      if !match.NeedsValue && hasEqual {
+         return fmt.Errorf("argument does not take a value: %s", name)
       }
 
-      if matchCount == 0 {
-         return fmt.Errorf("unknown flag: %s", name)
-      }
-      if matchCount > 1 {
-         return fmt.Errorf("ambiguous flag: %s", name)
-      }
+      match.Value = value
+      match.Set = true
+   }
 
-      if matchedString != nil {
-         matchedString.Value = value
-         matchedString.Set = true
-      } else if matchedInt != nil {
-         parsedInt, err := strconv.Atoi(value)
-         if err != nil {
-            return fmt.Errorf("invalid int value for %s: %v", name, err)
-         }
-         matchedInt.Value = parsedInt
-         matchedInt.Set = true
-      } else if matchedBool != nil {
-         if hasValue {
-            parsedBool, err := strconv.ParseBool(value)
-            if err != nil {
-               return fmt.Errorf("invalid bool value for %s: %v", name, err)
-            }
-            matchedBool.Value = parsedBool
-         } else {
-            matchedBool.Value = true
-         }
-         matchedBool.Set = true
+   return nil
+}
+
+func (fs FlagSet) Usage(w io.Writer, name string) error {
+   for _, f := range fs {
+      if f.Name == "" {
+         return fmt.Errorf("flag name cannot be empty")
       }
    }
-   return nil
+
+   // Helper to determine if we should use the 1-letter prefix or full name
+   getExampleName := func(f *Flag) string {
+      first := f.Name[:1]
+      count := 0
+      for _, fl := range fs {
+         if strings.HasPrefix(fl.Name, first) {
+            count++
+         }
+      }
+      if count == 1 {
+         return first
+      }
+      return f.Name
+   }
+
+   // Helper to build the "Name=value" or "Name" string for the example
+   buildPart := func(f *Flag) string {
+      n := getExampleName(f)
+      if f.NeedsValue {
+         return n + "=value"
+      }
+      return n
+   }
+
+   var err error
+   write := func(format string, a ...any) {
+      if err == nil {
+         _, err = fmt.Fprintf(w, format, a...)
+      }
+   }
+
+   write("Index:\n")
+   for _, f := range fs {
+      if f.NeedsValue {
+         write("\t%s value\n", f.Name)
+      } else {
+         write("\t%s\n", f.Name)
+      }
+
+      if f.Usage != "" && f.Value != "" {
+         write("\t\t%s (default: %s)\n", f.Usage, f.Value)
+      } else if f.Usage != "" {
+         write("\t\t%s\n", f.Usage)
+      } else if f.Value != "" {
+         write("\t\t(default: %s)\n", f.Value)
+      }
+   }
+
+   write("\nExamples:\n")
+   for _, f := range fs {
+      if f.Needs != nil {
+         write("\t%s %s %s\n", name, buildPart(f.Needs), buildPart(f))
+      } else {
+         write("\t%s %s\n", name, buildPart(f))
+      }
+   }
+
+   return err
 }
