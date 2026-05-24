@@ -1,149 +1,73 @@
-// maya.go
-package maya
+package flag
 
 import (
    "fmt"
-   "io"
+   "strconv"
    "strings"
 )
 
-type Flag struct {
-   Name       string
-   Value      string
-   Usage      string
-   Set        bool
-   NeedsValue bool
-   Needs      *Flag
+type Value interface {
+   string | int
 }
 
-func (f *Flag) SetName(name string) *Flag {
-   f.Name = name
-   return f
+type Flag[T Value] struct {
+   Index int
+   Name  string
+   Usage string
+   Value T
 }
 
-func (f *Flag) SetValue(value string) *Flag {
-   f.Value = value
-   return f
+type FlagSet struct {
+   Strings []*Flag[string]
+   Ints    []*Flag[int]
 }
 
-func (f *Flag) SetUsage(usage string) *Flag {
-   f.Usage = usage
-   return f
+func (f *FlagSet) AddString(name string, value string, usage string) {
+   f.Strings = append(f.Strings, &Flag[string]{
+      Index: len(f.Strings) + len(f.Ints),
+      Name:  name,
+      Usage: usage,
+      Value: value,
+   })
 }
 
-func (f *Flag) SetNeedsValue(needsValue bool) *Flag {
-   f.NeedsValue = needsValue
-   return f
+func (f *FlagSet) AddInt(name string, value int, usage string) {
+   f.Ints = append(f.Ints, &Flag[int]{
+      Index: len(f.Strings) + len(f.Ints),
+      Name:  name,
+      Usage: usage,
+      Value: value,
+   })
 }
 
-func (f *Flag) SetNeeds(other *Flag) *Flag {
-   f.Needs = other
-   return f
-}
-
-type FlagSet []*Flag
-
-func (fs FlagSet) Parse(args []string) error {
-   for _, arg := range args {
-      name, value, hasEqual := strings.Cut(arg, "=")
-
-      var match *Flag
-      var matches int
-
-      for _, f := range fs {
-         if f.Name == "" {
-            return fmt.Errorf("flag name cannot be empty")
-         }
-         if strings.HasPrefix(f.Name, name) {
-            match = f
-            matches++
-         }
+func Lookup[T Value](flags []*Flag[T], name string) *Flag[T] {
+   for _, fl := range flags {
+      if fl.Name == name {
+         return fl
       }
-
-      if matches > 1 {
-         return fmt.Errorf("ambiguous argument: %s", name)
-      }
-      if matches == 0 {
-         return fmt.Errorf("unknown argument: %s", name)
-      }
-
-      if match.NeedsValue && !hasEqual {
-         return fmt.Errorf("argument requires a value: %s", name)
-      }
-      if !match.NeedsValue && hasEqual {
-         return fmt.Errorf("argument does not take a value: %s", name)
-      }
-
-      match.Value = value
-      match.Set = true
    }
-
    return nil
 }
 
-func (fs FlagSet) Usage(w io.Writer, name string) error {
-   for _, f := range fs {
-      if f.Name == "" {
-         return fmt.Errorf("flag name cannot be empty")
-      }
-   }
+func (f *FlagSet) Parse(args []string) error {
+   for _, arg := range args {
+      name, value, _ := strings.Cut(arg, "=")
 
-   // Helper to determine if we should use the 1-letter prefix or full name
-   getExampleName := func(f *Flag) string {
-      first := f.Name[:1]
-      count := 0
-      for _, fl := range fs {
-         if strings.HasPrefix(fl.Name, first) {
-            count++
+      if fl := Lookup(f.Strings, name); fl != nil {
+         fl.Value = value
+         continue
+      }
+
+      if fl := Lookup(f.Ints, name); fl != nil {
+         v, err := strconv.Atoi(value)
+         if err != nil {
+            return fmt.Errorf("invalid int value for %s: %v", name, err)
          }
+         fl.Value = v
+         continue
       }
-      if count == 1 {
-         return first
-      }
-      return f.Name
+
+      return fmt.Errorf("unknown flag: %s", name)
    }
-
-   // Helper to build the "Name=value" or "Name" string for the example
-   buildPart := func(f *Flag) string {
-      n := getExampleName(f)
-      if f.NeedsValue {
-         return n + "=value"
-      }
-      return n
-   }
-
-   var err error
-   write := func(format string, a ...any) {
-      if err == nil {
-         _, err = fmt.Fprintf(w, format, a...)
-      }
-   }
-
-   write("Index:\n")
-   for _, f := range fs {
-      if f.NeedsValue {
-         write("\t%s value\n", f.Name)
-      } else {
-         write("\t%s\n", f.Name)
-      }
-
-      if f.Usage != "" && f.Value != "" {
-         write("\t\t%s (default: %s)\n", f.Usage, f.Value)
-      } else if f.Usage != "" {
-         write("\t\t%s\n", f.Usage)
-      } else if f.Value != "" {
-         write("\t\t(default: %s)\n", f.Value)
-      }
-   }
-
-   write("\nExamples:\n")
-   for _, f := range fs {
-      if f.Needs != nil {
-         write("\t%s %s %s\n", name, buildPart(f.Needs), buildPart(f))
-      } else {
-         write("\t%s %s\n", name, buildPart(f))
-      }
-   }
-
-   return err
+   return nil
 }
