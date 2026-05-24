@@ -40,14 +40,15 @@ func (f *Flag) SetNeeds(other *Flag) *Flag {
    return f
 }
 
-// ParseFlag parses the flag's underlying string value into type T using the provided parsing function.
-func ParseFlag[T any](f *Flag, parse func(string) (T, error)) (T, error) {
-   return parse(f.Value)
-}
-
 type FlagSet []*Flag
 
 func (fs FlagSet) Parse(args []string) error {
+   for _, f := range fs {
+      if f.Name == "" {
+         return fmt.Errorf("flag name cannot be empty")
+      }
+   }
+
    for _, arg := range args {
       name, value, hasEqual := strings.Cut(arg, "=")
 
@@ -82,22 +83,64 @@ func (fs FlagSet) Parse(args []string) error {
    return nil
 }
 
-func (fs FlagSet) Usage() string {
+func (fs FlagSet) Usage() (string, error) {
+   for _, f := range fs {
+      if f.Name == "" {
+         return "", fmt.Errorf("flag name cannot be empty")
+      }
+   }
+
    data := new(strings.Builder)
+
+   // Helper to determine if we should use the 1-letter prefix or full name
+   getExampleName := func(f *Flag) string {
+      first := f.Name[:1]
+      count := 0
+      for _, fl := range fs {
+         if strings.HasPrefix(fl.Name, first) {
+            count++
+         }
+      }
+      if count == 1 {
+         return first
+      }
+      return f.Name
+   }
+
+   // Helper to build the "Name=value" or "Name" string for the example
+   buildPart := func(f *Flag) string {
+      name := getExampleName(f)
+      if f.NeedsValue {
+         return name + "=value"
+      }
+      return name
+   }
+
+   fmt.Fprint(data, "Index:\n")
    for _, f := range fs {
       if f.NeedsValue {
-         fmt.Fprintf(data, "%s value\n", f.Name)
+         fmt.Fprintf(data, "\t%s value\n", f.Name)
       } else {
-         fmt.Fprintf(data, "%s\n", f.Name)
+         fmt.Fprintf(data, "\t%s\n", f.Name)
       }
 
       if f.Usage != "" && f.Value != "" {
-         fmt.Fprintf(data, "\t%s (default: %s)\n", f.Usage, f.Value)
+         fmt.Fprintf(data, "\t\t%s (default: %s)\n", f.Usage, f.Value)
       } else if f.Usage != "" {
-         fmt.Fprintf(data, "\t%s\n", f.Usage)
+         fmt.Fprintf(data, "\t\t%s\n", f.Usage)
       } else if f.Value != "" {
-         fmt.Fprintf(data, "\t(default: %s)\n", f.Value)
+         fmt.Fprintf(data, "\t\t(default: %s)\n", f.Value)
       }
    }
-   return data.String()
+
+   fmt.Fprint(data, "\nExamples:\n")
+   for _, f := range fs {
+      if f.Needs != nil {
+         fmt.Fprintf(data, "\tapp %s %s\n", buildPart(f.Needs), buildPart(f))
+      } else {
+         fmt.Fprintf(data, "\tapp %s\n", buildPart(f))
+      }
+   }
+
+   return data.String(), nil
 }

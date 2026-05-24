@@ -4,7 +4,6 @@ package maya
 import (
    "fmt"
    "os"
-   "strconv"
    "strings"
    "testing"
 )
@@ -45,56 +44,91 @@ func TestFlagSetParse_Success(t *testing.T) {
    }
 }
 
-func TestFlagSetUsage(t *testing.T) {
+func TestFlagSetParse_EmptyNameError(t *testing.T) {
    fs := FlagSet{
-      new(Flag).SetName("host").SetValue("localhost").SetUsage("server host address").SetNeedsValue(true),
-      new(Flag).SetName("port").SetValue("8080").SetUsage("server port number").SetNeedsValue(true),
+      new(Flag).SetName("host").SetNeedsValue(true),
+      new(Flag).SetName(""), // Empty name
+   }
+
+   err := fs.Parse([]string{"host=127.0.0.1"})
+   if err == nil {
+      t.Fatal("expected error due to empty flag name, got nil")
+   }
+
+   if err.Error() != "flag name cannot be empty" {
+      t.Errorf("expected error 'flag name cannot be empty', got '%s'", err.Error())
+   }
+}
+
+func TestFlagSetUsage_Success(t *testing.T) {
+   hostFlag := new(Flag).SetName("host").SetValue("localhost").SetUsage("server host address").SetNeedsValue(true)
+
+   fs := FlagSet{
+      hostFlag,
+      new(Flag).SetName("port").SetValue("8080").SetUsage("server port number").SetNeeds(hostFlag).SetNeedsValue(true),
+      new(Flag).SetName("proxy").SetUsage("proxy address").SetNeedsValue(true), // Added to make 'p' non-unique
       new(Flag).SetName("verbose").SetUsage("enable verbose logging").SetNeedsValue(false),
       new(Flag).SetName("retries").SetValue("3").SetNeedsValue(true),
       new(Flag).SetName("silent").SetNeedsValue(false),
    }
 
-   usage := fs.Usage()
+   usage, err := fs.Usage()
+   if err != nil {
+      t.Fatalf("unexpected error generating usage: %v", err)
+   }
 
    // Output to stderr to verify visual layout
    fmt.Fprint(os.Stderr, usage)
 
-   if !strings.Contains(usage, "host value\n\tserver host address (default: localhost)\n") {
-      t.Errorf("expected usage to contain formatted host details, got:\n%s", usage)
+   // Validate Index Section
+   if !strings.Contains(usage, "Index:\n") {
+      t.Errorf("expected usage to contain Index header")
    }
-   if !strings.Contains(usage, "port value\n\tserver port number (default: 8080)\n") {
-      t.Errorf("expected usage to contain formatted port details, got:\n%s", usage)
+   if !strings.Contains(usage, "\thost value\n\t\tserver host address (default: localhost)\n") {
+      t.Errorf("expected usage to contain formatted host details in index")
    }
-   if !strings.Contains(usage, "verbose\n\tenable verbose logging\n") {
-      t.Errorf("expected verbose usage to exist correctly, got:\n%s", usage)
+   if !strings.Contains(usage, "\tport value\n\t\tserver port number (default: 8080)\n") {
+      t.Errorf("expected usage to contain formatted port details in index")
    }
-   if !strings.Contains(usage, "retries value\n\t(default: 3)\n") {
-      t.Errorf("expected retries usage to exist with only the default string, got:\n%s", usage)
+   if !strings.Contains(usage, "\tsilent\n") || strings.Contains(usage, "silent\n\t\t") {
+      t.Errorf("expected silent usage to have no extra indentation in index")
    }
-   if !strings.Contains(usage, "silent\n") || strings.Contains(usage, "silent\n\t") {
-      t.Errorf("expected silent usage to have no extra indentation, got:\n%s", usage)
+
+   // Validate Examples Section
+   if !strings.Contains(usage, "Examples:\n") {
+      t.Errorf("expected usage to contain Examples header")
+   }
+
+   // 'h' is unique (host)
+   if !strings.Contains(usage, "\tapp h=value\n") {
+      t.Errorf("expected host example to use unique prefix 'h'")
+   }
+
+   // 'p' is NOT unique (port, proxy) and requires host
+   if !strings.Contains(usage, "\tapp h=value port=value\n") {
+      t.Errorf("expected port example to use full name and include required host")
+   }
+   if !strings.Contains(usage, "\tapp proxy=value\n") {
+      t.Errorf("expected proxy example to use full name")
+   }
+
+   // 'v' is unique (verbose) - takes no value
+   if !strings.Contains(usage, "\tapp v\n") {
+      t.Errorf("expected verbose example to use unique prefix 'v' with no value")
    }
 }
 
-func TestParseFlag(t *testing.T) {
-   portFlag := new(Flag).SetName("port").SetValue("8080")
-   verboseFlag := new(Flag).SetName("verbose").SetValue("true")
-
-   // Test converting to int
-   port, err := ParseFlag(portFlag, strconv.Atoi)
-   if err != nil {
-      t.Fatalf("unexpected error converting port: %v", err)
-   }
-   if port != 8080 {
-      t.Errorf("expected port to be 8080, got %d", port)
+func TestFlagSetUsage_EmptyNameError(t *testing.T) {
+   fs := FlagSet{
+      new(Flag).SetName(""),
    }
 
-   // Test converting to bool
-   verbose, err := ParseFlag(verboseFlag, strconv.ParseBool)
-   if err != nil {
-      t.Fatalf("unexpected error converting verbose: %v", err)
+   _, err := fs.Usage()
+   if err == nil {
+      t.Fatal("expected error due to empty flag name, got nil")
    }
-   if !verbose {
-      t.Errorf("expected verbose to be true, got %v", verbose)
+
+   if err.Error() != "flag name cannot be empty" {
+      t.Errorf("expected error 'flag name cannot be empty', got '%s'", err.Error())
    }
 }
