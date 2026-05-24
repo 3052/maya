@@ -3,6 +3,7 @@ package maya
 
 import (
    "fmt"
+   "io"
    "strings"
 )
 
@@ -43,12 +44,6 @@ func (f *Flag) SetNeeds(other *Flag) *Flag {
 type FlagSet []*Flag
 
 func (fs FlagSet) Parse(args []string) error {
-   for _, f := range fs {
-      if f.Name == "" {
-         return fmt.Errorf("flag name cannot be empty")
-      }
-   }
-
    for _, arg := range args {
       name, value, hasEqual := strings.Cut(arg, "=")
 
@@ -56,6 +51,9 @@ func (fs FlagSet) Parse(args []string) error {
       var matches int
 
       for _, f := range fs {
+         if f.Name == "" {
+            return fmt.Errorf("flag name cannot be empty")
+         }
          if strings.HasPrefix(f.Name, name) {
             match = f
             matches++
@@ -83,14 +81,12 @@ func (fs FlagSet) Parse(args []string) error {
    return nil
 }
 
-func (fs FlagSet) Usage() (string, error) {
+func (fs FlagSet) Usage(w io.Writer, name string) error {
    for _, f := range fs {
       if f.Name == "" {
-         return "", fmt.Errorf("flag name cannot be empty")
+         return fmt.Errorf("flag name cannot be empty")
       }
    }
-
-   data := new(strings.Builder)
 
    // Helper to determine if we should use the 1-letter prefix or full name
    getExampleName := func(f *Flag) string {
@@ -109,38 +105,45 @@ func (fs FlagSet) Usage() (string, error) {
 
    // Helper to build the "Name=value" or "Name" string for the example
    buildPart := func(f *Flag) string {
-      name := getExampleName(f)
+      n := getExampleName(f)
       if f.NeedsValue {
-         return name + "=value"
+         return n + "=value"
       }
-      return name
+      return n
    }
 
-   fmt.Fprint(data, "Index:\n")
+   var err error
+   write := func(format string, a ...any) {
+      if err == nil {
+         _, err = fmt.Fprintf(w, format, a...)
+      }
+   }
+
+   write("Index:\n")
    for _, f := range fs {
       if f.NeedsValue {
-         fmt.Fprintf(data, "\t%s value\n", f.Name)
+         write("\t%s value\n", f.Name)
       } else {
-         fmt.Fprintf(data, "\t%s\n", f.Name)
+         write("\t%s\n", f.Name)
       }
 
       if f.Usage != "" && f.Value != "" {
-         fmt.Fprintf(data, "\t\t%s (default: %s)\n", f.Usage, f.Value)
+         write("\t\t%s (default: %s)\n", f.Usage, f.Value)
       } else if f.Usage != "" {
-         fmt.Fprintf(data, "\t\t%s\n", f.Usage)
+         write("\t\t%s\n", f.Usage)
       } else if f.Value != "" {
-         fmt.Fprintf(data, "\t\t(default: %s)\n", f.Value)
+         write("\t\t(default: %s)\n", f.Value)
       }
    }
 
-   fmt.Fprint(data, "\nExamples:\n")
+   write("\nExamples:\n")
    for _, f := range fs {
       if f.Needs != nil {
-         fmt.Fprintf(data, "\tapp %s %s\n", buildPart(f.Needs), buildPart(f))
+         write("\t%s %s %s\n", name, buildPart(f.Needs), buildPart(f))
       } else {
-         fmt.Fprintf(data, "\tapp %s\n", buildPart(f))
+         write("\t%s %s\n", name, buildPart(f))
       }
    }
 
-   return data.String(), nil
+   return err
 }

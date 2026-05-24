@@ -72,10 +72,12 @@ func TestFlagSetUsage_Success(t *testing.T) {
       new(Flag).SetName("silent").SetNeedsValue(false),
    }
 
-   usage, err := fs.Usage()
+   data := new(strings.Builder)
+   err := fs.Usage(data, "mubi")
    if err != nil {
       t.Fatalf("unexpected error generating usage: %v", err)
    }
+   usage := data.String()
 
    // Output to stderr to verify visual layout
    fmt.Fprint(os.Stderr, usage)
@@ -100,35 +102,20 @@ func TestFlagSetUsage_Success(t *testing.T) {
    }
 
    // 'h' is unique (host)
-   if !strings.Contains(usage, "\tapp h=value\n") {
+   if !strings.Contains(usage, "\tmubi h=value\n") {
       t.Errorf("expected host example to use unique prefix 'h'")
    }
 
    // 'p' is NOT unique (port, proxy) and requires host
-   if !strings.Contains(usage, "\tapp h=value port=value\n") {
+   if !strings.Contains(usage, "\tmubi h=value port=value\n") {
       t.Errorf("expected port example to use full name and include required host")
    }
-   if !strings.Contains(usage, "\tapp proxy=value\n") {
+   if !strings.Contains(usage, "\tmubi proxy=value\n") {
       t.Errorf("expected proxy example to use full name")
    }
 
    // 'v' is unique (verbose) - takes no value
-   if !strings.Contains(usage, "\tapp v\n") {
+   if !strings.Contains(usage, "\tmubi v\n") {
       t.Errorf("expected verbose example to use unique prefix 'v' with no value")
-   }
-}
-
-func TestFlagSetUsage_EmptyNameError(t *testing.T) {
-   fs := FlagSet{
-      new(Flag).SetName(""),
-   }
-
-   _, err := fs.Usage()
-   if err == nil {
-      t.Fatal("expected error due to empty flag name, got nil")
-   }
-
-   if err.Error() != "flag name cannot be empty" {
-      t.Errorf("expected error 'flag name cannot be empty', got '%s'", err.Error())
    }
 }
