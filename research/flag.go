@@ -9,8 +9,8 @@ import (
 
 type Value interface {
    Set(string) error
-   IsZero() bool
    String() string
+   Type() string
 }
 
 type StringValue string
@@ -20,12 +20,12 @@ func (s *StringValue) Set(value string) error {
    return nil
 }
 
-func (s StringValue) IsZero() bool {
-   return s == ""
-}
-
 func (s StringValue) String() string {
    return string(s)
+}
+
+func (s StringValue) Type() string {
+   return "string"
 }
 
 type IntValue int
@@ -39,20 +39,44 @@ func (i *IntValue) Set(value string) error {
    return nil
 }
 
-func (i IntValue) IsZero() bool {
-   return i == 0
-}
-
 func (i IntValue) String() string {
    return strconv.Itoa(int(i))
 }
 
+func (i IntValue) Type() string {
+   return "int"
+}
+
+type BoolValue bool
+
+func (b *BoolValue) Set(value string) error {
+   // If the flag is provided without an equal sign (e.g. "verbose"),
+   // value will be "". Default it to true.
+   if value == "" {
+      *b = true
+      return nil
+   }
+   parsed, err := strconv.ParseBool(value)
+   if err != nil {
+      return err
+   }
+   *b = BoolValue(parsed)
+   return nil
+}
+
+func (b BoolValue) String() string {
+   return strconv.FormatBool(bool(b))
+}
+
+func (b BoolValue) Type() string {
+   return "bool"
+}
+
 type Flag struct {
-   Name       string
-   Usage      string
-   Value      Value
-   IsSet      bool
-   NeedsValue bool
+   Name  string
+   Usage string
+   Value Value
+   IsSet bool
 }
 
 type FlagSet []*Flag
@@ -77,7 +101,7 @@ func (set FlagSet) IsSet(target Value) bool {
 
 func (set FlagSet) Parse(args []string) error {
    for _, arg := range args {
-      name, value, hasEqual := strings.Cut(arg, "=")
+      name, value, _ := strings.Cut(arg, "=")
 
       if name == "" {
          return fmt.Errorf("bad flag syntax: %s", arg)
@@ -86,13 +110,6 @@ func (set FlagSet) Parse(args []string) error {
       matched := set.Lookup(name)
       if matched == nil {
          return fmt.Errorf("flag provided but not defined: %s", name)
-      }
-
-      if matched.NeedsValue && !hasEqual {
-         return fmt.Errorf("flag %s requires '='", name)
-      }
-      if !matched.NeedsValue && hasEqual {
-         return fmt.Errorf("flag %s must not have '='", name)
       }
 
       if err := matched.Value.Set(value); err != nil {
@@ -108,14 +125,14 @@ func (set FlagSet) Parse(args []string) error {
 func (set FlagSet) Usage(w io.Writer) error {
    data := new(strings.Builder)
    for _, item := range set {
-      if item.NeedsValue {
-         fmt.Fprintf(data, "%s value", item.Name)
+      if typ := item.Value.Type(); typ != "" {
+         fmt.Fprintf(data, "%s %s", item.Name, typ)
       } else {
          fmt.Fprintf(data, "%s", item.Name)
       }
 
-      if !item.Value.IsZero() {
-         fmt.Fprintf(data, " (default: %s)", item.Value.String())
+      if def := item.Value.String(); def != "" {
+         fmt.Fprintf(data, " (default: %s)", def)
       }
 
       fmt.Fprintf(data, "\n\t%s\n", item.Usage)
