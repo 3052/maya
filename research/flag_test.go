@@ -21,7 +21,6 @@ func TestParseSuccess(t *testing.T) {
       &Flag{Name: "dry-run", Usage: "Simulate only", Value: &dryRun},
    }
 
-   // Using prefix matching! "ho" matches "host", "po" matches "port", "verb" matches "verbose", etc.
    args := []string{"ho=127.0.0.1", "po=9090", "verb", "dry=false"}
 
    err := set.Parse(args)
@@ -64,7 +63,6 @@ func TestParseAmbiguous(t *testing.T) {
       &Flag{Name: "verbose", Value: &verbose},
    }
 
-   // "verb" matches BOTH "verbose" and "verbosity"
    err := set.Parse([]string{"verb"})
    if err == nil {
       t.Fatalf("expected error for ambiguous flag, got nil")
@@ -76,48 +74,73 @@ func TestParseAmbiguous(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
-   var host StringValue = "127.0.0.1"
-   var verbose BoolValue = false // zero value, default omitted
-   var hidden IntValue = 42      // no usage, but has default
-   var secret StringValue = ""   // no usage, no default
+   var address StringValue = ""
+   var season IntValue = 0
+   var session BoolValue = false
 
    set := FlagSet{
       &Flag{
-         Name:  "host",
-         Usage: "The server host",
-         Value: &host,
+         Name:  "address",
+         Usage: "The network address",
+         Value: &address,
       },
       &Flag{
-         Name:  "verbose",
-         Usage: "Enable verbose output",
-         Value: &verbose,
+         Name:  "season",
+         Usage: "The season number",
+         Value: &season,
+         Needs: "address",
       },
       &Flag{
-         Name:  "hidden",
-         Usage: "",
-         Value: &hidden,
-      },
-      &Flag{
-         Name:  "secret",
-         Usage: "",
-         Value: &secret,
+         Name:  "session",
+         Usage: "Enable the session",
+         Value: &session,
       },
    }
 
    var buf bytes.Buffer
    w := io.MultiWriter(os.Stderr, &buf)
 
-   err := set.Usage(w)
+   err := set.Usage(w, "mubi")
    if err != nil {
       t.Fatalf("unexpected error writing usage: %v", err)
    }
 
-   expected := "host string\n\tThe server host (default 127.0.0.1)\n" +
-      "verbose bool\n\tEnable verbose output\n" +
-      "hidden int\n\t(default 42)\n" +
-      "secret string\n"
+   expected := "Index:\n" +
+      "\taddress string\n" +
+      "\t\tThe network address\n" +
+      "\tseason int\n" +
+      "\t\tThe season number\n" +
+      "\tsession bool\n" +
+      "\t\tEnable the session\n" +
+      "\n" +
+      "Examples:\n" +
+      "\tmubi a=xyz\n" +
+      "\tmubi a=xyz season=789\n" +
+      "\tmubi session\n"
 
    if buf.String() != expected {
       t.Errorf("Usage output mismatch.\nExpected:\n%q\nGot:\n%q", expected, buf.String())
+   }
+}
+
+func TestUsageNeedsError(t *testing.T) {
+   var season IntValue = 0
+
+   set := FlagSet{
+      &Flag{
+         Name:  "season",
+         Usage: "The season number",
+         Value: &season,
+         Needs: "missing",
+      },
+   }
+
+   var buf bytes.Buffer
+   err := set.Usage(&buf, "mubi")
+   if err == nil {
+      t.Fatalf("expected error for missing dependency, got nil")
+   }
+   if !strings.Contains(err.Error(), "needs undefined flag") {
+      t.Errorf("expected missing flag error, got: %v", err)
    }
 }

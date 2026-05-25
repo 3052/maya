@@ -81,6 +81,7 @@ type Flag struct {
    Usage string
    Value Value
    IsSet bool
+   Needs string
 }
 
 type FlagSet []*Flag
@@ -129,8 +130,11 @@ func (set FlagSet) Parse(args []string) error {
    return nil
 }
 
-func (set FlagSet) Usage(w io.Writer) error {
+func (set FlagSet) Usage(w io.Writer, name string) error {
    data := new(strings.Builder)
+
+   // --- 1. Index Section ---
+   fmt.Fprint(data, "Index:\n")
    for _, item := range set {
       nameAndType := item.Name
       if typ := item.Value.Type(); typ != "" {
@@ -141,16 +145,64 @@ func (set FlagSet) Usage(w io.Writer) error {
 
       if def != "" {
          if item.Usage != "" {
-            fmt.Fprintf(data, "%s\n\t%s (default %s)\n", nameAndType, item.Usage, def)
+            fmt.Fprintf(data, "\t%s\n\t\t%s (default %s)\n", nameAndType, item.Usage, def)
          } else {
-            fmt.Fprintf(data, "%s\n\t(default %s)\n", nameAndType, def)
+            fmt.Fprintf(data, "\t%s\n\t\t(default %s)\n", nameAndType, def)
          }
       } else if item.Usage != "" {
-         fmt.Fprintf(data, "%s\n\t%s\n", nameAndType, item.Usage)
+         fmt.Fprintf(data, "\t%s\n\t\t%s\n", nameAndType, item.Usage)
       } else {
-         fmt.Fprintf(data, "%s\n", nameAndType)
+         fmt.Fprintf(data, "\t%s\n", nameAndType)
       }
    }
+
+   // --- 2. Examples Section ---
+   fmt.Fprint(data, "\nExamples:\n")
+
+   formatFlag := func(f *Flag) string {
+      firstLetter := f.Name[:1]
+      count := 0
+      for _, x := range set {
+         if strings.HasPrefix(x.Name, firstLetter) {
+            count++
+         }
+      }
+
+      prefix := f.Name
+      if count == 1 {
+         prefix = firstLetter
+      }
+
+      switch f.Value.Type() {
+      case "string":
+         return fmt.Sprintf("%s=xyz", prefix)
+      case "int":
+         return fmt.Sprintf("%s=789", prefix)
+      case "bool":
+         return prefix
+      default:
+         return fmt.Sprintf("%s=%s", prefix, f.Value.Type())
+      }
+   }
+
+   for _, item := range set {
+      fmt.Fprintf(data, "\t%s", name)
+      if item.Needs != "" {
+         var needed *Flag
+         for _, f := range set {
+            if f.Name == item.Needs {
+               needed = f
+               break
+            }
+         }
+         if needed == nil {
+            return fmt.Errorf("flag %q needs undefined flag %q", item.Name, item.Needs)
+         }
+         fmt.Fprintf(data, " %s", formatFlag(needed))
+      }
+      fmt.Fprintf(data, " %s\n", formatFlag(item))
+   }
+
    _, err := fmt.Fprint(w, data)
    return err
 }
