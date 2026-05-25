@@ -87,180 +87,208 @@ func (c *Cache) Setup(dirName string) error {
    return nil
 }
 
-// Flag represents a command-line flag. T determines the expected value type.
-type Flag[T bool | string | int] struct {
-   Set   bool
-   Value T
+type FlagValue interface {
+   Parse(string) error
+   Type() string
+   Default() string
+   Example() string
 }
 
-// isFlagType acts as a highly efficient, type-safe set to check if a type
-// is one of the valid instantiations of Flag[T].
-var isFlagType = map[reflect.Type]bool{
-   reflect.TypeOf(Flag[bool]{}):   true,
-   reflect.TypeOf(Flag[string]{}): true,
-   reflect.TypeOf(Flag[int]{}):    true,
+type FlagString string
+
+func (s *FlagString) Parse(value string) error {
+   *s = FlagString(value)
+   return nil
 }
 
-// ParseFlags reads the provided args and populates the struct pointer.
-func ParseFlags(args []string, target any) error {
-   rv := reflect.ValueOf(target)
+func (FlagString) Type() string {
+   return "string"
+}
 
-   if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
-      return fmt.Errorf("expected a pointer to a struct")
+func (s FlagString) Default() string {
+   return string(s)
+}
+
+func (FlagString) Example() string {
+   return "xyz"
+}
+
+type FlagInt int
+
+func (i *FlagInt) Parse(value string) error {
+   parsed, err := strconv.Atoi(value)
+   if err != nil {
+      return err
+   }
+   *i = FlagInt(parsed)
+   return nil
+}
+
+func (FlagInt) Type() string {
+   return "int"
+}
+
+func (i FlagInt) Default() string {
+   if i != 0 {
+      return strconv.Itoa(int(i))
+   }
+   return ""
+}
+
+func (FlagInt) Example() string {
+   return "789"
+}
+
+type FlagBool bool
+
+func (b *FlagBool) Parse(value string) error {
+   if value == "" {
+      *b = true
+      return nil
+   }
+   parsed, err := strconv.ParseBool(value)
+   if err != nil {
+      return err
+   }
+   *b = FlagBool(parsed)
+   return nil
+}
+
+func (FlagBool) Type() string {
+   return "bool"
+}
+
+func (b FlagBool) Default() string {
+   if b {
+      return "true"
+   }
+   return ""
+}
+
+func (FlagBool) Example() string {
+   return ""
+}
+
+type Flag struct {
+   Name  string
+   Usage string
+   Value FlagValue
+   Needs string
+   isSet bool
+}
+
+type FlagSet []*Flag
+
+func (set FlagSet) Lookup(name string) *Flag {
+   for _, item := range set {
+      if item.Name == name {
+         return item
+      }
+   }
+   return nil
+}
+
+func (set FlagSet) IsSet(value FlagValue) bool {
+   for _, item := range set {
+      if item.Value == value {
+         return item.isSet
+      }
+   }
+   return false
+}
+
+func (set FlagSet) Parse(args []string) error {
+   for _, arg := range args {
+      name, value, _ := strings.Cut(arg, "=")
+
+      if name == "" {
+         return fmt.Errorf("bad flag syntax: %s", arg)
+      }
+
+      var matched *Flag
+      var matchCount int
+
+      for _, item := range set {
+         if strings.HasPrefix(item.Name, name) {
+            matched = item
+            matchCount++
+         }
+      }
+
+      if matchCount == 0 {
+         return fmt.Errorf("flag provided but not defined: %s", name)
+      }
+      if matchCount > 1 {
+         return fmt.Errorf("ambiguous flag: %s", name)
+      }
+
+      if err := matched.Value.Parse(value); err != nil {
+         return fmt.Errorf("invalid value %q for flag %s: %v", value, matched.Name, err)
+      }
+
+      matched.isSet = true
    }
 
-   elem := rv.Elem()
-   targetType := elem.Type()
+   return nil
+}
 
-   for i := 0; i < len(args); i++ {
-      argName := args[i]
+func (set FlagSet) Usage(w io.Writer, name string) error {
+   data := new(strings.Builder)
 
-      var matchedIndex int
-      var matches []string
+   // --- 1. Index Section ---
+   fmt.Fprint(data, "Index:\n")
+   for _, item := range set {
+      nameAndType := item.Name + " " + item.Value.Type()
+      def := item.Value.Default()
 
-      // Scan the struct fields for matching flag names
-      for j := 0; j < targetType.NumField(); j++ {
-         field := targetType.Field(j)
-
-         if !isFlagType[field.Type] {
-            continue
-         }
-
-         if strings.HasPrefix(field.Name, argName) {
-            matches = append(matches, field.Name)
-            matchedIndex = j
-         }
-      }
-
-      if len(matches) == 0 {
-         return fmt.Errorf("unknown flag: %s", argName)
-      }
-      if len(matches) > 1 {
-         return fmt.Errorf("ambiguous flag: '%s' matches multiple fields %v", argName, matches)
-      }
-
-      matchedField := targetType.Field(matchedIndex)
-      fieldVal := elem.Field(matchedIndex)
-
-      // Mark the flag as used
-      fieldVal.FieldByName("Set").SetBool(true)
-
-      valueField := fieldVal.FieldByName("Value")
-      valueType := valueField.Type()
-
-      // If it's a bool flag, it doesn't need an accompanying CLI value
-      if valueType.Kind() == reflect.Bool {
-         valueField.SetBool(true)
-      } else {
-         if i+1 < len(args) {
-            valStr := args[i+1]
-
-            if valueType.Kind() == reflect.String {
-               valueField.SetString(valStr)
-            } else if valueType.Kind() == reflect.Int {
-               number, err := strconv.Atoi(valStr)
-               if err != nil {
-                  return fmt.Errorf("invalid flag %s: %v", matchedField.Name, err)
-               }
-               valueField.SetInt(int64(number))
-            }
-
-            i++ // skip the value argument in the main loop
+      if def != "" {
+         if item.Usage != "" {
+            fmt.Fprintf(data, "\t%s\n\t\t%s (default %s)\n", nameAndType, item.Usage, def)
          } else {
-            return fmt.Errorf("flag %s requires a value", matchedField.Name)
+            fmt.Fprintf(data, "\t%s\n\t\t(default %s)\n", nameAndType, def)
          }
-      }
-   }
-
-   return nil
-}
-
-// FormatFlags inspects the provided struct pointer and prints an auto-generated
-// human-readable help menu to the provided io.Writer.
-func FormatFlags(w io.Writer, cmdName string, target any) error {
-   rv := reflect.ValueOf(target)
-
-   if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
-      return fmt.Errorf("expected a pointer to a struct")
-   }
-
-   targetType := rv.Elem().Type()
-
-   fmt.Fprintf(w, "Overview: flags can be matched by any unique prefix\n\n")
-   fmt.Fprintln(w, "Index:")
-
-   // Pass 0: Count occurrences of the first letter (byte) of every flag
-   firstLetterCount := make(map[byte]int)
-   for i := 0; i < targetType.NumField(); i++ {
-      field := targetType.Field(i)
-      if isFlagType[field.Type] && len(field.Name) > 0 {
-         firstLetterCount[field.Name[0]]++
-      }
-   }
-
-   // Store a string representation of how each flag looks when used.
-   dummies := make(map[string]string)
-
-   // Pass 1: Print the Index and build the dummy value strings
-   for i := 0; i < targetType.NumField(); i++ {
-      field := targetType.Field(i)
-
-      if !isFlagType[field.Type] || len(field.Name) == 0 {
-         continue
-      }
-
-      valueType := field.Type.Field(1).Type
-      usage := field.Tag.Get("usage")
-
-      // Decide if we should use the single letter or full word for the example
-      firstLetter := field.Name[0]
-      exampleFlagName := field.Name
-      if firstLetterCount[firstLetter] == 1 {
-         exampleFlagName = string(firstLetter)
-      }
-
-      // Print the flag name using a tab
-      if valueType.Kind() == reflect.Bool {
-         fmt.Fprintf(w, "\t%s\n", field.Name)
-         dummies[field.Name] = exampleFlagName
+      } else if item.Usage != "" {
+         fmt.Fprintf(data, "\t%s\n\t\t%s\n", nameAndType, item.Usage)
       } else {
-         fmt.Fprintf(w, "\t%s %s\n", field.Name, valueType)
+         fmt.Fprintf(data, "\t%s\n", nameAndType)
+      }
+   }
 
-         // Assign dummy values based on type
-         if valueType.Kind() == reflect.String {
-            dummies[field.Name] = exampleFlagName + " xyz"
-         } else if valueType.Kind() == reflect.Int {
-            dummies[field.Name] = exampleFlagName + " 123"
+   // --- 2. Examples Section ---
+   fmt.Fprint(data, "\nExamples:\n")
+
+   formatFlag := func(f *Flag) string {
+      firstLetter := f.Name[:1]
+      count := 0
+      for _, x := range set {
+         if strings.HasPrefix(x.Name, firstLetter) {
+            count++
          }
       }
 
-      // Print usage on the next line indented with two tabs to offset from the flag
-      if usage != "" {
-         fmt.Fprintf(w, "\t\t%s\n", usage)
+      prefix := f.Name
+      if count == 1 {
+         prefix = firstLetter
       }
+
+      if ex := f.Value.Example(); ex != "" {
+         return prefix + "=" + ex
+      }
+      return prefix
    }
 
-   fmt.Fprintf(w, "\nExamples:\n")
-
-   // Pass 2: Generate the examples based on the 'depends' tag
-   for i := 0; i < targetType.NumField(); i++ {
-      field := targetType.Field(i)
-
-      if !isFlagType[field.Type] {
-         continue
+   for _, item := range set {
+      fmt.Fprintf(data, "\t%s", name)
+      if item.Needs != "" {
+         needed := set.Lookup(item.Needs)
+         if needed == nil {
+            return fmt.Errorf("flag %q needs undefined flag %q", item.Name, item.Needs)
+         }
+         fmt.Fprintf(data, " %s", formatFlag(needed))
       }
-
-      myDummy := dummies[field.Name]
-      depends := field.Tag.Get("depends")
-
-      // If it has a dependency, print command + parent dummy + my dummy
-      if depends != "" && dummies[depends] != "" {
-         fmt.Fprintf(w, "\t%s %s %s\n", cmdName, dummies[depends], myDummy)
-      } else {
-         // Otherwise print command + my dummy
-         fmt.Fprintf(w, "\t%s %s\n", cmdName, myDummy)
-      }
+      fmt.Fprintf(data, " %s\n", formatFlag(item))
    }
 
-   return nil
+   _, err := fmt.Fprint(w, data)
+   return err
 }
