@@ -155,7 +155,6 @@ func playReadyKey(device string, keyId []byte, contentId string, fetchLicense fu
 }
 
 func widevineKey(device string, keyId, contentId []byte, fetchLicense func([]byte) ([]byte, error)) ([]byte, error) {
-   log.Println("Widevine Device:", device)
    client_id, err := os.ReadFile(filepath.Join(device, "client_id.bin"))
    if err != nil {
       return nil, err

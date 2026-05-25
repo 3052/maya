@@ -17,6 +17,10 @@ import (
 // SetProxy overrides the global http.DefaultTransport with the proxy routing
 // logic
 func SetProxy(proxiesCsv string) error {
+   if proxiesCsv == "" {
+      return nil
+   }
+
    prt := &proxyRoundTripper{}
 
    for _, proxyStr := range strings.Split(proxiesCsv, ",") {
@@ -24,12 +28,9 @@ func SetProxy(proxiesCsv string) error {
       if err != nil {
          return err // Standard Go short-circuit on error
       }
-
       transport := &http.Transport{}
       transport.Proxy = http.ProxyURL(parsedUrl)
       prt.transports = append(prt.transports, transport)
-
-      log.Println("proxy:", proxyStr)
    }
 
    http.DefaultTransport = prt
