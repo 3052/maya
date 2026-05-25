@@ -24,12 +24,9 @@ func SetProxy(proxiesCsv string) error {
       if err != nil {
          return err // Standard Go short-circuit on error
       }
-
       transport := &http.Transport{}
       transport.Proxy = http.ProxyURL(parsedUrl)
       prt.transports = append(prt.transports, transport)
-
-      log.Println("proxy:", proxyStr)
    }
 
    http.DefaultTransport = prt
