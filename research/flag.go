@@ -8,29 +8,29 @@ import (
 )
 
 type Value interface {
-   Set(string) error
-   String() string
+   Parse(string) error
    Type() string
+   Default() string
 }
 
 type StringValue string
 
-func (s *StringValue) Set(value string) error {
+func (s *StringValue) Parse(value string) error {
    *s = StringValue(value)
    return nil
-}
-
-func (s StringValue) String() string {
-   return string(s)
 }
 
 func (s StringValue) Type() string {
    return "string"
 }
 
+func (s StringValue) Default() string {
+   return string(s)
+}
+
 type IntValue int
 
-func (i *IntValue) Set(value string) error {
+func (i *IntValue) Parse(value string) error {
    parsed, err := strconv.Atoi(value)
    if err != nil {
       return err
@@ -39,19 +39,20 @@ func (i *IntValue) Set(value string) error {
    return nil
 }
 
-func (i IntValue) String() string {
-   return strconv.Itoa(int(i))
-}
-
 func (i IntValue) Type() string {
    return "int"
 }
 
+func (i IntValue) Default() string {
+   if i != 0 {
+      return strconv.Itoa(int(i))
+   }
+   return ""
+}
+
 type BoolValue bool
 
-func (b *BoolValue) Set(value string) error {
-   // If the flag is provided without an equal sign (e.g. "verbose"),
-   // value will be "". Default it to true.
+func (b *BoolValue) Parse(value string) error {
    if value == "" {
       *b = true
       return nil
@@ -64,12 +65,15 @@ func (b *BoolValue) Set(value string) error {
    return nil
 }
 
-func (b BoolValue) String() string {
-   return strconv.FormatBool(bool(b))
-}
-
 func (b BoolValue) Type() string {
    return "bool"
+}
+
+func (b BoolValue) Default() string {
+   if b {
+      return "true"
+   }
+   return ""
 }
 
 type Flag struct {
@@ -80,15 +84,6 @@ type Flag struct {
 }
 
 type FlagSet []*Flag
-
-func (set FlagSet) Lookup(name string) *Flag {
-   for _, item := range set {
-      if item.Name == name {
-         return item
-      }
-   }
-   return nil
-}
 
 func (set FlagSet) IsSet(target Value) bool {
    for _, item := range set {
@@ -107,13 +102,25 @@ func (set FlagSet) Parse(args []string) error {
          return fmt.Errorf("bad flag syntax: %s", arg)
       }
 
-      matched := set.Lookup(name)
-      if matched == nil {
-         return fmt.Errorf("flag provided but not defined: %s", name)
+      var matched *Flag
+      var matchCount int
+
+      for _, item := range set {
+         if strings.HasPrefix(item.Name, name) {
+            matched = item
+            matchCount++
+         }
       }
 
-      if err := matched.Value.Set(value); err != nil {
-         return fmt.Errorf("invalid value %q for flag %s: %v", value, name, err)
+      if matchCount == 0 {
+         return fmt.Errorf("flag provided but not defined: %s", name)
+      }
+      if matchCount > 1 {
+         return fmt.Errorf("ambiguous flag: %s", name)
+      }
+
+      if err := matched.Value.Parse(value); err != nil {
+         return fmt.Errorf("invalid value %q for flag %s: %v", value, matched.Name, err)
       }
 
       matched.IsSet = true
@@ -125,17 +132,24 @@ func (set FlagSet) Parse(args []string) error {
 func (set FlagSet) Usage(w io.Writer) error {
    data := new(strings.Builder)
    for _, item := range set {
+      nameAndType := item.Name
       if typ := item.Value.Type(); typ != "" {
-         fmt.Fprintf(data, "%s %s", item.Name, typ)
+         nameAndType += " " + typ
+      }
+
+      def := item.Value.Default()
+
+      if def != "" {
+         if item.Usage != "" {
+            fmt.Fprintf(data, "%s\n\t%s (default %s)\n", nameAndType, item.Usage, def)
+         } else {
+            fmt.Fprintf(data, "%s\n\t(default %s)\n", nameAndType, def)
+         }
+      } else if item.Usage != "" {
+         fmt.Fprintf(data, "%s\n\t%s\n", nameAndType, item.Usage)
       } else {
-         fmt.Fprintf(data, "%s", item.Name)
+         fmt.Fprintf(data, "%s\n", nameAndType)
       }
-
-      if def := item.Value.String(); def != "" {
-         fmt.Fprintf(data, " (default: %s)", def)
-      }
-
-      fmt.Fprintf(data, "\n\t%s\n", item.Usage)
    }
    _, err := fmt.Fprint(w, data)
    return err
