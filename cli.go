@@ -235,27 +235,23 @@ func (set FlagSet) Parse(args []string) error {
 func (set FlagSet) Usage(w io.Writer, name string) error {
    data := new(strings.Builder)
 
-   // --- 1. Index Section ---
-   fmt.Fprint(data, "Index:\n")
+   // --- 1. Flags Section ---
    for _, item := range set {
       nameAndType := item.Name + " " + item.Value.Type()
       def := item.Value.Default()
 
+      fmt.Fprintf(data, "%s\n", nameAndType)
+
+      if item.Usage != "" {
+         fmt.Fprintf(data, "\tusage: %s\n", item.Usage)
+      }
       if def != "" {
-         if item.Usage != "" {
-            fmt.Fprintf(data, "\t%s\n\t\t%s (default %s)\n", nameAndType, item.Usage, def)
-         } else {
-            fmt.Fprintf(data, "\t%s\n\t\t(default %s)\n", nameAndType, def)
-         }
-      } else if item.Usage != "" {
-         fmt.Fprintf(data, "\t%s\n\t\t%s\n", nameAndType, item.Usage)
-      } else {
-         fmt.Fprintf(data, "\t%s\n", nameAndType)
+         fmt.Fprintf(data, "\tdefault: %s\n", def)
       }
    }
 
    // --- 2. Examples Section ---
-   fmt.Fprint(data, "\nExamples:\n")
+   fmt.Fprint(data, "\nexamples:\n")
 
    formatFlag := func(f *Flag) string {
       firstLetter := f.Name[:1]
