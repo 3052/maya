@@ -13,38 +13,36 @@ import (
    "strings"
 )
 
+// Cache holds the pre-computed OS path for the cache directory.
+type Cache string
+
 // Decode reads the XML from the cache directory and populates the structs.
 // It stops and returns an error on the first failure.
-func (c *Cache) Decode(values ...any) error {
-   for _, v := range values {
-      filename := c.GetFilePath(v)
+func (c Cache) Decode(values ...any) error {
+   for _, value := range values {
+      filename := c.GetFilePath(value)
       data, err := os.ReadFile(filename)
       if err != nil {
          return err
       }
-      err = xml.Unmarshal(data, v)
+      err = xml.Unmarshal(data, value)
       if err != nil {
-         return fmt.Errorf("failed to decode XML for %T: %w", v, err)
+         return fmt.Errorf("failed to decode XML for %T: %w", value, err)
       }
    }
    return nil
 }
 
-// Cache holds the pre-computed OS path for the cache directory.
-type Cache struct {
-   FullPath string
-}
-
 // Encode marshals the values and writes them to the cache directory.
 // It stops and returns an error on the first failure.
-func (c *Cache) Encode(values ...any) error {
-   for _, v := range values {
-      filename := c.GetFilePath(v)
+func (c Cache) Encode(values ...any) error {
+   for _, value := range values {
+      filename := c.GetFilePath(value)
 
-      data, err := xml.MarshalIndent(v, "", "  ")
+      data, err := xml.MarshalIndent(value, "", "  ")
       if err != nil {
          // Added type info to the error to know WHICH item failed
-         return fmt.Errorf("failed to encode XML for %T: %w", v, err)
+         return fmt.Errorf("failed to encode XML for %T: %w", value, err)
       }
 
       log.Println("create:", filename)
@@ -60,27 +58,28 @@ func (c *Cache) Encode(values ...any) error {
 
 // GetFilePath unwraps pointers and builds the absolute string path for the file.
 // Exported so users can manually locate, check, or delete cache files.
-func (c *Cache) GetFilePath(v any) string {
-   t := reflect.TypeOf(v)
-   for t.Kind() == reflect.Ptr {
-      t = t.Elem()
+func (c Cache) GetFilePath(value any) string {
+   valueType := reflect.TypeOf(value)
+   for valueType.Kind() == reflect.Ptr {
+      valueType = valueType.Elem()
    }
 
-   return filepath.Join(c.FullPath, t.Name()+".xml")
+   return filepath.Join(string(c), valueType.Name()+".xml")
 }
 
 // Setup computes the full cache path, creates the directory exactly once,
-// and stores the path in the Cache struct.
+// and stores the path in the Cache type.
 func (c *Cache) Setup(dirName string) error {
    cacheDir, err := os.UserCacheDir()
    if err != nil {
       return fmt.Errorf("failed to get cache directory: %w", err)
    }
 
-   c.FullPath = filepath.Join(cacheDir, dirName)
+   // Update the underlying string value (requires pointer receiver)
+   *c = Cache(filepath.Join(cacheDir, dirName))
 
    // Create the directory immediately upon setup
-   if err := os.MkdirAll(c.FullPath, os.ModePerm); err != nil {
+   if err := os.MkdirAll(string(*c), os.ModePerm); err != nil {
       return fmt.Errorf("failed to create directory: %w", err)
    }
 
@@ -209,6 +208,11 @@ func (set FlagSet) Parse(args []string) error {
       var matchCount int
 
       for _, item := range set {
+         // Validate inside the existing loop
+         if item.Name == "" {
+            return fmt.Errorf("flag name cannot be empty")
+         }
+
          if strings.HasPrefix(item.Name, name) {
             matched = item
             matchCount++
@@ -236,26 +240,28 @@ func (set FlagSet) Usage(w io.Writer, name string) error {
    data := new(strings.Builder)
 
    // --- 1. Index Section ---
-   fmt.Fprint(data, "Index:\n")
+   fmt.Fprint(data, "index:\n")
    for _, item := range set {
+      // Validate inside the existing loop (protects the next section from panicking)
+      if item.Name == "" {
+         return fmt.Errorf("flag name cannot be empty")
+      }
+
       nameAndType := item.Name + " " + item.Value.Type()
       def := item.Value.Default()
 
+      fmt.Fprintf(data, "     %s\n", nameAndType)
+
+      if item.Usage != "" {
+         fmt.Fprintf(data, "          usage: %s\n", item.Usage)
+      }
       if def != "" {
-         if item.Usage != "" {
-            fmt.Fprintf(data, "\t%s\n\t\t%s (default %s)\n", nameAndType, item.Usage, def)
-         } else {
-            fmt.Fprintf(data, "\t%s\n\t\t(default %s)\n", nameAndType, def)
-         }
-      } else if item.Usage != "" {
-         fmt.Fprintf(data, "\t%s\n\t\t%s\n", nameAndType, item.Usage)
-      } else {
-         fmt.Fprintf(data, "\t%s\n", nameAndType)
+         fmt.Fprintf(data, "          default: %s\n", def)
       }
    }
 
    // --- 2. Examples Section ---
-   fmt.Fprint(data, "\nExamples:\n")
+   fmt.Fprint(data, "\nexamples:\n")
 
    formatFlag := func(f *Flag) string {
       firstLetter := f.Name[:1]
@@ -278,7 +284,7 @@ func (set FlagSet) Usage(w io.Writer, name string) error {
    }
 
    for _, item := range set {
-      fmt.Fprintf(data, "\t%s", name)
+      fmt.Fprintf(data, "     %s", name)
       if item.Needs != "" {
          needed := set.lookup(item.Needs)
          if needed == nil {
