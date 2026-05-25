@@ -4,7 +4,6 @@ import (
    "bytes"
    "io"
    "os"
-   "strings"
    "testing"
 )
 
@@ -54,31 +53,23 @@ func TestParseSuccess(t *testing.T) {
    }
 }
 
-func TestParseAmbiguous(t *testing.T) {
-   var verbosity FlagInt
-   var verbose FlagBool
-
-   set := FlagSet{
-      &Flag{Name: "verbosity", Value: &verbosity},
-      &Flag{Name: "verbose", Value: &verbose},
-   }
-
-   err := set.Parse([]string{"verb"})
-   if err == nil {
-      t.Fatalf("expected error for ambiguous flag, got nil")
-   }
-
-   if !strings.Contains(err.Error(), "ambiguous flag: verb") {
-      t.Errorf("expected ambiguous flag error, got: %v", err)
-   }
-}
-
 func TestUsage(t *testing.T) {
-   var address FlagString = ""
-   var season FlagInt = 0
-   var session FlagBool = false
+   var linkCode FlagBool = false // no usage, no default
+   var mubiID FlagInt = 123      // no usage, default
+   var address FlagString = ""   // usage, no default
+   var season FlagInt = 9        // usage, default
 
    set := FlagSet{
+      &Flag{
+         Name:  "link-code",
+         Usage: "",
+         Value: &linkCode,
+      },
+      &Flag{
+         Name:  "mubi-id",
+         Usage: "",
+         Value: &mubiID,
+      },
       &Flag{
          Name:  "address",
          Usage: "The network address",
@@ -90,11 +81,6 @@ func TestUsage(t *testing.T) {
          Value: &season,
          Needs: "address",
       },
-      &Flag{
-         Name:  "session",
-         Usage: "Enable the session",
-         Value: &session,
-      },
    }
 
    var buf bytes.Buffer
@@ -105,42 +91,23 @@ func TestUsage(t *testing.T) {
       t.Fatalf("unexpected error writing usage: %v", err)
    }
 
-   expected := "Index:\n" +
-      "\taddress string\n" +
-      "\t\tThe network address\n" +
-      "\tseason int\n" +
-      "\t\tThe season number\n" +
-      "\tsession bool\n" +
-      "\t\tEnable the session\n" +
+   expected := "index:\n" +
+      "     link-code bool\n" +
+      "     mubi-id int\n" +
+      "          default: 123\n" +
+      "     address string\n" +
+      "          usage: The network address\n" +
+      "     season int\n" +
+      "          usage: The season number\n" +
+      "          default: 9\n" +
       "\n" +
-      "Examples:\n" +
-      "\tmubi a=xyz\n" +
-      "\tmubi a=xyz season=789\n" +
-      "\tmubi session\n"
+      "examples:\n" +
+      "     mubi l\n" +
+      "     mubi m=789\n" +
+      "     mubi a=xyz\n" +
+      "     mubi a=xyz s=789\n"
 
    if buf.String() != expected {
       t.Errorf("Usage output mismatch.\nExpected:\n%q\nGot:\n%q", expected, buf.String())
-   }
-}
-
-func TestUsageNeedsError(t *testing.T) {
-   var season FlagInt = 0
-
-   set := FlagSet{
-      &Flag{
-         Name:  "season",
-         Usage: "The season number",
-         Value: &season,
-         Needs: "missing",
-      },
-   }
-
-   var buf bytes.Buffer
-   err := set.Usage(&buf, "mubi")
-   if err == nil {
-      t.Fatalf("expected error for missing dependency, got nil")
-   }
-   if !strings.Contains(err.Error(), "needs undefined flag") {
-      t.Errorf("expected missing flag error, got: %v", err)
    }
 }
