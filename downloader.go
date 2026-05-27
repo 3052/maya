@@ -12,27 +12,30 @@ import (
    "time"
 )
 
-type progressTracker struct {
-   total int
-   done  int
-   start time.Time
-   last  time.Time
+type tracker struct {
+   total  int
+   done   int
+   start  time.Time
+   logged time.Time
 }
 
-func (t *progressTracker) record() {
+func (t *tracker) update() {
    t.done++
    now := time.Now()
 
-   if now.Sub(t.last) >= time.Second || t.done == t.total {
-      left := t.total - t.done
+   if now.Sub(t.logged) >= time.Second || t.done == t.total {
+      segmentsLeft := t.total - t.done
       elapsed := now.Sub(t.start)
-      var eta time.Duration
+      var timeLeft time.Duration
+
       if t.done > 0 {
-         avg := elapsed / time.Duration(t.done)
-         eta = avg * time.Duration(left)
+         rate := elapsed / time.Duration(t.done)
+         timeLeft = rate * time.Duration(segmentsLeft)
       }
-      log.Printf("segments done: %d\n\tsegments left: %d\n\ttime left: %v", t.done, left, eta.Truncate(time.Second))
-      t.last = now
+
+      log.Printf("segments done: %d\n\tsegments left: %d\n\ttime elapsed: %v\n\ttime left: %v",
+         t.done, segmentsLeft, elapsed.Truncate(time.Second), timeLeft.Truncate(time.Second))
+      t.logged = now
    }
 }
 
@@ -50,10 +53,10 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
       }
    }
 
-   tracker := progressTracker{
-      total: totalSegments,
-      start: time.Now(),
-      last:  time.Now(),
+   tr := tracker{
+      total:  totalSegments,
+      start:  time.Now(),
+      logged: time.Now(),
    }
 
    pending := make(map[int]result)
@@ -82,7 +85,7 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
             }
          }
 
-         tracker.record()
+         tr.update()
 
          delete(pending, nextIndex)
          nextIndex++
