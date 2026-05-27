@@ -31,7 +31,7 @@ func (t *progressTracker) record() {
          avg := elapsed / time.Duration(t.done)
          eta = avg * time.Duration(left)
       }
-      log.Printf("segments done: %d | left: %d | eta: %v", t.done, left, eta.Truncate(time.Second))
+      log.Printf("segments done: %d\n\tsegments left: %d\n\ttime left: %v", t.done, left, eta.Truncate(time.Second))
       t.last = now
    }
 }
