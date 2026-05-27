@@ -91,7 +91,6 @@ type protectionInfo struct {
 type keyFetcher func(keyId, contentId []byte) ([]byte, error)
 
 func playReadyKey(device string, keyId []byte, contentId string, fetchLicense func([]byte) ([]byte, error)) ([]byte, error) {
-   log.Println("PlayReady Device:", device)
    data, err := os.ReadFile(filepath.Join(device, "bdevcert.dat"))
    if err != nil {
       return nil, err
