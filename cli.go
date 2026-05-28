@@ -225,9 +225,8 @@ func (set FlagSet) Parse(args []string) error {
       if matchCount > 1 {
          return fmt.Errorf("ambiguous flag: %s", name)
       }
-
       if err := matched.Value.Parse(value); err != nil {
-         return fmt.Errorf("invalid value %q for flag %s: %v", value, matched.Name, err)
+         return fmt.Errorf("invalid value for flag %s: %v", matched.Name, err)
       }
 
       matched.isSet = true
