@@ -93,10 +93,10 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
       }
       return segments, nil
    }
-   if segmentList := rep.SegmentList; segmentList != nil {
-      segments := make([]segment, 0, len(segmentList.SegmentUrls))
-      dur := float64(segmentList.Duration) / float64(segmentList.GetTimescale())
-      for _, seg := range segmentList.SegmentUrls {
+   if sl := rep.SegmentList; sl != nil {
+      segments := make([]segment, 0, len(sl.SegmentUrls))
+      dur := float64(sl.Duration) / float64(sl.GetTimescale())
+      for _, seg := range sl.SegmentUrls {
          mediaURL, err := seg.ResolveMedia()
          if err != nil {
             return nil, err

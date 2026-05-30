@@ -65,8 +65,8 @@ func getMiddleBitrate(rep *dash.Representation) error {
 }
 
 // getDashInitSegment locates and fetches the initialization segment for a DASH representation.
-func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, error) {
-   if !typeInfo.IsFmp4 {
+func getDashInitSegment(rep *dash.Representation, info *typeInfo) ([]byte, error) {
+   if !info.IsFmp4 {
       return nil, nil
    }
    // Case 1: Initialization defined in SegmentBase
@@ -97,8 +97,8 @@ func getDashInitSegment(rep *dash.Representation, typeInfo *typeInfo) ([]byte, e
 }
 
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
-   dashGroup, ok := manifest.GetRepresentations()[streamId]
+func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
+   dashGroup, ok := mpd.GetRepresentations()[streamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", streamId)
    }
@@ -106,7 +106,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
       return fmt.Errorf("representation group is empty")
    }
    rep := dashGroup[0]
-   typeInfo, err := detectDashType(rep)
+   info, err := detectDashType(rep)
    if err != nil {
       return err
    }
@@ -125,7 +125,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    if err != nil {
       return err
    }
-   initData, err := getDashInitSegment(rep, typeInfo)
+   initData, err := getDashInitSegment(rep, info)
    if err != nil {
       return err
    }
@@ -135,7 +135,7 @@ func downloadDash(manifest *dash.Mpd, threads int, streamId string, fetchKey key
    }
    job := &downloadJob{
       outputFileNameBase: rep.Id,
-      typeInfo:           typeInfo,
+      info:               info,
       allRequests:        allRequests,
       initSegmentData:    initData,
       manifestProtection: protection,
@@ -160,8 +160,8 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
 }
 
 // listStreamsDash is an internal helper to print streams from a parsed manifest
-func listStreamsDash(manifest *dash.Mpd) error {
-   groups := manifest.GetRepresentations()
+func listStreamsDash(mpd *dash.Mpd) error {
+   groups := mpd.GetRepresentations()
    repsForSorting := make([]*dash.Representation, 0, len(groups))
    for _, group := range groups {
       representation := group[len(group)/2]

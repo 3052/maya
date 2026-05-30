@@ -35,7 +35,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
       return err
    }
 
-   typeInfo, err := determineHlsType(mediaPl)
+   info, err := determineHlsType(mediaPl)
    if err != nil {
       return err
    }
@@ -48,7 +48,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    }
 
    var initData []byte
-   if typeInfo.IsFmp4 && mediaPl.Map != nil {
+   if info.IsFmp4 && mediaPl.Map != nil {
       initData, err = fetchData(mediaPl.Map, nil, true)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
@@ -56,7 +56,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
    }
    job := &downloadJob{
       outputFileNameBase: streamId,
-      typeInfo:           typeInfo,
+      info:               info,
       allRequests:        allRequests,
       initSegmentData:    initData,
       manifestProtection: nil,
