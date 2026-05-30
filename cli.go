@@ -3,50 +3,40 @@ package maya
 
 import (
    "encoding/xml"
-   "errors"
    "fmt"
    "io"
    "log"
    "os"
    "path/filepath"
-   "reflect"
-   "runtime/debug"
    "strconv"
    "strings"
 )
 
-// GetFilePath unwraps pointers and builds the absolute string path for the file.
-// Exported so users can manually locate, check, or delete cache files.
-func (c Cache) GetFilePath(value any) (string, error) {
-   valueType := reflect.TypeOf(value)
-   for valueType.Kind() == reflect.Ptr {
-      valueType = valueType.Elem()
-   }
-
-   pkgPath := valueType.PkgPath()
-
-   if pkgPath == "main" {
-      info, ok := debug.ReadBuildInfo()
-      if !ok {
-         return "", errors.New("failed to read build info: binary was not built with module support")
-      }
-      pkgPath = info.Path
-   }
-
-   return filepath.Join(string(c), pkgPath, valueType.Name()), nil
+// Cacher defines the interface that structs must implement to be cached.
+type Cacher interface {
+   Cache() string
 }
 
 // Cache holds the pre-computed OS path for the cache directory.
 type Cache string
 
+// Setup computes the base cache path and stores it in the Cache type.
+func (c *Cache) Setup() error {
+   cacheDir, err := os.UserCacheDir()
+   if err != nil {
+      return fmt.Errorf("failed to get cache directory: %w", err)
+   }
+
+   *c = Cache(cacheDir)
+
+   return nil
+}
+
 // Decode reads the XML from the cache directory and populates the structs.
 // It stops and returns an error on the first failure.
-func (c Cache) Decode(values ...any) error {
+func (c Cache) Decode(values ...Cacher) error {
    for _, value := range values {
-      filename, err := c.GetFilePath(value)
-      if err != nil {
-         return fmt.Errorf("failed to resolve file path for %T: %w", value, err)
-      }
+      filename := filepath.Join(string(c), value.Cache())
 
       data, err := os.ReadFile(filename)
       if err != nil {
@@ -63,17 +53,14 @@ func (c Cache) Decode(values ...any) error {
 
 // Encode marshals the values and writes them to the cache directory.
 // It stops and returns an error on the first failure.
-func (c Cache) Encode(values ...any) error {
+func (c Cache) Encode(values ...Cacher) error {
    for _, value := range values {
       data, err := xml.MarshalIndent(value, "", "  ")
       if err != nil {
          return fmt.Errorf("failed to encode XML for %T: %w", value, err)
       }
 
-      filename, err := c.GetFilePath(value)
-      if err != nil {
-         return fmt.Errorf("failed to resolve file path for %T: %w", value, err)
-      }
+      filename := filepath.Join(string(c), value.Cache())
 
       if err := os.MkdirAll(filepath.Dir(filename), os.ModePerm); err != nil {
          return fmt.Errorf("failed to create directory for %s: %w", filename, err)
@@ -86,18 +73,6 @@ func (c Cache) Encode(values ...any) error {
          return fmt.Errorf("failed to write file %s: %w", filename, err)
       }
    }
-
-   return nil
-}
-
-// Setup computes the base home path and stores it in the Cache type.
-func (c *Cache) Setup() error {
-   homeDir, err := os.UserHomeDir()
-   if err != nil {
-      return fmt.Errorf("failed to get home directory: %w", err)
-   }
-
-   *c = Cache(homeDir)
 
    return nil
 }

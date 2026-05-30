@@ -14,43 +14,40 @@ import (
    "sync/atomic"
 )
 
-// SetProxy overrides the global http.DefaultTransport with the proxy routing
-// logic
-func SetProxy(proxiesCsv string) error {
-   if proxiesCsv == "" {
-      return nil
+func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
+   if optionsData == nil {
+      optionsData = &Options{}
    }
 
-   prt := &proxyRoundTripper{}
-
-   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-      parsedUrl, err := url.Parse(proxyStr)
-      if err != nil {
-         return err // Standard Go short-circuit on error
-      }
-      transport := &http.Transport{}
-      transport.Proxy = http.ProxyURL(parsedUrl)
-      prt.transports = append(prt.transports, transport)
+   mpd, err := dash.Parse(manifestData.Body, manifestData.Url)
+   if err != nil {
+      return err
    }
 
-   http.DefaultTransport = prt
+   kFetcher, err := optionsData.getKeyFetcher()
+   if err != nil {
+      return err
+   }
 
-   return nil
+   return downloadDash(mpd, optionsData.Threads, streamId, kFetcher)
 }
 
-func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   // Safely increment the index.
-   idx := atomic.AddUint32(&p.index, 1)
+func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
+   if optionsData == nil {
+      optionsData = &Options{}
+   }
 
-   // Safely select the transport
-   transport := p.transports[int(idx)%len(p.transports)]
+   playlist, err := hls.DecodeMaster(string(manifestData.Body), manifestData.Url)
+   if err != nil {
+      return err
+   }
 
-   return transport.RoundTrip(req)
-}
+   kFetcher, err := optionsData.getKeyFetcher()
+   if err != nil {
+      return err
+   }
 
-type proxyRoundTripper struct {
-   transports []*http.Transport
-   index      uint32
+   return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
 }
 
 // doRequest is an internal helper to construct and execute requests with optional logging
@@ -102,9 +99,28 @@ func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]by
    return io.ReadAll(resp.Body)
 }
 
-type Manifest struct {
-   Url  *url.URL
-   Body []byte
+// SetProxy overrides the global http.DefaultTransport with the proxy routing
+// logic
+func SetProxy(proxiesCsv string) error {
+   if proxiesCsv == "" {
+      return nil
+   }
+
+   prt := &proxyRoundTripper{}
+
+   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
+      parsedUrl, err := url.Parse(proxyStr)
+      if err != nil {
+         return err // Standard Go short-circuit on error
+      }
+      transport := &http.Transport{}
+      transport.Proxy = http.ProxyURL(parsedUrl)
+      prt.transports = append(prt.transports, transport)
+   }
+
+   http.DefaultTransport = prt
+
+   return nil
 }
 
 type DrmSystem int
@@ -115,11 +131,13 @@ const (
    DrmWidevine
 )
 
-type Options struct {
-   Threads int
-   Drm     DrmSystem
-   Device  string
-   License func([]byte) ([]byte, error)
+type Manifest struct {
+   Url  *url.URL
+   Body []byte
+}
+
+func (m *Manifest) Cache() string {
+   return "maya.Manifest"
 }
 
 func ListDash(baseUrl *url.URL) (*Manifest, error) {
@@ -128,12 +146,12 @@ func ListDash(baseUrl *url.URL) (*Manifest, error) {
       return nil, err
    }
 
-   manifest, err := dash.Parse(body, baseUrl)
+   mpd, err := dash.Parse(body, baseUrl)
    if err != nil {
       return nil, err
    }
 
-   if err := listStreamsDash(manifest); err != nil {
+   if err := listStreamsDash(mpd); err != nil {
       return nil, err
    }
 
@@ -157,38 +175,24 @@ func ListHls(baseUrl *url.URL) (*Manifest, error) {
    return &Manifest{Url: baseUrl, Body: body}, nil
 }
 
-func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
-   if optionsData == nil {
-      optionsData = &Options{}
-   }
-
-   manifest, err := dash.Parse(manifestData.Body, manifestData.Url)
-   if err != nil {
-      return err
-   }
-
-   kFetcher, err := optionsData.getKeyFetcher()
-   if err != nil {
-      return err
-   }
-
-   return downloadDash(manifest, optionsData.Threads, streamId, kFetcher)
+type Options struct {
+   Threads int
+   Drm     DrmSystem
+   Device  string
+   License func([]byte) ([]byte, error)
 }
 
-func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
-   if optionsData == nil {
-      optionsData = &Options{}
-   }
+func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+   // Safely increment the index.
+   idx := atomic.AddUint32(&p.index, 1)
 
-   playlist, err := hls.DecodeMaster(string(manifestData.Body), manifestData.Url)
-   if err != nil {
-      return err
-   }
+   // Safely select the transport
+   transport := p.transports[int(idx)%len(p.transports)]
 
-   kFetcher, err := optionsData.getKeyFetcher()
-   if err != nil {
-      return err
-   }
+   return transport.RoundTrip(req)
+}
 
-   return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
+type proxyRoundTripper struct {
+   transports []*http.Transport
+   index      uint32
 }

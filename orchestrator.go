@@ -96,7 +96,7 @@ type segment struct {
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.
 type downloadJob struct {
    outputFileNameBase string
-   typeInfo           *typeInfo
+   info               *typeInfo
    allRequests        []segment
    initSegmentData    []byte
    manifestProtection *protectionInfo
@@ -108,7 +108,7 @@ type downloadJob struct {
 func orchestrateDownload(job *downloadJob) error {
    var name strings.Builder
    name.WriteString(job.outputFileNameBase)
-   name.WriteString(job.typeInfo.Extension)
+   name.WriteString(job.info.Extension)
 
    file, err := createFile(name.String())
    if err != nil {
@@ -116,7 +116,7 @@ func orchestrateDownload(job *downloadJob) error {
    }
    defer file.Close()
 
-   if !job.typeInfo.IsFmp4 {
+   if !job.info.IsFmp4 {
       return executeDownload(job.allRequests, nil, nil, file, job.threads)
    }
 
