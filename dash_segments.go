@@ -101,8 +101,16 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
          if err != nil {
             return nil, err
          }
+
+         // Check if a byte range is specified for the segment
+         var headers map[string]string
+         if seg.MediaRange != "" {
+            headers = map[string]string{"Range": "bytes=" + seg.MediaRange}
+         }
+
          segments = append(segments, segment{
             url:      mediaURL,
+            headers:  headers, // Inject the headers here
             duration: dur,
          })
       }

@@ -91,7 +91,15 @@ func getDashInitSegment(rep *dash.Representation, info *typeInfo) ([]byte, error
       if err != nil {
          return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
-      return fetchData(initUrl, nil, true)
+
+      // Check if a byte range is specified for the initialization segment
+      var headers map[string]string
+      if sl.Initialization.Range != "" {
+         headers = map[string]string{"Range": "bytes=" + sl.Initialization.Range}
+      }
+
+      // Pass the headers along
+      return fetchData(initUrl, headers, true)
    }
    return nil, nil
 }
