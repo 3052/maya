@@ -12,10 +12,6 @@ import (
    "strings"
 )
 
-type CacheValue interface {
-   CachePath() string
-}
-
 type Cache string
 
 func (c *Cache) Setup() error {
@@ -69,6 +65,12 @@ func (c Cache) Encode(values ...CacheValue) error {
 
    return nil
 }
+
+type CacheValue interface {
+   CachePath() string
+}
+
+///
 
 type FlagValue interface {
    Parse(string) error
