@@ -70,14 +70,14 @@ type CacheValue interface {
    CachePath() string
 }
 
-///
-
 type FlagValue interface {
    Parse(string) error
    Type() string
    Default() string
    Example() string
 }
+
+///
 
 type FlagString string
 
