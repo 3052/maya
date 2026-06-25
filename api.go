@@ -50,35 +50,9 @@ func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) 
    return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
 }
 
-// doRequest is an internal helper to construct and execute requests with optional logging
-func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
-   reqHeader := make(http.Header)
-   for key, value := range headers {
-      reqHeader.Set(key, value)
-   }
-   req := &http.Request{
-      Method: method,
-      URL:    targetUrl,
-      Header: reqHeader,
-   }
-   if len(body) >= 1 {
-      req.Body = io.NopCloser(bytes.NewReader(body))
-   }
-
-   if logReq {
-      log.Println(req.Method, req.URL)
-   }
-   return http.DefaultClient.Do(req)
-}
-
 // Get performs an HTTP GET request and logs it
 func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
    return doRequest(http.MethodGet, targetUrl, headers, nil, true)
-}
-
-// Post performs an HTTP POST request and logs it
-func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
-   return doRequest(http.MethodPost, targetUrl, headers, body, true)
 }
 
 // Head performs an HTTP HEAD request and logs it
@@ -86,17 +60,9 @@ func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error)
    return doRequest(http.MethodHead, targetUrl, headers, nil, true)
 }
 
-func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
-   resp, err := doRequest(http.MethodGet, targetUrl, headers, nil, logReq)
-   if err != nil {
-      return nil, err
-   }
-   defer resp.Body.Close()
-
-   if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-      return nil, errors.New(resp.Status)
-   }
-   return io.ReadAll(resp.Body)
+// Post performs an HTTP POST request and logs it
+func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
+   return doRequest(http.MethodPost, targetUrl, headers, body, true)
 }
 
 // SetProxy overrides the global http.DefaultTransport with the proxy routing
@@ -123,6 +89,40 @@ func SetProxy(proxiesCsv string) error {
    return nil
 }
 
+// doRequest is an internal helper to construct and execute requests with optional logging
+func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
+   reqHeader := make(http.Header)
+   for key, value := range headers {
+      reqHeader.Set(key, value)
+   }
+   req := &http.Request{
+      Method: method,
+      URL:    targetUrl,
+      Header: reqHeader,
+   }
+   if len(body) >= 1 {
+      req.Body = io.NopCloser(bytes.NewReader(body))
+   }
+
+   if logReq {
+      log.Println(req.Method, req.URL)
+   }
+   return http.DefaultClient.Do(req)
+}
+
+func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
+   resp, err := doRequest(http.MethodGet, targetUrl, headers, nil, logReq)
+   if err != nil {
+      return nil, err
+   }
+   defer resp.Body.Close()
+
+   if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+      return nil, errors.New(resp.Status)
+   }
+   return io.ReadAll(resp.Body)
+}
+
 type DrmSystem int
 
 const (
@@ -134,10 +134,6 @@ const (
 type Manifest struct {
    Url  *url.URL
    Body []byte
-}
-
-func (*Manifest) CachePath() string {
-   return "maya/Manifest"
 }
 
 func ListDash(baseUrl *url.URL) (*Manifest, error) {
@@ -175,11 +171,20 @@ func ListHls(baseUrl *url.URL) (*Manifest, error) {
    return &Manifest{Url: baseUrl, Body: body}, nil
 }
 
+func (*Manifest) CachePath() string {
+   return "maya/Manifest"
+}
+
 type Options struct {
    Threads int
    Drm     DrmSystem
    Device  string
    License func([]byte) ([]byte, error)
+}
+
+type proxyRoundTripper struct {
+   transports []*http.Transport
+   index      uint32
 }
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -190,9 +195,4 @@ func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
    transport := p.transports[int(idx)%len(p.transports)]
 
    return transport.RoundTrip(req)
-}
-
-type proxyRoundTripper struct {
-   transports []*http.Transport
-   index      uint32
 }

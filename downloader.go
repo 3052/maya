@@ -12,31 +12,45 @@ import (
    "time"
 )
 
-type tracker struct {
-   total  int
-   done   int
-   start  time.Time
-   logged time.Time
-}
-
-func (t *tracker) update() {
-   t.done++
-   now := time.Now()
-
-   if now.Sub(t.logged) >= time.Second || t.done == t.total {
-      segmentsLeft := t.total - t.done
-      elapsed := now.Sub(t.start)
-      var timeLeft time.Duration
-
-      if t.done > 0 {
-         rate := elapsed / time.Duration(t.done)
-         timeLeft = rate * time.Duration(segmentsLeft)
-      }
-
-      log.Printf("segments done: %d\n\tsegments left: %d\n\ttime elapsed: %v\n\ttime left: %v",
-         t.done, segmentsLeft, elapsed.Truncate(time.Second), timeLeft.Truncate(time.Second))
-      t.logged = now
+// executeDownload runs the concurrent worker pool to download all segments.
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
+   if threads > 12 {
+      return errors.New("threads cannot be more than 12")
    }
+   if threads < 0 {
+      return errors.New("threads cannot be less than 0")
+   }
+   if threads == 0 {
+      threads = 1
+   }
+
+   if len(requests) == 0 {
+      if remux != nil {
+         return remux.Finish()
+      }
+      return nil
+   }
+
+   workQueue := make(chan workItem, len(requests))
+   results := make(chan result, len(requests))
+   var wg sync.WaitGroup
+   wg.Add(threads)
+   for workerId := 0; workerId < threads; workerId++ {
+      go func() {
+         defer wg.Done()
+         for item := range workQueue {
+            data, err := fetchData(item.request.url, item.request.headers, false)
+            results <- result{index: item.index, data: data, err: err}
+         }
+      }()
+   }
+   doneChan := make(chan error, 1)
+   go processAndWriteSegments(doneChan, results, len(requests), threads, key, remux, file)
+   for reqIndex, req := range requests {
+      workQueue <- workItem{index: reqIndex, request: req}
+   }
+   close(workQueue)
+   return <-doneChan
 }
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
@@ -100,12 +114,6 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
    doneChan <- nil
 }
 
-// workItem is a request bundled with its index for out-of-order processing.
-type workItem struct {
-   index   int
-   request segment
-}
-
 // result is the outcome of a download attempt from a worker.
 type result struct {
    index int
@@ -113,43 +121,35 @@ type result struct {
    err   error
 }
 
-// executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
-   if threads > 12 {
-      return errors.New("threads cannot be more than 12")
-   }
-   if threads < 0 {
-      return errors.New("threads cannot be less than 0")
-   }
-   if threads == 0 {
-      threads = 1
-   }
+type tracker struct {
+   total  int
+   done   int
+   start  time.Time
+   logged time.Time
+}
 
-   if len(requests) == 0 {
-      if remux != nil {
-         return remux.Finish()
+func (t *tracker) update() {
+   t.done++
+   now := time.Now()
+
+   if now.Sub(t.logged) >= time.Second || t.done == t.total {
+      segmentsLeft := t.total - t.done
+      elapsed := now.Sub(t.start)
+      var timeLeft time.Duration
+
+      if t.done > 0 {
+         rate := elapsed / time.Duration(t.done)
+         timeLeft = rate * time.Duration(segmentsLeft)
       }
-      return nil
-   }
 
-   workQueue := make(chan workItem, len(requests))
-   results := make(chan result, len(requests))
-   var wg sync.WaitGroup
-   wg.Add(threads)
-   for workerId := 0; workerId < threads; workerId++ {
-      go func() {
-         defer wg.Done()
-         for item := range workQueue {
-            data, err := fetchData(item.request.url, item.request.headers, false)
-            results <- result{index: item.index, data: data, err: err}
-         }
-      }()
+      log.Printf("segments done: %d\n\tsegments left: %d\n\ttime elapsed: %v\n\ttime left: %v",
+         t.done, segmentsLeft, elapsed.Truncate(time.Second), timeLeft.Truncate(time.Second))
+      t.logged = now
    }
-   doneChan := make(chan error, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), threads, key, remux, file)
-   for reqIndex, req := range requests {
-      workQueue <- workItem{index: reqIndex, request: req}
-   }
-   close(workQueue)
-   return <-doneChan
+}
+
+// workItem is a request bundled with its index for out-of-order processing.
+type workItem struct {
+   index   int
+   request segment
 }

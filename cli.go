@@ -14,17 +14,6 @@ import (
 
 type Cache string
 
-func (c *Cache) Setup() error {
-   cacheDir, err := os.UserCacheDir()
-   if err != nil {
-      return fmt.Errorf("failed to get cache directory: %w", err)
-   }
-
-   *c = Cache(cacheDir)
-
-   return nil
-}
-
 func (c Cache) Decode(values ...CacheValue) error {
    for _, value := range values {
       filename := filepath.Join(string(c), value.CachePath())
@@ -66,65 +55,41 @@ func (c Cache) Encode(values ...CacheValue) error {
    return nil
 }
 
+func (c *Cache) Setup() error {
+   cacheDir, err := os.UserCacheDir()
+   if err != nil {
+      return fmt.Errorf("failed to get cache directory: %w", err)
+   }
+
+   *c = Cache(cacheDir)
+
+   return nil
+}
+
 type CacheValue interface {
    CachePath() string
 }
 
-type FlagValue interface {
-   Parse(string) error
-   Type() string
-   Default() string
-   Example() string
+type Flag struct {
+   Name  string
+   Usage string
+   Value FlagValue
+   Needs string
+   isSet bool
 }
 
-///
+type FlagBool bool
 
-type FlagString string
-
-func (s *FlagString) Parse(value string) error {
-   *s = FlagString(value)
-   return nil
-}
-
-func (FlagString) Type() string {
-   return "string"
-}
-
-func (s FlagString) Default() string {
-   return string(s)
-}
-
-func (FlagString) Example() string {
-   return "xyz"
-}
-
-type FlagInt int
-
-func (i *FlagInt) Parse(value string) error {
-   parsed, err := strconv.Atoi(value)
-   if err != nil {
-      return err
-   }
-   *i = FlagInt(parsed)
-   return nil
-}
-
-func (FlagInt) Type() string {
-   return "int"
-}
-
-func (i FlagInt) Default() string {
-   if i != 0 {
-      return strconv.Itoa(int(i))
+func (b FlagBool) Default() string {
+   if b {
+      return "true"
    }
    return ""
 }
 
-func (FlagInt) Example() string {
-   return "789"
+func (FlagBool) Example() string {
+   return ""
 }
-
-type FlagBool bool
 
 func (b *FlagBool) Parse(value string) error {
    if value == "" {
@@ -143,35 +108,33 @@ func (FlagBool) Type() string {
    return "bool"
 }
 
-func (b FlagBool) Default() string {
-   if b {
-      return "true"
+type FlagInt int
+
+func (i FlagInt) Default() string {
+   if i != 0 {
+      return strconv.Itoa(int(i))
    }
    return ""
 }
 
-func (FlagBool) Example() string {
-   return ""
+func (FlagInt) Example() string {
+   return "789"
 }
 
-type Flag struct {
-   Name  string
-   Usage string
-   Value FlagValue
-   Needs string
-   isSet bool
+func (i *FlagInt) Parse(value string) error {
+   parsed, err := strconv.Atoi(value)
+   if err != nil {
+      return err
+   }
+   *i = FlagInt(parsed)
+   return nil
+}
+
+func (FlagInt) Type() string {
+   return "int"
 }
 
 type FlagSet []*Flag
-
-func (set FlagSet) lookup(name string) *Flag {
-   for _, item := range set {
-      if item.Name == name {
-         return item
-      }
-   }
-   return nil
-}
 
 func (set FlagSet) IsSet(value FlagValue) bool {
    for _, item := range set {
@@ -282,4 +245,41 @@ func (set FlagSet) Usage(w io.Writer, name string) error {
 
    _, err := fmt.Fprint(w, data)
    return err
+}
+
+func (set FlagSet) lookup(name string) *Flag {
+   for _, item := range set {
+      if item.Name == name {
+         return item
+      }
+   }
+   return nil
+}
+
+///
+
+type FlagString string
+
+func (s FlagString) Default() string {
+   return string(s)
+}
+
+func (FlagString) Example() string {
+   return "xyz"
+}
+
+func (s *FlagString) Parse(value string) error {
+   *s = FlagString(value)
+   return nil
+}
+
+func (FlagString) Type() string {
+   return "string"
+}
+
+type FlagValue interface {
+   Parse(string) error
+   Type() string
+   Default() string
+   Example() string
 }
