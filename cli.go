@@ -256,8 +256,6 @@ func (set FlagSet) lookup(name string) *Flag {
    return nil
 }
 
-///
-
 type FlagString string
 
 func (s FlagString) Default() string {
