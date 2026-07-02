@@ -8,20 +8,6 @@ import (
    "slices"
 )
 
-// detectDashType determines the file extension and container type from a DASH Representation's metadata.
-func detectDashType(rep *dash.Representation) (*typeInfo, error) {
-   switch rep.GetMimeType() {
-   case "video/mp4":
-      return &typeInfo{Extension: ".mp4", IsFmp4: true}, nil
-   case "audio/mp4":
-      return &typeInfo{Extension: ".m4a", IsFmp4: true}, nil
-   case "text/vtt":
-      return &typeInfo{Extension: ".vtt", IsFmp4: false}, nil
-   default:
-      return nil, fmt.Errorf("unsupported mime type for stream %s: %s", rep.Id, rep.GetMimeType())
-   }
-}
-
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
 func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := mpd.GetRepresentations()[streamId]
@@ -188,4 +174,18 @@ func listStreamsDash(mpd *dash.Mpd) error {
       fmt.Println(representation)
    }
    return nil
+}
+
+// detectDashType determines the file extension and container type from a DASH Representation's metadata.
+func detectDashType(rep *dash.Representation) (*typeInfo, error) {
+   switch rep.GetMimeType() {
+   case "video/mp4":
+      return &typeInfo{Extension: ".mp4", IsFmp4: true}, nil
+   case "audio/mp4":
+      return &typeInfo{Extension: ".m4a", IsFmp4: true}, nil
+   case "text/vtt":
+      return &typeInfo{Extension: ".vtt", IsFmp4: false}, nil
+   default:
+      return nil, fmt.Errorf("unsupported mime type for stream %s: %s", rep.Id, rep.GetMimeType())
+   }
 }

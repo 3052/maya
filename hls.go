@@ -10,35 +10,6 @@ import (
    "slices"
 )
 
-// determineHlsType extracts the file extension directly from the segment URL.
-func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
-   if len(mediaPl.Segments) == 0 {
-      return nil, errors.New("empty media playlist")
-   }
-
-   firstSegUrl := mediaPl.Segments[0].Uri
-   ext := path.Ext(firstSegUrl.Path)
-   if ext == "" {
-      return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegUrl.String())
-   }
-
-   if ext == ".mp4a" {
-      ext = ".m4a"
-   }
-
-   isFmp4 := false
-   if mediaPl.Map != nil {
-      isFmp4 = true
-   } else if ext == ".mp4" || ext == ".m4s" || ext == ".m4a" {
-      isFmp4 = true
-   }
-
-   return &typeInfo{
-      Extension: ext,
-      IsFmp4:    isFmp4,
-   }, nil
-}
-
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
 func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
    targetUri, err := getHlsStreamUrl(playlist, streamId)
@@ -133,4 +104,33 @@ func listStreamsHls(playlist *hls.MasterPlaylist) error {
       fmt.Println(variant)
    }
    return nil
+}
+
+// determineHlsType extracts the file extension directly from the segment URL.
+func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
+   if len(mediaPl.Segments) == 0 {
+      return nil, errors.New("empty media playlist")
+   }
+
+   firstSegUrl := mediaPl.Segments[0].Uri
+   ext := path.Ext(firstSegUrl.Path)
+   if ext == "" {
+      return nil, fmt.Errorf("no file extension found in segment URL: %s", firstSegUrl.String())
+   }
+
+   if ext == ".mp4a" {
+      ext = ".m4a"
+   }
+
+   isFmp4 := false
+   if mediaPl.Map != nil {
+      isFmp4 = true
+   } else if ext == ".mp4" || ext == ".m4s" || ext == ".m4a" {
+      isFmp4 = true
+   }
+
+   return &typeInfo{
+      Extension: ext,
+      IsFmp4:    isFmp4,
+   }, nil
 }

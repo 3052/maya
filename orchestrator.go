@@ -15,6 +15,46 @@ import (
    "strings"
 )
 
+func createFile(name string) (*os.File, error) {
+   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
+   if err != nil {
+      return nil, err
+   }
+   log.Println("create:", name)
+   return os.Create(name)
+}
+
+// orchestrateDownload contains the shared, high-level logic for executing any download job.
+func orchestrateDownload(job *downloadJob) error {
+   var name strings.Builder
+   name.WriteString(job.outputFileNameBase)
+   name.WriteString(job.info.Extension)
+
+   file, err := createFile(name.String())
+   if err != nil {
+      return err
+   }
+   defer file.Close()
+
+   if !job.info.IsFmp4 {
+      return executeDownload(job.allRequests, nil, nil, file, job.threads)
+   }
+
+   remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
+   if err != nil {
+      return err
+   }
+
+   var key []byte
+   if job.fetchKey != nil {
+      key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
+      if err != nil {
+         return err
+      }
+   }
+   return executeDownload(job.allRequests, key, remux, file, job.threads)
+}
+
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
@@ -77,46 +117,6 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
       remux.Moov.RemovePssh()
    }
    return &remux, initProtection, nil
-}
-
-func createFile(name string) (*os.File, error) {
-   err := os.MkdirAll(filepath.Dir(name), os.ModePerm)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("create:", name)
-   return os.Create(name)
-}
-
-// orchestrateDownload contains the shared, high-level logic for executing any download job.
-func orchestrateDownload(job *downloadJob) error {
-   var name strings.Builder
-   name.WriteString(job.outputFileNameBase)
-   name.WriteString(job.info.Extension)
-
-   file, err := createFile(name.String())
-   if err != nil {
-      return err
-   }
-   defer file.Close()
-
-   if !job.info.IsFmp4 {
-      return executeDownload(job.allRequests, nil, nil, file, job.threads)
-   }
-
-   remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
-   if err != nil {
-      return err
-   }
-
-   var key []byte
-   if job.fetchKey != nil {
-      key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
-      if err != nil {
-         return err
-      }
-   }
-   return executeDownload(job.allRequests, key, remux, file, job.threads)
 }
 
 // downloadJob holds all the extracted, manifest-agnostic information needed to run a download.

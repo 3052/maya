@@ -15,34 +15,6 @@ import (
    "strings"
 )
 
-// getKeyFetcher determines the appropriate key retrieval logic based on the DRM options.
-func (optionsData *Options) getKeyFetcher() (keyFetcher, error) {
-   if optionsData == nil || optionsData.Drm == DrmNone {
-      return nil, nil
-   }
-
-   if optionsData.License == nil {
-      return nil, errors.New("a License function is required when DRM is specified")
-   }
-
-   if optionsData.Device == "" {
-      return nil, errors.New("a Device path is required when DRM is specified")
-   }
-
-   switch optionsData.Drm {
-   case DrmWidevine:
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return widevineKey(optionsData.Device, keyId, contentId, optionsData.License)
-      }, nil
-   case DrmPlayReady:
-      return func(keyId, contentId []byte) ([]byte, error) {
-         return playReadyKey(optionsData.Device, keyId, string(contentId), optionsData.License)
-      }, nil
-   default:
-      return nil, fmt.Errorf("unsupported DRM system: %v", optionsData.Drm)
-   }
-}
-
 const playReadySystemId = "9a04f07998404286ab92e65be0885f95"
 
 const widevineSystemId = "edef8ba979d64acea3c827dcd51d21ed"
@@ -236,4 +208,32 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
    }
 
    return &protectionInfo{ContentId: wv_data.ContentId, KeyId: nil}, nil
+}
+
+// getKeyFetcher determines the appropriate key retrieval logic based on the DRM options.
+func (optionsData *Options) getKeyFetcher() (keyFetcher, error) {
+   if optionsData == nil || optionsData.Drm == DrmNone {
+      return nil, nil
+   }
+
+   if optionsData.License == nil {
+      return nil, errors.New("a License function is required when DRM is specified")
+   }
+
+   if optionsData.Device == "" {
+      return nil, errors.New("a Device path is required when DRM is specified")
+   }
+
+   switch optionsData.Drm {
+   case DrmWidevine:
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return widevineKey(optionsData.Device, keyId, contentId, optionsData.License)
+      }, nil
+   case DrmPlayReady:
+      return func(keyId, contentId []byte) ([]byte, error) {
+         return playReadyKey(optionsData.Device, keyId, string(contentId), optionsData.License)
+      }, nil
+   default:
+      return nil, fmt.Errorf("unsupported DRM system: %v", optionsData.Drm)
+   }
 }
