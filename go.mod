@@ -4,8 +4,8 @@ go 1.26.0
 
 require (
 	41.neocities.org/diana v1.10.0
-	41.neocities.org/luna v1.34.6
-	41.neocities.org/sofia v1.14.0
+	41.neocities.org/luna v1.34.7
+	41.neocities.org/sofia v1.14.2
 )
 
 require (
