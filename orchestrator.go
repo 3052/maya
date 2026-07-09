@@ -24,12 +24,27 @@ func createFile(name string) (*os.File, error) {
    return os.Create(name)
 }
 
-// orchestrateDownload contains the shared, high-level logic for executing any download job.
+// orchestrateDownload contains the shared, high-level logic for executing any download.
 func orchestrateDownload(job *downloadJob) error {
    var name strings.Builder
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.info.Extension)
 
+   // Phase 1: Sample bandwidth to determine if the stream meets the minimum.
+   // Only applies to fMP4 streams with a minimum bandwidth specified.
+   // No file is created during this phase — we may abort entirely.
+   var cached map[int][]byte
+   if job.info.IsFmp4 && job.minBandwidth > 0 {
+      var err error
+      cached, err = sampleBandwidth(job)
+      if err != nil {
+         return err
+      }
+   }
+
+   // Phase 2: Create the file and download all segments.
+   // Cached segments from Phase 1 are written from memory;
+   // remaining segments are downloaded via the worker pool.
    file, err := createFile(name.String())
    if err != nil {
       return err
@@ -37,7 +52,7 @@ func orchestrateDownload(job *downloadJob) error {
    defer file.Close()
 
    if !job.info.IsFmp4 {
-      return executeDownload(job.allRequests, nil, nil, file, job.threads, job.minBandwidth)
+      return executeDownload(job.allRequests, nil, nil, file, job.threads, cached)
    }
 
    remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
@@ -52,7 +67,7 @@ func orchestrateDownload(job *downloadJob) error {
          return err
       }
    }
-   return executeDownload(job.allRequests, key, remux, file, job.threads, job.minBandwidth)
+   return executeDownload(job.allRequests, key, remux, file, job.threads, cached)
 }
 
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {

@@ -8,14 +8,29 @@ import (
    "fmt"
    "io"
    "log"
-   "math"
    "os"
    "sync"
    "time"
 )
 
+// checkBandwidth verifies that the measured bitrate meets the minimum.
+func checkBandwidth(totalBytes uint64, totalDuration float64, minBandwidth int) error {
+   if totalDuration <= 0 {
+      return nil
+   }
+   measuredBps := int(float64(totalBytes*8) / totalDuration)
+   if measuredBps < minBandwidth {
+      return fmt.Errorf("measured bandwidth %d bps is below minimum %d bps",
+         measuredBps, minBandwidth)
+   }
+   log.Printf("bandwidth check passed: %d bps >= %d bps", measuredBps, minBandwidth)
+   return nil
+}
+
 // executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, minBandwidth int) error {
+// Segments present in the cached map are written from memory without
+// re-downloading.
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, cached map[int][]byte) error {
    if threads > 12 {
       return errors.New("threads cannot be more than 12")
    }
@@ -47,25 +62,31 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       }()
    }
    doneChan := make(chan error, 1)
-   go processAndWriteSegments(doneChan, results, requests, threads, key, remux, file, minBandwidth)
+   go processAndWriteSegments(doneChan, results, len(requests), key, remux, file)
+
+   // Queue non-cached segments for download by workers.
+   // Cached segments are sent directly as results — no re-download needed.
    for reqIndex, req := range requests {
-      workQueue <- workItem{index: reqIndex, request: req}
+      if data, ok := cached[reqIndex]; ok {
+         results <- result{index: reqIndex, data: data}
+         delete(cached, reqIndex)
+      } else {
+         workQueue <- workItem{index: reqIndex, request: req}
+      }
    }
    close(workQueue)
    return <-doneChan
 }
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
-// remuxes, and writes data
+// remuxes, and writes data in segment order.
 func processAndWriteSegments(
    doneChan chan<- error,
    results <-chan result,
-   requests []segment,
-   threads int,
+   totalSegments int,
    key []byte,
    remux *sofia.Remuxer,
    dst io.Writer,
-   minBandwidth int,
 ) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
@@ -78,28 +99,11 @@ func processAndWriteSegments(
       }
    }
 
-   totalSegments := len(requests)
-
    tr := tracker{
       total:  totalSegments,
       start:  time.Now(),
       logged: time.Now(),
    }
-
-   // 1/e checkpoint for bandwidth validation.
-   // Inspired by the Secretary Problem (https://wikipedia.org/wiki/Secretary_problem):
-   // we sample the first 1/e (~37%) of segments before making a decision,
-   // as this is the optimal stopping point to get a representative sample.
-   checkpoint := int(float64(totalSegments) / math.E)
-   if checkpoint < 1 {
-      checkpoint = 1
-   }
-
-   var (
-      totalBits     uint64
-      totalDuration float64
-      bwChecked     bool
-   )
 
    pending := make(map[int]result)
    nextIndex := 0
@@ -116,9 +120,6 @@ func processAndWriteSegments(
             break
          }
 
-         totalBits += uint64(len(item.data)) * 8
-         totalDuration += requests[nextIndex].duration
-
          if remux != nil {
             if err := remux.AddSegment(item.data); err != nil {
                doneChan <- err
@@ -133,17 +134,6 @@ func processAndWriteSegments(
 
          tr.update()
 
-         // Bandwidth check at 1/e
-         if !bwChecked && minBandwidth > 0 && totalDuration > 0 && nextIndex+1 >= checkpoint {
-            bwChecked = true
-            measuredBps := int(float64(totalBits) / totalDuration)
-            if measuredBps < minBandwidth {
-               doneChan <- fmt.Errorf("measured bandwidth %d bps is below minimum %d bps", measuredBps, minBandwidth)
-               return
-            }
-            log.Printf("bandwidth check passed: %d bps >= %d bps", measuredBps, minBandwidth)
-         }
-
          delete(pending, nextIndex)
          nextIndex++
       }
@@ -155,6 +145,82 @@ func processAndWriteSegments(
       }
    }
    doneChan <- nil
+}
+
+// sampleBandwidth is Phase 1 of the download process.
+// It downloads evenly-distributed sample segments (without decryption)
+// until the running average segment size converges, then checks the
+// measured bitrate against the minimum. If below minimum, an error is
+// returned and no file is created. Otherwise, the cached segment data
+// is returned for reuse in Phase 2.
+func sampleBandwidth(job *downloadJob) (map[int][]byte, error) {
+   totalSegments := len(job.allRequests)
+
+   // Stride ensures samples are spread across the entire movie rather
+   // than clustered at the start (which is often low-bitrate credits).
+   stride := totalSegments/20 + 1
+
+   // Lookback window and threshold for convergence detection.
+   // The running average is compared to the value from `lookback`
+   // samples ago; if within `threshold` percent, we consider it converged.
+   lookback := totalSegments * 5 / 100
+   if lookback < 1 {
+      lookback = 1
+   }
+   const threshold = 2.0 // percent
+
+   cached := make(map[int][]byte)
+   sampled := make(map[int]bool)
+   var totalBytes uint64
+   var totalDuration float64
+   var runningAvgs []float64
+
+   for n := 0; n < totalSegments; n++ {
+      // Pick the next sample index, evenly distributed across the movie.
+      idx := (n * stride) % totalSegments
+      for sampled[idx] {
+         idx = (idx + 1) % totalSegments
+      }
+      sampled[idx] = true
+
+      seg := job.allRequests[idx]
+      data, err := fetchData(seg.url, seg.headers, false)
+      if err != nil {
+         return nil, err
+      }
+
+      cached[idx] = data
+      totalBytes += uint64(len(data))
+      totalDuration += seg.duration
+
+      runningAvg := float64(totalBytes) / float64(n+1)
+      runningAvgs = append(runningAvgs, runningAvg)
+
+      log.Printf("phase 1: segments %d/%d, total bytes: %.1f MB",
+         n+1, totalSegments, float64(totalBytes)/1e6)
+
+      // Check for convergence once we have enough samples.
+      if n >= lookback {
+         prevAvg := runningAvgs[n-lookback]
+         diff := (runningAvg - prevAvg) / prevAvg * 100
+         if diff < 0 {
+            diff = -diff
+         }
+         if diff < threshold {
+            // Converged — check bandwidth against minimum.
+            if err := checkBandwidth(totalBytes, totalDuration, job.minBandwidth); err != nil {
+               return nil, err
+            }
+            return cached, nil
+         }
+      }
+   }
+
+   // Sampled all segments without converging — check bandwidth anyway.
+   if err := checkBandwidth(totalBytes, totalDuration, job.minBandwidth); err != nil {
+      return nil, err
+   }
+   return cached, nil
 }
 
 // result is the outcome of a download attempt from a worker.
