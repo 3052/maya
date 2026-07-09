@@ -37,7 +37,7 @@ func orchestrateDownload(job *downloadJob) error {
    defer file.Close()
 
    if !job.info.IsFmp4 {
-      return executeDownload(job.allRequests, nil, nil, file, job.threads)
+      return executeDownload(job.allRequests, nil, nil, file, job.threads, job.minBandwidth)
    }
 
    remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
@@ -52,7 +52,7 @@ func orchestrateDownload(job *downloadJob) error {
          return err
       }
    }
-   return executeDownload(job.allRequests, key, remux, file, job.threads)
+   return executeDownload(job.allRequests, key, remux, file, job.threads, job.minBandwidth)
 }
 
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
@@ -128,6 +128,7 @@ type downloadJob struct {
    manifestProtection *protectionInfo
    threads            int
    fetchKey           keyFetcher
+   minBandwidth       int
 }
 
 // segment represents a single chunk to be downloaded.

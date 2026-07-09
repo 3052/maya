@@ -5,6 +5,7 @@ import (
    "41.neocities.org/sofia"
    "crypto/aes"
    "errors"
+   "fmt"
    "io"
    "log"
    "os"
@@ -13,7 +14,7 @@ import (
 )
 
 // executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int) error {
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, minBandwidth int) error {
    if threads > 12 {
       return errors.New("threads cannot be more than 12")
    }
@@ -45,7 +46,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       }()
    }
    doneChan := make(chan error, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), threads, key, remux, file)
+   go processAndWriteSegments(doneChan, results, requests, threads, key, remux, file, minBandwidth)
    for reqIndex, req := range requests {
       workQueue <- workItem{index: reqIndex, request: req}
    }
@@ -55,7 +56,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
 // remuxes, and writes data
-func processAndWriteSegments(doneChan chan<- error, results <-chan result, totalSegments int, threads int, key []byte, remux *sofia.Remuxer, dst io.Writer) {
+func processAndWriteSegments(doneChan chan<- error, results <-chan result, requests []segment, threads int, key []byte, remux *sofia.Remuxer, dst io.Writer, minBandwidth int) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
@@ -67,11 +68,25 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
       }
    }
 
+   totalSegments := len(requests)
+
    tr := tracker{
       total:  totalSegments,
       start:  time.Now(),
       logged: time.Now(),
    }
+
+   // 1/e checkpoint for bandwidth validation
+   checkpoint := int(float64(totalSegments) / 2.718281828)
+   if checkpoint < 1 {
+      checkpoint = 1
+   }
+
+   var (
+      totalBits     uint64
+      totalDuration float64
+      bwChecked     bool
+   )
 
    pending := make(map[int]result)
    nextIndex := 0
@@ -87,6 +102,10 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
          if !ok {
             break
          }
+
+         totalBits += uint64(len(item.data)) * 8
+         totalDuration += requests[nextIndex].duration
+
          if remux != nil {
             if err := remux.AddSegment(item.data); err != nil {
                doneChan <- err
@@ -100,6 +119,17 @@ func processAndWriteSegments(doneChan chan<- error, results <-chan result, total
          }
 
          tr.update()
+
+         // Bandwidth check at 1/e
+         if !bwChecked && minBandwidth > 0 && totalDuration > 0 && nextIndex+1 >= checkpoint {
+            bwChecked = true
+            measuredKbps := int(float64(totalBits) / totalDuration / 1000)
+            if measuredKbps < minBandwidth {
+               doneChan <- fmt.Errorf("measured bandwidth %d Kbps is below minimum %d Kbps", measuredKbps, minBandwidth)
+               return
+            }
+            log.Printf("bandwidth check passed: %d Kbps >= %d Kbps", measuredKbps, minBandwidth)
+         }
 
          delete(pending, nextIndex)
          nextIndex++
