@@ -57,7 +57,16 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
 // remuxes, and writes data
-func processAndWriteSegments(doneChan chan<- error, results <-chan result, requests []segment, threads int, key []byte, remux *sofia.Remuxer, dst io.Writer, minBandwidth int) {
+func processAndWriteSegments(
+   doneChan chan<- error,
+   results <-chan result,
+   requests []segment,
+   threads int,
+   key []byte,
+   remux *sofia.Remuxer,
+   dst io.Writer,
+   minBandwidth int,
+) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
       if err != nil {
