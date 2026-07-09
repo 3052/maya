@@ -3,13 +3,12 @@ package maya
 
 import (
    "41.neocities.org/luna/dash"
-   "errors"
    "fmt"
    "slices"
 )
 
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
+func downloadDash(mpd *dash.Mpd, threads, minBandwidth int, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := mpd.GetRepresentations()[streamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", streamId)
@@ -53,6 +52,7 @@ func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetch
       manifestProtection: protection,
       threads:            threads,
       fetchKey:           fetchKey,
+      minBandwidth:       minBandwidth,
    }
    return orchestrateDownload(job)
 }
@@ -85,72 +85,14 @@ func getDashInitSegment(rep *dash.Representation, info *typeInfo) ([]byte, error
          return nil, fmt.Errorf("failed to resolve DASH SegmentList initialization URL: %w", err)
       }
 
-      // Check if a byte range is specified for the initialization segment
       var headers map[string]string
       if sl.Initialization.Range != "" {
          headers = map[string]string{"Range": "bytes=" + sl.Initialization.Range}
       }
 
-      // Pass the headers along
       return fetchData(initUrl, headers, true)
    }
    return nil, nil
-}
-
-// getMiddleBitrate calculates an accurate bitrate for a representation and stores it...
-func getMiddleBitrate(rep *dash.Representation) error {
-   if rep.SegmentBase != nil {
-      baseUrl, err := rep.ResolveBaseUrl()
-      if err != nil {
-         return err
-      }
-
-      sidxData, err := fetchData(baseUrl, map[string]string{"Range": "bytes=" + rep.SegmentBase.IndexRange}, true)
-      if err != nil {
-         return err
-      }
-
-      segs, err := generateSegmentsFromSidx(rep, sidxData, false)
-      if err != nil {
-         return err
-      }
-      if len(segs) == 0 {
-         return nil
-      }
-      var (
-         totalSizeBits uint64
-         totalDuration float64
-      )
-      for _, seg := range segs {
-         totalSizeBits += seg.sizeBits
-         totalDuration += seg.duration
-      }
-      if totalDuration <= 0 {
-         return errors.New("invalid total duration from sidx for bitrate calculation")
-      }
-      rep.MedianBandwidth = int(float64(totalSizeBits) / totalDuration)
-      return nil
-   }
-   segs, err := generateSegments(rep)
-   if err != nil {
-      return err
-   }
-   if len(segs) == 0 {
-      return nil
-   }
-   mid := segs[len(segs)/2]
-
-   data, err := fetchData(mid.url, mid.headers, true)
-   if err != nil {
-      return err
-   }
-
-   sizeBits := uint64(len(data)) * 8
-   if mid.duration <= 0 {
-      return errors.New("invalid duration for bitrate calculation")
-   }
-   rep.MedianBandwidth = int(float64(sizeBits) / mid.duration)
-   return nil
 }
 
 // listStreamsDash is an internal helper to print streams from a parsed manifest
@@ -159,14 +101,11 @@ func listStreamsDash(mpd *dash.Mpd) error {
    repsForSorting := make([]*dash.Representation, 0, len(groups))
    for _, group := range groups {
       representation := group[len(group)/2]
-      if representation.GetMimeType() == "video/mp4" {
-         if err := getMiddleBitrate(representation); err != nil {
-            return fmt.Errorf("could not calculate bitrate for stream %s: %w", representation.Id, err)
-         }
-      }
       repsForSorting = append(repsForSorting, representation)
    }
-   slices.SortFunc(repsForSorting, dash.Bandwidth)
+   slices.SortFunc(repsForSorting, func(a, b *dash.Representation) int {
+      return a.Bandwidth - b.Bandwidth
+   })
    for index, representation := range repsForSorting {
       if index > 0 {
          fmt.Println()

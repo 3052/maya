@@ -29,7 +29,7 @@ func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options)
       return err
    }
 
-   return downloadDash(mpd, optionsData.Threads, streamId, kFetcher)
+   return downloadDash(mpd, optionsData.Threads, optionsData.MinBandwidth, streamId, kFetcher)
 }
 
 func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -47,7 +47,7 @@ func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) 
       return err
    }
 
-   return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
+   return downloadHls(playlist, optionsData.Threads, optionsData.MinBandwidth, streamId, kFetcher)
 }
 
 // Get performs an HTTP GET request and logs it
@@ -77,7 +77,7 @@ func SetProxy(proxiesCsv string) error {
    for _, proxyStr := range strings.Split(proxiesCsv, ",") {
       parsedUrl, err := url.Parse(proxyStr)
       if err != nil {
-         return err // Standard Go short-circuit on error
+         return err
       }
       transport := &http.Transport{}
       transport.Proxy = http.ProxyURL(parsedUrl)
@@ -176,10 +176,11 @@ func (*Manifest) CachePath() string {
 }
 
 type Options struct {
-   Threads int
-   Drm     DrmSystem
-   Device  string
-   License func([]byte) ([]byte, error)
+   Threads      int
+   Drm          DrmSystem
+   Device       string
+   License      func([]byte) ([]byte, error)
+   MinBandwidth int
 }
 
 type proxyRoundTripper struct {
@@ -188,11 +189,7 @@ type proxyRoundTripper struct {
 }
 
 func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   // Safely increment the index.
    idx := atomic.AddUint32(&p.index, 1)
-
-   // Safely select the transport
    transport := p.transports[int(idx)%len(p.transports)]
-
    return transport.RoundTrip(req)
 }
