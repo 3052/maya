@@ -8,7 +8,7 @@ import (
 )
 
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadDash(mpd *dash.Mpd, threads, minBandwidth int, streamId string, fetchKey keyFetcher) error {
+func downloadDash(mpd *dash.Mpd, threads, minBitrate int, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := mpd.GetRepresentations()[streamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", streamId)
@@ -52,7 +52,7 @@ func downloadDash(mpd *dash.Mpd, threads, minBandwidth int, streamId string, fet
       manifestProtection: protection,
       threads:            threads,
       fetchKey:           fetchKey,
-      minBandwidth:       minBandwidth,
+      minBitrate:         minBitrate,
    }
    return orchestrateDownload(job)
 }

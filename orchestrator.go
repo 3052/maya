@@ -30,13 +30,13 @@ func orchestrateDownload(job *downloadJob) error {
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.info.Extension)
 
-   // Phase 1: Sample bandwidth to determine if the stream meets the minimum.
-   // Only applies to fMP4 streams with a minimum bandwidth specified.
+   // Phase 1: Sample bitrate to determine if the stream meets the minimum.
+   // Only applies to fMP4 streams with a minimum bitrate specified.
    // No file is created during this phase — we may abort entirely.
    var cached map[int][]byte
-   if job.info.IsFmp4 && job.minBandwidth > 0 {
+   if job.info.IsFmp4 && job.minBitrate > 0 {
       var err error
-      cached, err = sampleBandwidth(job)
+      cached, err = sampleBitrate(job)
       if err != nil {
          return err
       }
@@ -143,7 +143,7 @@ type downloadJob struct {
    manifestProtection *protectionInfo
    threads            int
    fetchKey           keyFetcher
-   minBandwidth       int
+   minBitrate         int
 }
 
 // segment represents a single chunk to be downloaded.

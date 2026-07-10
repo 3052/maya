@@ -29,7 +29,7 @@ func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options)
       return err
    }
 
-   return downloadDash(mpd, optionsData.Threads, optionsData.MinBandwidth, streamId, kFetcher)
+   return downloadDash(mpd, optionsData.Threads, optionsData.MinBitrate, streamId, kFetcher)
 }
 
 func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -47,7 +47,7 @@ func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) 
       return err
    }
 
-   return downloadHls(playlist, optionsData.Threads, optionsData.MinBandwidth, streamId, kFetcher)
+   return downloadHls(playlist, optionsData.Threads, optionsData.MinBitrate, streamId, kFetcher)
 }
 
 // Get performs an HTTP GET request and logs it
@@ -176,11 +176,11 @@ func (*Manifest) CachePath() string {
 }
 
 type Options struct {
-   Threads      int
-   Drm          DrmSystem
-   Device       string
-   License      func([]byte) ([]byte, error)
-   MinBandwidth int
+   Threads    int
+   Drm        DrmSystem
+   Device     string
+   License    func([]byte) ([]byte, error)
+   MinBitrate int
 }
 
 type proxyRoundTripper struct {

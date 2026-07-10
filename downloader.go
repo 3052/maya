@@ -13,17 +13,17 @@ import (
    "time"
 )
 
-// checkBandwidth verifies that the measured bitrate meets the minimum.
-func checkBandwidth(totalBytes uint64, totalDuration float64, minBandwidth int) error {
+// checkBitrate verifies that the measured bitrate meets the minimum.
+func checkBitrate(totalBytes uint64, totalDuration float64, minBitrate int) error {
    if totalDuration <= 0 {
       return nil
    }
    measuredBps := int(float64(totalBytes*8) / totalDuration)
-   if measuredBps < minBandwidth {
-      return fmt.Errorf("measured bandwidth %d bps is below minimum %d bps",
-         measuredBps, minBandwidth)
+   if measuredBps < minBitrate {
+      return fmt.Errorf("measured bitrate %d bps is below minimum %d bps",
+         measuredBps, minBitrate)
    }
-   log.Printf("bandwidth check passed: %d bps >= %d bps", measuredBps, minBandwidth)
+   log.Printf("bitrate check passed: %d bps >= %d bps", measuredBps, minBitrate)
    return nil
 }
 
@@ -147,13 +147,13 @@ func processAndWriteSegments(
    doneChan <- nil
 }
 
-// sampleBandwidth is Phase 1 of the download process.
+// sampleBitrate is Phase 1 of the download process.
 // It downloads evenly-distributed sample segments (without decryption)
 // until the running average segment size converges, then checks the
 // measured bitrate against the minimum. If below minimum, an error is
 // returned and no file is created. Otherwise, the cached segment data
 // is returned for reuse in Phase 2.
-func sampleBandwidth(job *downloadJob) (map[int][]byte, error) {
+func sampleBitrate(job *downloadJob) (map[int][]byte, error) {
    totalSegments := len(job.allRequests)
 
    // Stride ensures samples are spread across the entire movie rather
@@ -207,8 +207,8 @@ func sampleBandwidth(job *downloadJob) (map[int][]byte, error) {
             diff = -diff
          }
          if diff < threshold {
-            // Converged — check bandwidth against minimum.
-            if err := checkBandwidth(totalBytes, totalDuration, job.minBandwidth); err != nil {
+            // Converged — check bitrate against minimum.
+            if err := checkBitrate(totalBytes, totalDuration, job.minBitrate); err != nil {
                return nil, err
             }
             return cached, nil
@@ -216,8 +216,8 @@ func sampleBandwidth(job *downloadJob) (map[int][]byte, error) {
       }
    }
 
-   // Sampled all segments without converging — check bandwidth anyway.
-   if err := checkBandwidth(totalBytes, totalDuration, job.minBandwidth); err != nil {
+   // Sampled all segments without converging — check bitrate anyway.
+   if err := checkBitrate(totalBytes, totalDuration, job.minBitrate); err != nil {
       return nil, err
    }
    return cached, nil
