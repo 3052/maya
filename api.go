@@ -10,8 +10,6 @@ import (
    "log"
    "net/http"
    "net/url"
-   "strings"
-   "sync/atomic"
 )
 
 func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -63,30 +61,6 @@ func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error)
 // Post performs an HTTP POST request and logs it
 func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
    return doRequest(http.MethodPost, targetUrl, headers, body, true)
-}
-
-// SetProxy overrides the global http.DefaultTransport with the proxy routing
-// logic
-func SetProxy(proxiesCsv string) error {
-   if proxiesCsv == "" {
-      return nil
-   }
-
-   prt := &proxyRoundTripper{}
-
-   for _, proxyStr := range strings.Split(proxiesCsv, ",") {
-      parsedUrl, err := url.Parse(proxyStr)
-      if err != nil {
-         return err
-      }
-      transport := &http.Transport{}
-      transport.Proxy = http.ProxyURL(parsedUrl)
-      prt.transports = append(prt.transports, transport)
-   }
-
-   http.DefaultTransport = prt
-
-   return nil
 }
 
 // doRequest is an internal helper to construct and execute requests with optional logging
@@ -181,15 +155,4 @@ type Options struct {
    Device     string
    License    func([]byte) ([]byte, error)
    MinBitrate int
-}
-
-type proxyRoundTripper struct {
-   transports []*http.Transport
-   index      uint32
-}
-
-func (p *proxyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-   idx := atomic.AddUint32(&p.index, 1)
-   transport := p.transports[int(idx)%len(p.transports)]
-   return transport.RoundTrip(req)
 }
