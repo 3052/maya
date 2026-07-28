@@ -5,7 +5,8 @@
 > I'll be the one\
 > Who ends up getting hurt
 >
-> [Oklou - 'blade bird'](//youtube.com/watch?v=s5HaMxmYKlQ)
+> Oklou (2026)
+> https://youtube.com/watch?v=s5HaMxmYKlQ
 
 Multi-threaded DASH/HLS downloader with DRM decryption
 
