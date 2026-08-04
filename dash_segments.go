@@ -1,4 +1,3 @@
-// dash_segments.go
 package maya
 
 import (
@@ -143,3 +142,5 @@ func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segm
    }
    return requests, nil
 }
+
+// dash_segments.go

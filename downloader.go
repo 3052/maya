@@ -1,4 +1,3 @@
-// downloader.go
 package maya
 
 import (
@@ -262,3 +261,5 @@ type workItem struct {
    index   int
    request segment
 }
+
+// downloader.go

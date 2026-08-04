@@ -1,4 +1,3 @@
-// drm.go
 package maya
 
 import (
@@ -237,3 +236,5 @@ func (optionsData *Options) getKeyFetcher() (keyFetcher, error) {
       return nil, fmt.Errorf("unsupported DRM system: %v", optionsData.Drm)
    }
 }
+
+// drm.go

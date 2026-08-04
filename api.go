@@ -1,4 +1,3 @@
-// api.go
 package maya
 
 import (
@@ -156,3 +155,5 @@ type Options struct {
    License    func([]byte) ([]byte, error)
    MinBitrate int
 }
+
+// api.go

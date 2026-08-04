@@ -1,4 +1,3 @@
-// hls.go
 package maya
 
 import (
@@ -135,3 +134,5 @@ func determineHlsType(mediaPl *hls.MediaPlaylist) (*typeInfo, error) {
       IsFmp4:    isFmp4,
    }, nil
 }
+
+// hls.go

@@ -1,4 +1,3 @@
-// orchestrator.go
 package maya
 
 import (
@@ -159,3 +158,5 @@ type typeInfo struct {
    Extension string
    IsFmp4    bool
 }
+
+// orchestrator.go

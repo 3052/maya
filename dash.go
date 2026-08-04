@@ -1,4 +1,3 @@
-// dash.go
 package maya
 
 import (
@@ -128,3 +127,5 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
       return nil, fmt.Errorf("unsupported mime type for stream %s: %s", rep.Id, rep.GetMimeType())
    }
 }
+
+// dash.go

@@ -1,4 +1,3 @@
-// cli.go
 package maya
 
 import (
@@ -281,3 +280,5 @@ type FlagValue interface {
    Default() string
    Example() string
 }
+
+// cli.go
