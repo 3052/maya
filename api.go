@@ -3,7 +3,6 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
-   "bytes"
    "errors"
    "io"
    "log"
@@ -47,44 +46,22 @@ func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) 
    return downloadHls(playlist, optionsData.Threads, optionsData.MinBitrate, streamId, kFetcher)
 }
 
-// Get performs an HTTP GET request and logs it
-func Get(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
-   return doRequest(http.MethodGet, targetUrl, headers, nil, true)
-}
-
-// Head performs an HTTP HEAD request and logs it
-func Head(targetUrl *url.URL, headers map[string]string) (*http.Response, error) {
-   return doRequest(http.MethodHead, targetUrl, headers, nil, true)
-}
-
-// Post performs an HTTP POST request and logs it
-func Post(targetUrl *url.URL, headers map[string]string, body []byte) (*http.Response, error) {
-   return doRequest(http.MethodPost, targetUrl, headers, body, true)
-}
-
-// doRequest is an internal helper to construct and execute requests with optional logging
-func doRequest(method string, targetUrl *url.URL, headers map[string]string, body []byte, logReq bool) (*http.Response, error) {
+func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
    reqHeader := make(http.Header)
-   for key, value := range headers {
-      reqHeader.Set(key, value)
+   for k, v := range headers {
+      reqHeader.Set(k, v)
    }
    req := &http.Request{
-      Method: method,
+      Method: http.MethodGet,
       URL:    targetUrl,
       Header: reqHeader,
    }
-   if len(body) >= 1 {
-      req.Body = io.NopCloser(bytes.NewReader(body))
-   }
+   // body is nil for GET
 
    if logReq {
       log.Println(req.Method, req.URL)
    }
-   return http.DefaultClient.Do(req)
-}
-
-func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
-   resp, err := doRequest(http.MethodGet, targetUrl, headers, nil, logReq)
+   resp, err := http.DefaultClient.Do(req)
    if err != nil {
       return nil, err
    }
