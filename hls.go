@@ -28,7 +28,8 @@ func downloadHls(playlist *hls.MasterPlaylist, threads, minBitrate int, streamId
    allRequests := make([]segment, len(mediaPl.Segments))
    for index, hlsSeg := range mediaPl.Segments {
       allRequests[index] = segment{
-         url: hlsSeg.Uri,
+         url:      hlsSeg.Uri,
+         duration: hlsSeg.Duration,
       }
    }
 
