@@ -74,7 +74,9 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       }
    }
    close(workQueue)
-   return <-doneChan
+   err := <-doneChan
+   wg.Wait()
+   return err
 }
 
 // processAndWriteSegments consumes results from the worker pool, decrypts,
