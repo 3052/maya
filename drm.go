@@ -191,14 +191,9 @@ func getDashProtection(rep *dash.Representation) (*protectionInfo, error) {
       return nil, nil
    }
 
-   // If the data is wrapped in a standard MP4 pssh box, extract the payload.
-   // Otherwise, assume it's already the raw Widevine protobuf data.
-   if len(pssh_data) >= 8 && string(pssh_data[4:8]) == "pssh" {
-      pssh_box, err := sofia.DecodePsshBox(pssh_data)
-      if err != nil {
-         return nil, fmt.Errorf("could not parse pssh box from dash manifest: %w", err)
-      }
-      pssh_data = pssh_box.Data
+   pssh_data, err := sofia.ExtractPsshData(pssh_data)
+   if err != nil {
+      return nil, fmt.Errorf("could not extract pssh data from dash manifest: %w", err)
    }
 
    wv_data, err := widevine.DecodePsshData(pssh_data)

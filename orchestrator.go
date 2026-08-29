@@ -128,7 +128,6 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
             }
          }
       }
-      remux.Moov.RemovePssh()
    }
    return &remux, initProtection, nil
 }
