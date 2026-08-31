@@ -8,6 +8,7 @@ import (
    "log"
    "net/http"
    "net/url"
+   "time"
 )
 
 func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -25,7 +26,7 @@ func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options)
       return err
    }
 
-   return downloadDash(mpd, optionsData.Threads, optionsData.MinBitrate, streamId, kFetcher)
+   return downloadDash(mpd, optionsData.Threads, optionsData.Timeout, streamId, kFetcher)
 }
 
 func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -43,10 +44,10 @@ func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) 
       return err
    }
 
-   return downloadHls(playlist, optionsData.Threads, optionsData.MinBitrate, streamId, kFetcher)
+   return downloadHls(playlist, optionsData.Threads, optionsData.Timeout, streamId, kFetcher)
 }
 
-func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]byte, error) {
+func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool, timeout time.Duration) ([]byte, error) {
    reqHeader := make(http.Header)
    for k, v := range headers {
       reqHeader.Set(k, v)
@@ -61,7 +62,13 @@ func fetchData(targetUrl *url.URL, headers map[string]string, logReq bool) ([]by
    if logReq {
       log.Println(req.Method, req.URL)
    }
-   resp, err := http.DefaultClient.Do(req)
+   // A Client with a nil Transport uses http.DefaultTransport,
+   // so connection pooling is shared across requests.
+   client := http.DefaultClient
+   if timeout > 0 {
+      client = &http.Client{Timeout: timeout}
+   }
+   resp, err := client.Do(req)
    if err != nil {
       return nil, err
    }
@@ -87,7 +94,7 @@ type Manifest struct {
 }
 
 func ListDash(baseUrl *url.URL) (*Manifest, error) {
-   body, err := fetchData(baseUrl, nil, true)
+   body, err := fetchData(baseUrl, nil, true, 0)
    if err != nil {
       return nil, err
    }
@@ -105,7 +112,7 @@ func ListDash(baseUrl *url.URL) (*Manifest, error) {
 }
 
 func ListHls(baseUrl *url.URL) (*Manifest, error) {
-   body, err := fetchData(baseUrl, nil, true)
+   body, err := fetchData(baseUrl, nil, true, 0)
    if err != nil {
       return nil, err
    }
@@ -126,11 +133,11 @@ func (*Manifest) CachePath() string {
 }
 
 type Options struct {
-   Threads    int
-   Drm        DrmSystem
-   Device     string
-   License    func([]byte) ([]byte, error)
-   MinBitrate int
+   Threads int
+   Timeout time.Duration
+   Drm     DrmSystem
+   Device  string
+   License func([]byte) ([]byte, error)
 }
 
 // api.go

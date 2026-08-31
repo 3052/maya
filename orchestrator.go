@@ -4,7 +4,6 @@ import (
    "41.neocities.org/diana/playReady"
    "41.neocities.org/diana/widevine"
    "41.neocities.org/sofia"
-   "bytes"
    "encoding/hex"
    "fmt"
    "log"
@@ -12,6 +11,7 @@ import (
    "os"
    "path/filepath"
    "strings"
+   "time"
 )
 
 func createFile(name string) (*os.File, error) {
@@ -29,21 +29,6 @@ func orchestrateDownload(job *downloadJob) error {
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.info.Extension)
 
-   // Phase 1: Sample bitrate to determine if the stream meets the minimum.
-   // Only applies to fMP4 streams with a minimum bitrate specified.
-   // No file is created during this phase — we may abort entirely.
-   var cached map[int][]byte
-   if job.info.IsFmp4 && job.minBitrate > 0 {
-      var err error
-      cached, err = sampleBitrate(job)
-      if err != nil {
-         return err
-      }
-   }
-
-   // Phase 2: Create the file and download all segments.
-   // Cached segments from Phase 1 are written from memory;
-   // remaining segments are downloaded via the worker pool.
    file, err := createFile(name.String())
    if err != nil {
       return err
@@ -51,7 +36,7 @@ func orchestrateDownload(job *downloadJob) error {
    defer file.Close()
 
    if !job.info.IsFmp4 {
-      return executeDownload(job.allRequests, nil, nil, file, job.threads, cached)
+      return executeDownload(job.allRequests, nil, nil, file, job.threads, job.timeout)
    }
 
    remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
@@ -66,7 +51,7 @@ func orchestrateDownload(job *downloadJob) error {
          return err
       }
    }
-   return executeDownload(job.allRequests, key, remux, file, job.threads, cached)
+   return executeDownload(job.allRequests, key, remux, file, job.threads, job.timeout)
 }
 
 func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
@@ -108,26 +93,7 @@ func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protec
          }
       }
 
-      if len(remux.Moov.Trak) > 0 {
-         trak := remux.Moov.Trak[0]
-         if trak.Mdia != nil {
-            if trak.Mdia.Minf != nil {
-               if trak.Mdia.Minf.Stbl != nil {
-                  if trak.Mdia.Minf.Stbl.Stsd != nil {
-                     for _, enc := range trak.Mdia.Minf.Stbl.Stsd.EncChildren {
-                        if enc.Sinf != nil && enc.Sinf.Schi != nil && enc.Sinf.Schi.Tenc != nil {
-                           var zeroKid [16]byte
-                           if !bytes.Equal(enc.Sinf.Schi.Tenc.DefaultKID[:], zeroKid[:]) {
-                              initProtection.KeyId = enc.Sinf.Schi.Tenc.DefaultKID[:]
-                              break
-                           }
-                        }
-                     }
-                  }
-               }
-            }
-         }
-      }
+      initProtection.KeyId = remux.Moov.FindDefaultKID()
    }
    return &remux, initProtection, nil
 }
@@ -140,8 +106,8 @@ type downloadJob struct {
    initSegmentData    []byte
    manifestProtection *protectionInfo
    threads            int
+   timeout            time.Duration
    fetchKey           keyFetcher
-   minBitrate         int
 }
 
 // segment represents a single chunk to be downloaded.
