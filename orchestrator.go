@@ -29,36 +29,58 @@ func orchestrateDownload(job *downloadJob) error {
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.info.Extension)
 
-   file, err := createFile(name.String())
+   file, state, err := openOutput(name.String())
    if err != nil {
       return err
    }
    defer file.Close()
 
-   if !job.info.IsFmp4 {
-      return executeDownload(job.allRequests, nil, nil, file, job.threads, job.timeout)
-   }
-
-   remux, initProtection, err := initializeRemuxer(job.initSegmentData, file)
-   if err != nil {
-      return err
-   }
-
+   var remux *sofia.Remuxer
    var key []byte
-   if job.fetchKey != nil {
-      key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
+   if job.info.IsFmp4 {
+      var initProtection *protectionInfo
+      remux, initProtection, err = initializeRemuxer(job.initSegmentData, file, state)
       if err != nil {
          return err
       }
+
+      if job.fetchKey != nil {
+         key, err = getKeyForStream(job.fetchKey, job.manifestProtection, initProtection)
+         if err != nil {
+            return err
+         }
+      }
    }
-   return executeDownload(job.allRequests, key, remux, file, job.threads, job.timeout)
+
+   rlog, err := createResumeLog(name.String()+".csv", state.records)
+   if err != nil {
+      return err
+   }
+   defer rlog.Close()
+
+   if len(state.records) > 0 {
+      log.Printf("resume: skipping %d/%d already-downloaded segments", len(state.records), len(job.allRequests))
+   }
+
+   err = executeDownload(job.allRequests[len(state.records):], key, remux, file, job.threads, job.timeout, rlog.record)
+   if err != nil {
+      return err
+   }
+   return os.Remove(rlog.file.Name())
 }
 
-func initializeRemuxer(firstData []byte, file *os.File) (*sofia.Remuxer, *protectionInfo, error) {
+func initializeRemuxer(firstData []byte, file *os.File, state *resumeState) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
    if len(firstData) > 0 {
-      if err := remux.Initialize(firstData); err != nil {
+      var err error
+      if len(state.records) > 0 {
+         samples, chunkOffsets, samplesPerChunk := state.remuxState()
+         err = remux.Resume(firstData, len(state.records), samples, chunkOffsets, samplesPerChunk)
+      } else {
+         err = remux.Initialize(firstData)
+      }
+      if err != nil {
          return nil, nil, err
       }
    }

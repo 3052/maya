@@ -12,7 +12,7 @@ import (
 )
 
 // executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, timeout time.Duration) error {
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, timeout time.Duration, record func(*segmentRecord) error) error {
    if threads > 12 {
       return errors.New("threads cannot be more than 12")
    }
@@ -30,8 +30,8 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       return nil
    }
 
-   workQueue := make(chan workItem, len(requests))
-   results := make(chan result, len(requests))
+   workQueue := make(chan *workItem, len(requests))
+   results := make(chan *result, len(requests))
    var wg sync.WaitGroup
    wg.Add(threads)
    for workerId := 0; workerId < threads; workerId++ {
@@ -39,15 +39,15 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
          defer wg.Done()
          for item := range workQueue {
             data, err := fetchData(item.request.url, item.request.headers, false, timeout)
-            results <- result{index: item.index, data: data, err: err}
+            results <- &result{index: item.index, data: data, err: err}
          }
       }()
    }
    doneChan := make(chan error, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), key, remux, file)
+   go processAndWriteSegments(doneChan, results, len(requests), key, remux, file, record)
 
-   for reqIndex, req := range requests {
-      workQueue <- workItem{index: reqIndex, request: req}
+   for reqIndex := range requests {
+      workQueue <- &workItem{index: reqIndex, request: requests[reqIndex]}
    }
    close(workQueue)
    err := <-doneChan
@@ -59,11 +59,12 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
 // remuxes, and writes data in segment order.
 func processAndWriteSegments(
    doneChan chan<- error,
-   results <-chan result,
+   results <-chan *result,
    totalSegments int,
    key []byte,
    remux *sofia.Remuxer,
-   dst io.Writer,
+   dst io.WriteSeeker,
+   record func(*segmentRecord) error,
 ) {
    if remux != nil && len(key) > 0 {
       block, err := aes.NewCipher(key)
@@ -82,7 +83,7 @@ func processAndWriteSegments(
       logged: time.Now(),
    }
 
-   pending := make(map[int]result)
+   pending := make(map[int]*result)
    nextIndex := 0
    for segmentIndex := 0; segmentIndex < totalSegments; segmentIndex++ {
       res := <-results
@@ -97,16 +98,29 @@ func processAndWriteSegments(
             break
          }
 
+         var rec *segmentRecord
          if remux != nil {
-            if err := remux.AddSegment(item.data); err != nil {
+            appended, err := remux.AddSegment(item.data)
+            if err != nil {
                doneChan <- err
                return
             }
+            rec = &segmentRecord{endOffset: uint64(appended.EndOffset), appended: appended}
          } else {
             if _, err := dst.Write(item.data); err != nil {
                doneChan <- err
                return
             }
+            offset, err := dst.Seek(0, io.SeekCurrent)
+            if err != nil {
+               doneChan <- err
+               return
+            }
+            rec = &segmentRecord{endOffset: uint64(offset)}
+         }
+         if err := record(rec); err != nil {
+            doneChan <- err
+            return
          }
 
          tr.update()
