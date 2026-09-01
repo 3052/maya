@@ -11,7 +11,23 @@ import (
    "os"
 )
 
-func encodeRecord(rec *segmentRecord) ([]byte, error) {
+// The resume log is a JSON file written next to the output file when a download
+// is cleanly stopped (<output>.json). It is written atomically — the entire log
+// goes to a temp file which is renamed into place — so it either exists
+// complete or not at all. It records every fully-written segment so the
+// stopped download can continue with the remaining segments, and is deleted
+// once the download completes. Resuming assumes the segment list is identical
+// to the previous run.
+//
+// The file is a single JSON array of records:
+//    [[endOffset, chunks, samples], ...]
+// where chunks is a list of [offset, count] pairs and samples is a list of
+// [duration, size, sync, compositionOffset] tuples, with sync as 0 or 1.
+// Both lists are empty for streams written without remuxing.
+
+// encodeRecord converts one segment record to its JSON row form:
+// [endOffset, chunks, samples].
+func encodeRecord(rec *segmentRecord) []any {
    chunks := [][2]uint64{}
    samples := [][4]int64{}
    if rec.appended != nil {
@@ -28,58 +44,47 @@ func encodeRecord(rec *segmentRecord) ([]byte, error) {
          samples[i] = [4]int64{int64(sample.Duration), int64(sample.Size), sync, int64(sample.CompositionTimeOffset)}
       }
    }
-   return json.Marshal([]any{rec.endOffset, chunks, samples})
+   return []any{rec.endOffset, chunks, samples}
 }
 
-// resumeLog appends segment records to the resume log.
-type resumeLog struct {
-   file *os.File
-}
-
-func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
-   file, err := os.Create(path)
-   if err != nil {
-      return nil, err
+// writeResumeLog atomically writes the resume log for a cleanly stopped
+// download. The entire log is written to a temp file and renamed into place,
+// so it either contains every record or does not exist. os.Rename replaces an
+// existing destination on both Unix and Windows.
+func writeResumeLog(path string, records []segmentRecord) error {
+   rows := make([]any, len(records))
+   for i := range records {
+      rows[i] = encodeRecord(&records[i])
    }
-   log.Println("create:", path)
-
-   l := &resumeLog{file: file}
-   for i := range replay {
-      if err := l.record(&replay[i]); err != nil {
-         l.file.Close()
-         return nil, err
-      }
-   }
-   return l, nil
-}
-
-func (l *resumeLog) record(rec *segmentRecord) error {
-   data, err := encodeRecord(rec)
+   data, err := json.Marshal(rows)
    if err != nil {
       return err
    }
-   data = append(data, '\n')
-   _, err = l.file.Write(data)
-   return err
+
+   tmp := path + ".tmp"
+   file, err := os.Create(tmp)
+   if err != nil {
+      return err
+   }
+   fail := func(err error) error {
+      file.Close()
+      os.Remove(tmp)
+      return err
+   }
+   if _, err := file.Write(data); err != nil {
+      return fail(err)
+   }
+   if err := file.Close(); err != nil {
+      os.Remove(tmp)
+      return err
+   }
+   return os.Rename(tmp, path)
 }
 
 // resumeState is the parsed resume log.
 type resumeState struct {
    records []segmentRecord
 }
-
-// The resume log is a JSON Lines file written next to the output file while a
-// download runs (<output>.json). Each line is one completed segment, written as
-// a single compact JSON array so an interrupted write corrupts only that one
-// line. It records every fully-written segment so an interrupted download can
-// continue with the remaining segments, and is deleted once the download
-// completes. Resuming assumes the segment list is identical to the previous run.
-//
-// Each line is:
-//    [endOffset, chunks, samples]
-// where chunks is a list of [offset, count] pairs and samples is a list of
-// [duration, size, sync, compositionOffset] tuples, with sync as 0 or 1.
-// Both lists are empty for streams written without remuxing.
 
 // openOutput opens the output file for writing, resuming from an existing
 // resume log when possible. It returns the file positioned where the next
@@ -117,7 +122,10 @@ func openOutput(name string) (*os.File, *resumeState, error) {
       return file, &resumeState{}, err
    }
    if fi.Size() > boundary {
-      log.Printf("resume: discarding %d partially written bytes from %s", fi.Size()-boundary, name)
+      // A cleanly stopped download ends with a finalized moov past the last
+      // recorded segment. Either way, bytes beyond the boundary are not part
+      // of the resume state.
+      log.Printf("resume: discarding %d trailing bytes from %s", fi.Size()-boundary, name)
       if err := file.Truncate(boundary); err != nil {
          file.Close()
          return nil, nil, err
@@ -130,35 +138,32 @@ func openOutput(name string) (*os.File, *resumeState, error) {
    return file, state, nil
 }
 
+// readResumeLog parses the resume log. A nil state with no error means no log
+// exists. The log is written atomically, so any parse failure is genuine
+// corruption and an error is returned.
 func readResumeLog(path string) (*resumeState, error) {
-   file, err := os.Open(path)
+   data, err := os.ReadFile(path)
    if errors.Is(err, os.ErrNotExist) {
       return nil, nil
    }
    if err != nil {
       return nil, err
    }
-   defer file.Close()
 
-   reader := json.NewDecoder(file)
+   var rows []json.RawMessage
+   if err := json.Unmarshal(data, &rows); err != nil {
+      return nil, fmt.Errorf("resume log %s is corrupt; delete it to start over", path)
+   }
 
    state := &resumeState{}
-   for {
+   for _, row := range rows {
       var fields []json.RawMessage
-      err := reader.Decode(&fields)
-      if err == io.EOF {
-         break
-      }
-      if err != nil {
-         // A torn trailing line means the last segment was not fully
-         // recorded; it will simply be downloaded again.
-         log.Printf("resume: ignoring trailing corrupt data in %s", path)
-         break
+      if err := json.Unmarshal(row, &fields); err != nil {
+         return nil, fmt.Errorf("resume log %s is corrupt; delete it to start over", path)
       }
       rec, ok := decodeRecord(fields)
       if !ok {
-         log.Printf("resume: ignoring trailing corrupt data in %s", path)
-         break
+         return nil, fmt.Errorf("resume log %s is corrupt; delete it to start over", path)
       }
       state.records = append(state.records, *rec)
    }
