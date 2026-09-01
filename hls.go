@@ -7,16 +7,15 @@ import (
    "net/url"
    "path"
    "slices"
-   "time"
 )
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadHls(playlist *hls.MasterPlaylist, threads int, timeout time.Duration, streamId string, fetchKey keyFetcher) error {
+func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
    targetUri, err := getHlsStreamUrl(playlist, streamId)
    if err != nil {
       return err
    }
-   mediaPl, err := fetchMediaPlaylist(targetUri, timeout)
+   mediaPl, err := fetchMediaPlaylist(targetUri)
    if err != nil {
       return err
    }
@@ -36,7 +35,7 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, timeout time.Duratio
 
    var initData []byte
    if info.IsFmp4 && mediaPl.Map != nil {
-      initData, err = fetchData(mediaPl.Map, nil, true, timeout)
+      initData, err = fetchData(mediaPl.Map, nil, true)
       if err != nil {
          return fmt.Errorf("failed to get HLS initialization segment: %w", err)
       }
@@ -48,15 +47,14 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, timeout time.Duratio
       initSegmentData:    initData,
       manifestProtection: nil,
       threads:            threads,
-      timeout:            timeout,
       fetchKey:           fetchKey,
    }
    return orchestrateDownload(job)
 }
 
 // fetchMediaPlaylist fetches and parses an HLS media playlist.
-func fetchMediaPlaylist(mediaUrl *url.URL, timeout time.Duration) (*hls.MediaPlaylist, error) {
-   data, err := fetchData(mediaUrl, nil, true, timeout)
+func fetchMediaPlaylist(mediaUrl *url.URL) (*hls.MediaPlaylist, error) {
+   data, err := fetchData(mediaUrl, nil, true)
    if err != nil {
       return nil, err
    }
