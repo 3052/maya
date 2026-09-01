@@ -11,7 +11,6 @@ import (
    "os"
    "path/filepath"
    "strings"
-   "time"
 )
 
 func createFile(name string) (*os.File, error) {
@@ -56,13 +55,13 @@ func orchestrateDownload(job *downloadJob) error {
    if err != nil {
       return err
    }
-   defer rlog.Close()
+   defer rlog.file.Close()
 
    if len(state.records) > 0 {
       log.Printf("resume: skipping %d/%d already-downloaded segments", len(state.records), len(job.allRequests))
    }
 
-   err = executeDownload(job.allRequests[len(state.records):], key, remux, file, job.threads, job.timeout, rlog.record)
+   err = executeDownload(job.allRequests[len(state.records):], key, remux, file, job.threads, rlog.record)
    if err != nil {
       return err
    }
@@ -128,7 +127,6 @@ type downloadJob struct {
    initSegmentData    []byte
    manifestProtection *protectionInfo
    threads            int
-   timeout            time.Duration
    fetchKey           keyFetcher
 }
 

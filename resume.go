@@ -12,6 +12,78 @@ import (
    "strings"
 )
 
+func encodeRecord(rec *segmentRecord) []string {
+   var chunkValues []string
+   var sampleValues []string
+   if rec.appended != nil {
+      for i, offset := range rec.appended.ChunkOffsets {
+         chunkValues = append(chunkValues,
+            strconv.FormatUint(offset, 10),
+            strconv.FormatUint(uint64(rec.appended.SamplesPerChunk[i]), 10))
+      }
+      for i := range rec.appended.Samples {
+         sample := &rec.appended.Samples[i]
+         sync := "0"
+         if sample.IsSync {
+            sync = "1"
+         }
+         sampleValues = append(sampleValues,
+            strconv.FormatUint(uint64(sample.Duration), 10),
+            strconv.FormatUint(uint64(sample.Size), 10),
+            sync,
+            strconv.FormatInt(int64(sample.CompositionTimeOffset), 10))
+      }
+   }
+   return []string{
+      strconv.FormatUint(rec.endOffset, 10),
+      strings.Join(chunkValues, ","),
+      strings.Join(sampleValues, ","),
+   }
+}
+
+func splitList(s string) []string {
+   if s == "" {
+      return nil
+   }
+   return strings.Split(s, ",")
+}
+
+// resumeLog appends segment records to the resume log.
+type resumeLog struct {
+   file *os.File
+   enc  *csv.Writer
+}
+
+func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
+   file, err := os.Create(path)
+   if err != nil {
+      return nil, err
+   }
+   log.Println("create:", path)
+
+   l := &resumeLog{file: file, enc: csv.NewWriter(file)}
+   for i := range replay {
+      if err := l.record(&replay[i]); err != nil {
+         l.file.Close()
+         return nil, err
+      }
+   }
+   return l, nil
+}
+
+func (l *resumeLog) record(rec *segmentRecord) error {
+   if err := l.enc.Write(encodeRecord(rec)); err != nil {
+      return err
+   }
+   l.enc.Flush()
+   return l.enc.Error()
+}
+
+// resumeState is the parsed resume log.
+type resumeState struct {
+   records []segmentRecord
+}
+
 // The resume log is a CSV file written next to the output file while a
 // download runs (<output>.csv). It records every fully-written segment so
 // an interrupted download can continue with the remaining segments, and is
@@ -71,46 +143,6 @@ func openOutput(name string) (*os.File, *resumeState, error) {
       return nil, nil, err
    }
    return file, state, nil
-}
-
-// resumeLog appends segment records to the resume log.
-type resumeLog struct {
-   file *os.File
-   enc  *csv.Writer
-}
-
-func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
-   file, err := os.Create(path)
-   if err != nil {
-      return nil, err
-   }
-   log.Println("create:", path)
-
-   l := &resumeLog{file: file, enc: csv.NewWriter(file)}
-   for i := range replay {
-      if err := l.record(&replay[i]); err != nil {
-         l.Close()
-         return nil, err
-      }
-   }
-   return l, nil
-}
-
-func (l *resumeLog) record(rec *segmentRecord) error {
-   if err := l.enc.Write(encodeRecord(rec)); err != nil {
-      return err
-   }
-   l.enc.Flush()
-   return l.enc.Error()
-}
-
-func (l *resumeLog) Close() error {
-   return l.file.Close()
-}
-
-// resumeState is the parsed resume log.
-type resumeState struct {
-   records []segmentRecord
 }
 
 func readResumeLog(path string) (*resumeState, error) {
@@ -180,35 +212,6 @@ type segmentRecord struct {
    appended  *sofia.AppendResult
 }
 
-func encodeRecord(rec *segmentRecord) []string {
-   var chunkValues []string
-   var sampleValues []string
-   if rec.appended != nil {
-      for i, offset := range rec.appended.ChunkOffsets {
-         chunkValues = append(chunkValues,
-            strconv.FormatUint(offset, 10),
-            strconv.FormatUint(uint64(rec.appended.SamplesPerChunk[i]), 10))
-      }
-      for i := range rec.appended.Samples {
-         sample := &rec.appended.Samples[i]
-         sync := "0"
-         if sample.IsSync {
-            sync = "1"
-         }
-         sampleValues = append(sampleValues,
-            strconv.FormatUint(uint64(sample.Duration), 10),
-            strconv.FormatUint(uint64(sample.Size), 10),
-            sync,
-            strconv.FormatInt(int64(sample.CompositionTimeOffset), 10))
-      }
-   }
-   return []string{
-      strconv.FormatUint(rec.endOffset, 10),
-      strings.Join(chunkValues, ","),
-      strings.Join(sampleValues, ","),
-   }
-}
-
 func decodeRecord(fields []string) (*segmentRecord, bool) {
    if len(fields) != 3 {
       return nil, false
@@ -275,13 +278,6 @@ func decodeRecord(fields []string) (*segmentRecord, bool) {
       return nil, false
    }
    return rec, true
-}
-
-func splitList(s string) []string {
-   if s == "" {
-      return nil
-   }
-   return strings.Split(s, ",")
 }
 
 // resume.go
