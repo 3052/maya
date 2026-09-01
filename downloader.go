@@ -12,7 +12,7 @@ import (
 )
 
 // executeDownload runs the concurrent worker pool to download all segments.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, timeout time.Duration, record func(*segmentRecord) error) error {
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, record func(*segmentRecord) error) error {
    if threads > 12 {
       return errors.New("threads cannot be more than 12")
    }
@@ -38,7 +38,7 @@ func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file 
       go func() {
          defer wg.Done()
          for item := range workQueue {
-            data, err := fetchData(item.request.url, item.request.headers, false, timeout)
+            data, err := fetchData(item.request.url, item.request.headers, false)
             results <- &result{index: item.index, data: data, err: err}
          }
       }()
