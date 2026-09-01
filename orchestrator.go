@@ -51,7 +51,7 @@ func orchestrateDownload(job *downloadJob) error {
       }
    }
 
-   rlog, err := createResumeLog(name.String()+".csv", state.records)
+   rlog, err := createResumeLog(name.String()+".json", state.records)
    if err != nil {
       return err
    }
@@ -61,7 +61,7 @@ func orchestrateDownload(job *downloadJob) error {
    }
 
    err = executeDownload(job.allRequests[len(state.records):], key, remux, file, job.threads, rlog.record)
-   // The CSV must be closed before it can be deleted (required on Windows).
+   // The JSON log must be closed before it can be deleted (required on Windows).
    rlog.file.Close()
    if err != nil {
       return err

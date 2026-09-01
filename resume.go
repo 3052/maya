@@ -2,56 +2,38 @@ package maya
 
 import (
    "41.neocities.org/sofia"
-   "encoding/csv"
+   "encoding/json"
    "errors"
    "fmt"
    "io"
    "log"
+   "math"
    "os"
-   "strconv"
-   "strings"
 )
 
-func encodeRecord(rec *segmentRecord) []string {
-   var chunkValues []string
-   var sampleValues []string
+func encodeRecord(rec *segmentRecord) ([]byte, error) {
+   chunks := [][2]uint64{}
+   samples := [][4]int64{}
    if rec.appended != nil {
+      chunks = make([][2]uint64, len(rec.appended.ChunkOffsets))
       for i, offset := range rec.appended.ChunkOffsets {
-         chunkValues = append(chunkValues,
-            strconv.FormatUint(offset, 10),
-            strconv.FormatUint(uint64(rec.appended.SamplesPerChunk[i]), 10))
+         chunks[i] = [2]uint64{offset, uint64(rec.appended.SamplesPerChunk[i])}
       }
-      for i := range rec.appended.Samples {
-         sample := &rec.appended.Samples[i]
-         sync := "0"
+      samples = make([][4]int64, len(rec.appended.Samples))
+      for i, sample := range rec.appended.Samples {
+         var sync int64
          if sample.IsSync {
-            sync = "1"
+            sync = 1
          }
-         sampleValues = append(sampleValues,
-            strconv.FormatUint(uint64(sample.Duration), 10),
-            strconv.FormatUint(uint64(sample.Size), 10),
-            sync,
-            strconv.FormatInt(int64(sample.CompositionTimeOffset), 10))
+         samples[i] = [4]int64{int64(sample.Duration), int64(sample.Size), sync, int64(sample.CompositionTimeOffset)}
       }
    }
-   return []string{
-      strconv.FormatUint(rec.endOffset, 10),
-      strings.Join(chunkValues, ";"),
-      strings.Join(sampleValues, ";"),
-   }
-}
-
-func splitList(s string) []string {
-   if s == "" {
-      return nil
-   }
-   return strings.Split(s, ";")
+   return json.Marshal([]any{rec.endOffset, chunks, samples})
 }
 
 // resumeLog appends segment records to the resume log.
 type resumeLog struct {
    file *os.File
-   enc  *csv.Writer
 }
 
 func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
@@ -61,7 +43,7 @@ func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
    }
    log.Println("create:", path)
 
-   l := &resumeLog{file: file, enc: csv.NewWriter(file)}
+   l := &resumeLog{file: file}
    for i := range replay {
       if err := l.record(&replay[i]); err != nil {
          l.file.Close()
@@ -72,11 +54,13 @@ func createResumeLog(path string, replay []segmentRecord) (*resumeLog, error) {
 }
 
 func (l *resumeLog) record(rec *segmentRecord) error {
-   if err := l.enc.Write(encodeRecord(rec)); err != nil {
+   data, err := encodeRecord(rec)
+   if err != nil {
       return err
    }
-   l.enc.Flush()
-   return l.enc.Error()
+   data = append(data, '\n')
+   _, err = l.file.Write(data)
+   return err
 }
 
 // resumeState is the parsed resume log.
@@ -84,25 +68,25 @@ type resumeState struct {
    records []segmentRecord
 }
 
-// The resume log is a CSV file written next to the output file while a
-// download runs (<output>.csv). It records every fully-written segment so
-// an interrupted download can continue with the remaining segments, and is
-// deleted once the download completes. Resuming assumes the segment list is
-// identical to the previous run.
+// The resume log is a JSON Lines file written next to the output file while a
+// download runs (<output>.json). Each line is one completed segment, written as
+// a single compact JSON array so an interrupted write corrupts only that one
+// line. It records every fully-written segment so an interrupted download can
+// continue with the remaining segments, and is deleted once the download
+// completes. Resuming assumes the segment list is identical to the previous run.
 //
-// Layout (one CSV row per line):
-//    endOffset, chunks, samples
-// where chunks is a semicolon-separated list of "offset;count" pairs and
-// samples is a semicolon-separated list of
-// "duration;size;sync;compositionOffset" groups. Both list fields are empty
-// for streams written without remuxing.
+// Each line is:
+//    [endOffset, chunks, samples]
+// where chunks is a list of [offset, count] pairs and samples is a list of
+// [duration, size, sync, compositionOffset] tuples, with sync as 0 or 1.
+// Both lists are empty for streams written without remuxing.
 
 // openOutput opens the output file for writing, resuming from an existing
 // resume log when possible. It returns the file positioned where the next
 // segment should be written, along with the valid resume state (which may
 // have no records).
 func openOutput(name string) (*os.File, *resumeState, error) {
-   state, err := readResumeLog(name + ".csv")
+   state, err := readResumeLog(name + ".json")
    if err != nil {
       return nil, nil, err
    }
@@ -156,12 +140,12 @@ func readResumeLog(path string) (*resumeState, error) {
    }
    defer file.Close()
 
-   reader := csv.NewReader(file)
-   reader.FieldsPerRecord = -1
+   reader := json.NewDecoder(file)
 
    state := &resumeState{}
    for {
-      fields, err := reader.Read()
+      var fields []json.RawMessage
+      err := reader.Decode(&fields)
       if err == io.EOF {
          break
       }
@@ -190,8 +174,8 @@ func (s *resumeState) boundary() int64 {
 
 // remuxState rebuilds the Remuxer bookkeeping for the fragments already
 // present in the file.
-func (s *resumeState) remuxState() ([]sofia.RemuxSample, []uint64, []uint32) {
-   var samples []sofia.RemuxSample
+func (s *resumeState) remuxState() ([]*sofia.RemuxSample, []uint64, []uint32) {
+   var samples []*sofia.RemuxSample
    var chunkOffsets []uint64
    var samplesPerChunk []uint32
    for i := range s.records {
@@ -213,69 +197,67 @@ type segmentRecord struct {
    appended  *sofia.AppendResult
 }
 
-func decodeRecord(fields []string) (*segmentRecord, bool) {
+func decodeRecord(fields []json.RawMessage) (*segmentRecord, bool) {
    if len(fields) != 3 {
       return nil, false
    }
-   endOffset, err := strconv.ParseUint(fields[0], 10, 64)
-   if err != nil {
+
+   var endOffset uint64
+   if err := json.Unmarshal(fields[0], &endOffset); err != nil {
       return nil, false
    }
    rec := &segmentRecord{endOffset: endOffset}
 
-   chunkValues := splitList(fields[1])
-   if len(chunkValues)%2 != 0 {
+   // Fixed-size arrays enforce the element counts at unmarshal time:
+   // a wrong-length pair or tuple fails here instead of needing a manual
+   // length check.
+   var chunkPairs [][2]uint64
+   if err := json.Unmarshal(fields[1], &chunkPairs); err != nil {
       return nil, false
    }
-   sampleValues := splitList(fields[2])
-   if len(sampleValues)%4 != 0 {
+   var sampleTuples [][4]int64
+   if err := json.Unmarshal(fields[2], &sampleTuples); err != nil {
       return nil, false
    }
-   if len(chunkValues) > 0 || len(sampleValues) > 0 {
-      rec.appended = &sofia.AppendResult{}
+   if len(chunkPairs) == 0 && len(sampleTuples) == 0 {
+      return rec, true
+   }
+   rec.appended = &sofia.AppendResult{
+      ChunkOffsets:    make([]uint64, len(chunkPairs)),
+      SamplesPerChunk: make([]uint32, len(chunkPairs)),
+      Samples:         make([]*sofia.RemuxSample, len(sampleTuples)),
    }
 
    var total uint32
-   for i := 0; i < len(chunkValues); i += 2 {
-      offset, err := strconv.ParseUint(chunkValues[i], 10, 64)
-      if err != nil {
+   for i := range chunkPairs {
+      if chunkPairs[i][1] > math.MaxUint32 {
          return nil, false
       }
-      count, err := strconv.ParseUint(chunkValues[i+1], 10, 32)
-      if err != nil {
-         return nil, false
-      }
-      rec.appended.ChunkOffsets = append(rec.appended.ChunkOffsets, offset)
-      rec.appended.SamplesPerChunk = append(rec.appended.SamplesPerChunk, uint32(count))
-      total += uint32(count)
+      rec.appended.ChunkOffsets[i] = chunkPairs[i][0]
+      rec.appended.SamplesPerChunk[i] = uint32(chunkPairs[i][1])
+      total += uint32(chunkPairs[i][1])
    }
-   for i := 0; i < len(sampleValues); i += 4 {
-      duration, err := strconv.ParseUint(sampleValues[i], 10, 32)
-      if err != nil {
+   for i := range sampleTuples {
+      duration := sampleTuples[i][0]
+      size := sampleTuples[i][1]
+      sync := sampleTuples[i][2]
+      cto := sampleTuples[i][3]
+      if duration < 0 || duration > math.MaxUint32 ||
+         size < 0 || size > math.MaxUint32 ||
+         cto < math.MinInt32 || cto > math.MaxInt32 ||
+         (sync != 0 && sync != 1) {
          return nil, false
       }
-      size, err := strconv.ParseUint(sampleValues[i+1], 10, 32)
-      if err != nil {
-         return nil, false
-      }
-      sync := sampleValues[i+2]
-      if sync != "0" && sync != "1" {
-         return nil, false
-      }
-      cto, err := strconv.ParseInt(sampleValues[i+3], 10, 32)
-      if err != nil {
-         return nil, false
-      }
-      rec.appended.Samples = append(rec.appended.Samples, sofia.RemuxSample{
+      rec.appended.Samples[i] = &sofia.RemuxSample{
          Duration:              uint32(duration),
          Size:                  uint32(size),
-         IsSync:                sync == "1",
+         IsSync:                sync == 1,
          CompositionTimeOffset: int32(cto),
-      })
+      }
    }
 
    // sanity: the per-chunk sample counts must add up to the sample list
-   if rec.appended != nil && int(total) != len(rec.appended.Samples) {
+   if int(total) != len(rec.appended.Samples) {
       return nil, false
    }
    return rec, true
