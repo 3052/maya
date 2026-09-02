@@ -6,18 +6,69 @@ import (
    "errors"
    "io"
    "log"
-   "os"
    "sync"
    "time"
 )
 
 // ErrStopped is returned when the download ended via the stop channel.
-// The resume log has been saved; running the same command again resumes.
+// The resume state has been saved; running the same command again resumes.
 var ErrStopped = errors.New("download stopped")
 
+// executeDownload runs the concurrent worker pool to download all segments.
+// When the stop channel closes, the workers take no new work and the writer
+// finishes the segments already held in memory before returning ErrStopped
+// along with the number of segments written.
+func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, dst io.Writer, threads int, stop <-chan struct{}) (int, error) {
+   if threads > 12 {
+      return 0, errors.New("threads cannot be more than 12")
+   }
+   if threads < 0 {
+      return 0, errors.New("threads cannot be less than 0")
+   }
+   if threads == 0 {
+      threads = 1
+   }
+
+   if len(requests) == 0 {
+      if remux != nil {
+         return 0, remux.Finish()
+      }
+      return 0, nil
+   }
+
+   workQueue := make(chan *workItem, len(requests))
+   results := make(chan *result, len(requests))
+   var wg sync.WaitGroup
+   wg.Add(threads)
+   for workerId := 0; workerId < threads; workerId++ {
+      go func() {
+         defer wg.Done()
+         for item := range workQueue {
+            select {
+            case <-stop:
+               return // take no more work; in-flight fetches finish
+            default:
+            }
+            data, err := fetchData(item.request.url, item.request.headers, false)
+            results <- &result{index: item.index, data: data, err: err}
+         }
+      }()
+   }
+   doneChan := make(chan runResult, 1)
+   go processAndWriteSegments(doneChan, results, len(requests), key, remux, dst, stop)
+
+   for reqIndex := range requests {
+      workQueue <- &workItem{index: reqIndex, request: requests[reqIndex]}
+   }
+   close(workQueue)
+   res := <-doneChan
+   wg.Wait()
+   return res.segments, res.err
+}
+
 // processAndWriteSegments consumes results from the worker pool, decrypts,
-// remuxes, and writes data in segment order. On a stop it finishes only the
-// in-order segments already in memory and drops the rest, which are
+// remuxes, and writes data in segment order. On a stop it finishes only
+// the in-order segments already in memory and drops the rest, which are
 // re-downloaded on resume.
 func processAndWriteSegments(
    doneChan chan<- runResult,
@@ -25,7 +76,7 @@ func processAndWriteSegments(
    totalSegments int,
    key []byte,
    remux *sofia.Remuxer,
-   dst io.WriteSeeker,
+   dst io.Writer,
    stop <-chan struct{},
 ) {
    if remux != nil && len(key) > 0 {
@@ -45,7 +96,6 @@ func processAndWriteSegments(
       logged: time.Now(),
    }
 
-   records := make([]segmentRecord, 0, totalSegments)
    pending := make(map[int]*result)
    nextIndex := 0
    stopped := false
@@ -71,7 +121,7 @@ func processAndWriteSegments(
       }
 
       if res.err != nil {
-         doneChan <- runResult{records: records, err: res.err}
+         doneChan <- runResult{err: res.err}
          return
       }
       pending[res.index] = res
@@ -81,28 +131,18 @@ func processAndWriteSegments(
             break
          }
 
-         var rec segmentRecord
          if remux != nil {
-            appended, err := remux.AddSegment(item.data)
-            if err != nil {
-               doneChan <- runResult{records: records, err: err}
+            if err := remux.AddSegment(item.data); err != nil {
+               doneChan <- runResult{err: err}
                return
             }
-            rec = segmentRecord{endOffset: uint64(appended.EndOffset), appended: appended}
          } else {
             if _, err := dst.Write(item.data); err != nil {
-               doneChan <- runResult{records: records, err: err}
+               doneChan <- runResult{err: err}
                return
             }
-            offset, err := dst.Seek(0, io.SeekCurrent)
-            if err != nil {
-               doneChan <- runResult{records: records, err: err}
-               return
-            }
-            rec = segmentRecord{endOffset: uint64(offset)}
          }
 
-         records = append(records, rec)
          tr.update()
 
          delete(pending, nextIndex)
@@ -110,69 +150,20 @@ func processAndWriteSegments(
       }
    }
 
-   // Finalize on both paths so a cleanly stopped file is playable as-is.
+   // Finalize on both paths: the completed file gets its final moov, and a
+   // cleanly stopped file gets one too — that moov is what makes the
+   // stopped file resumable (and playable as-is).
    if remux != nil {
       if err := remux.Finish(); err != nil {
-         doneChan <- runResult{records: records, err: err}
+         doneChan <- runResult{err: err}
          return
       }
    }
    if stopped && nextIndex < totalSegments {
-      doneChan <- runResult{records: records, err: ErrStopped}
+      doneChan <- runResult{segments: nextIndex, err: ErrStopped}
       return
    }
-   doneChan <- runResult{records: records}
-}
-
-// executeDownload runs the concurrent worker pool to download all segments.
-// When the stop channel closes, the workers take no new work and the writer
-// finishes the segments already held in memory before returning ErrStopped.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, file *os.File, threads int, stop <-chan struct{}) ([]segmentRecord, error) {
-   if threads > 12 {
-      return nil, errors.New("threads cannot be more than 12")
-   }
-   if threads < 0 {
-      return nil, errors.New("threads cannot be less than 0")
-   }
-   if threads == 0 {
-      threads = 1
-   }
-
-   if len(requests) == 0 {
-      if remux != nil {
-         return nil, remux.Finish()
-      }
-      return nil, nil
-   }
-
-   workQueue := make(chan *workItem, len(requests))
-   results := make(chan *result, len(requests))
-   var wg sync.WaitGroup
-   wg.Add(threads)
-   for workerId := 0; workerId < threads; workerId++ {
-      go func() {
-         defer wg.Done()
-         for item := range workQueue {
-            select {
-            case <-stop:
-               return // take no more work; in-flight fetches finish
-            default:
-            }
-            data, err := fetchData(item.request.url, item.request.headers, false)
-            results <- &result{index: item.index, data: data, err: err}
-         }
-      }()
-   }
-   doneChan := make(chan runResult, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), key, remux, file, stop)
-
-   for reqIndex := range requests {
-      workQueue <- &workItem{index: reqIndex, request: requests[reqIndex]}
-   }
-   close(workQueue)
-   res := <-doneChan
-   wg.Wait()
-   return res.records, res.err
+   doneChan <- runResult{segments: nextIndex}
 }
 
 // result is the outcome of a download attempt from a worker.
@@ -182,11 +173,10 @@ type result struct {
    err   error
 }
 
-// runResult is the outcome of processAndWriteSegments: the records of every
-// fully-written segment plus any error.
+// runResult is the outcome of processAndWriteSegments.
 type runResult struct {
-   records []segmentRecord
-   err     error
+   segments int
+   err      error
 }
 
 type tracker struct {
