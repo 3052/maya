@@ -4,9 +4,11 @@ import (
    "41.neocities.org/diana/playReady"
    "41.neocities.org/diana/widevine"
    "41.neocities.org/sofia"
+   "encoding/binary"
    "encoding/hex"
    "errors"
    "fmt"
+   "io"
    "log"
    "net/url"
    "os"
@@ -29,20 +31,24 @@ func createFile(name string) (*os.File, error) {
    return os.Create(name)
 }
 
-// orchestrateDownload contains the shared, high-level logic for executing any
-// download. Pressing q stops the download cleanly (see StopKey); that is the
-// only path that leaves a resumable state behind.
+// orchestrateDownload contains the shared, high-level logic for executing
+// any download. Pressing q stops the download cleanly (see StopKey); for
+// fMP4 streams the segment count is saved to the sidecar after every
+// segment and the sample tables are saved in the output file itself via
+// the moov that the stop writes, so running the same command again
+// resumes. Streams written without remuxing are not resumable.
 func orchestrateDownload(job *downloadJob) error {
    stop := stopSignal()
-   if stop != nil {
+   if stop != nil && job.info.IsFmp4 {
       log.Println("press q (then Enter) to stop the download cleanly and save resume state")
    }
 
    var name strings.Builder
    name.WriteString(job.outputFileNameBase)
    name.WriteString(job.info.Extension)
+   outputName := name.String()
 
-   file, state, err := openOutput(name.String())
+   file, segments, err := openOutput(outputName)
    if err != nil {
       return err
    }
@@ -50,9 +56,10 @@ func orchestrateDownload(job *downloadJob) error {
 
    var remux *sofia.Remuxer
    var key []byte
+   var progress onSegment
    if job.info.IsFmp4 {
       var initProtection *protectionInfo
-      remux, initProtection, err = initializeRemuxer(job.initSegmentData, file, state)
+      remux, initProtection, err = initializeRemuxer(job.initSegmentData, file, *segments)
       if err != nil {
          return err
       }
@@ -63,29 +70,63 @@ func orchestrateDownload(job *downloadJob) error {
             return err
          }
       }
+
+      sidecar := outputName + ".resume"
+      progress = func(segmentsDone int) error {
+         return writeResume(sidecar, *segments+segmentsDone)
+      }
    }
 
-   if len(state.records) > 0 {
-      log.Printf("resume: skipping %d/%d already-downloaded segments", len(state.records), len(job.allRequests))
+   if *segments > 0 {
+      log.Printf("resume: skipping %d/%d already-downloaded segments", *segments, len(job.allRequests))
    }
 
-   records, err := executeDownload(job.allRequests[len(state.records):], key, remux, file, job.threads, stop)
-
+   err = executeDownload(job.allRequests[*segments:], key, remux, file, job.threads, stop, progress)
    switch {
    case errors.Is(err, ErrStopped):
-      // The only path that produces a resume log.
-      records = append(state.records, records...)
-      log.Printf("stop: saving resume state for %d segments", len(records))
-      return writeResumeLog(name.String()+".json", records)
+      log.Println("stop: resume state saved; run again to resume")
+      return nil
    case err != nil:
       return err
    default:
-      // Completed: clear any log left by a previous stop.
-      if err := os.Remove(name.String() + ".json"); err != nil && !errors.Is(err, os.ErrNotExist) {
+      // Completed: clear the state left by a previous stop.
+      if err := os.Remove(outputName + ".resume"); err != nil && !errors.Is(err, os.ErrNotExist) {
          return err
       }
       return nil
    }
+}
+
+// readStoppedMoov reads the moov that a previous stop appended after the
+// media data, and returns it with the offset where the payloads end. Only
+// the 16-byte mdat header and the moov bytes are read; the media data
+// never enters memory.
+func readStoppedMoov(file *os.File) ([]byte, int64, error) {
+   header := make([]byte, 16)
+   if _, err := file.ReadAt(header, 0); err != nil {
+      return nil, 0, fmt.Errorf("failed to read mdat header: %w", err)
+   }
+   if string(header[4:8]) != "mdat" {
+      return nil, 0, errors.New("output file does not contain an mdat box; delete it and the resume state to start over")
+   }
+   // Finish patched the extended size field with the full box size, which
+   // is also the offset where the moov begins.
+   payloadEnd := int64(binary.BigEndian.Uint64(header[8:16]))
+   if payloadEnd < 16 {
+      return nil, 0, errors.New("output file was not finalized; delete it and the resume state to start over")
+   }
+   fi, err := file.Stat()
+   if err != nil {
+      return nil, 0, err
+   }
+   if fi.Size() <= payloadEnd {
+      return nil, 0, errors.New("output file has no moov to resume from; delete it and the resume state to start over")
+   }
+   moovData := make([]byte, fi.Size()-payloadEnd)
+   if _, err := file.ReadAt(moovData, payloadEnd); err != nil {
+      return nil, 0, err
+   }
+   return moovData, payloadEnd, nil
 }
 
 // stopSignal starts a goroutine reading stdin for this download and returns
@@ -112,18 +153,38 @@ func stopSignal() <-chan struct{} {
    return stop
 }
 
-func initializeRemuxer(firstData []byte, file *os.File, state *resumeState) (*sofia.Remuxer, *protectionInfo, error) {
+// initializeRemuxer prepares the remuxer, either fresh or resumed from the
+// moov that a previous stop appended to the output file. The moov is read
+// back with bounded memory — only its own bytes, never the media data —
+// then truncated away so new fragments append exactly where the old ones
+// ended.
+func initializeRemuxer(initData []byte, file *os.File, segmentsDone int) (*sofia.Remuxer, *protectionInfo, error) {
    var remux sofia.Remuxer
    remux.Writer = file
-   if len(firstData) > 0 {
-      var err error
-      if len(state.records) > 0 {
-         samples, chunkOffsets, samplesPerChunk := state.remuxState()
-         err = remux.Resume(firstData, len(state.records), samples, chunkOffsets, samplesPerChunk)
-      } else {
-         err = remux.Initialize(firstData)
+
+   if segmentsDone == 0 {
+      if len(initData) > 0 {
+         if err := remux.Initialize(initData); err != nil {
+            return nil, nil, err
+         }
       }
+   } else {
+      moovData, payloadEnd, err := readStoppedMoov(file)
       if err != nil {
+         return nil, nil, err
+      }
+      remuxState, err := sofia.StateFromMoov(moovData)
+      if err != nil {
+         return nil, nil, fmt.Errorf("failed to rebuild remux state from %s: %w", file.Name(), err)
+      }
+      if err := remux.AdoptState(initData, remuxState, segmentsDone); err != nil {
+         return nil, nil, err
+      }
+      // Drop the moov so new fragments append at the payload boundary.
+      if err := file.Truncate(payloadEnd); err != nil {
+         return nil, nil, err
+      }
+      if _, err := file.Seek(payloadEnd, io.SeekStart); err != nil {
          return nil, nil, err
       }
    }
