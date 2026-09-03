@@ -10,13 +10,13 @@ import (
    "time"
 )
 
-// ErrStopped is returned when the download ended via the stop channel.
+// errStopped is returned when the download ended via the stop channel.
 // The resume state has been saved; running the same command again resumes.
-var ErrStopped = errors.New("download stopped")
+var errStopped = errors.New("download stopped")
 
 // executeDownload runs the concurrent worker pool to download all segments.
 // When the stop channel closes, the workers take no new work and the writer
-// finishes the segments already held in memory before returning ErrStopped
+// finishes the segments already held in memory before returning errStopped
 // along with the number of segments written.
 func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, dst io.Writer, threads int, stop <-chan struct{}) (int, error) {
    if threads > 12 {
@@ -160,7 +160,7 @@ func processAndWriteSegments(
       }
    }
    if stopped && nextIndex < totalSegments {
-      doneChan <- runResult{segments: nextIndex, err: ErrStopped}
+      doneChan <- runResult{segments: nextIndex, err: errStopped}
       return
    }
    doneChan <- runResult{segments: nextIndex}
