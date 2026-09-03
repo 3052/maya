@@ -11,12 +11,12 @@ func TestDownloadDashRep6(t *testing.T) {
       t.Fatal(err)
    }
 
-   manifest, err := ListDash(baseUrl)
+   manifest, err := DashList(baseUrl)
    if err != nil {
       t.Fatal(err)
    }
 
-   err = DownloadDash("6", manifest, nil)
+   err = DashDownload("6", manifest, nil)
    if err != nil {
       t.Fatal(err)
    }

@@ -83,7 +83,7 @@ func orchestrateDownload(job *downloadJob) error {
 
    segmentsDone, err := executeDownload(job.allRequests[state.Segments:], key, remux, file, job.threads, stop)
    switch {
-   case errors.Is(err, ErrStopped):
+   case errors.Is(err, errStopped):
       // The only path that writes the sidecar.
       total := state.Segments + segmentsDone
       if total > 0 {
