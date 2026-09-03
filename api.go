@@ -3,14 +3,73 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/luna/hls"
+   "41.neocities.org/sofia"
    "errors"
+   "fmt"
    "io"
    "log"
    "net/http"
    "net/url"
 )
 
-func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options) error {
+// DashBitrate returns the actual average bitrate of a DASH stream by
+// summing the sizes and durations in each representation's sidx. Only
+// SegmentBase representations are supported; anything else is an error.
+func DashBitrate(streamId string, manifestData *Manifest) (float64, error) {
+   mpd, err := dash.Parse(manifestData.Body, manifestData.Url)
+   if err != nil {
+      return 0, err
+   }
+
+   group, ok := mpd.GetRepresentations()[streamId]
+   if !ok {
+      return 0, fmt.Errorf("representation group not found %v", streamId)
+   }
+
+   var totalBits, totalSeconds float64
+   for _, rep := range group {
+      if rep.SegmentBase == nil {
+         return 0, fmt.Errorf("stream %v is not SegmentBase", rep.Id)
+      }
+
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return 0, err
+      }
+      sidxData, err := fetchData(baseUrl, map[string]string{
+         "Range": "bytes=" + rep.SegmentBase.IndexRange,
+      }, true)
+      if err != nil {
+         return 0, err
+      }
+
+      boxes, err := sofia.DecodeBoxes(sidxData)
+      if err != nil {
+         return 0, err
+      }
+      sidx, ok := sofia.FindSidx(boxes)
+      if !ok {
+         return 0, errors.New("box 'sidx' not found")
+      }
+
+      var repSeconds float64
+      for _, ref := range sidx.References {
+         if ref.ReferenceType {
+            return 0, errors.New("sidx references a child sidx")
+         }
+         totalBits += float64(ref.ReferencedSize) * 8
+         repSeconds += float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
+      }
+      totalSeconds += repSeconds
+   }
+
+   if totalSeconds == 0 {
+      return 0, errors.New("zero duration in sidx")
+   }
+   return totalBits / totalSeconds, nil
+}
+
+func DashDownload(streamId string, manifestData *Manifest, optionsData *Options) error {
    if optionsData == nil {
       optionsData = &Options{}
    }
@@ -28,7 +87,7 @@ func DownloadDash(streamId string, manifestData *Manifest, optionsData *Options)
    return downloadDash(mpd, optionsData.Threads, streamId, kFetcher)
 }
 
-func DownloadHls(streamId string, manifestData *Manifest, optionsData *Options) error {
+func HlsDownload(streamId string, manifestData *Manifest, optionsData *Options) error {
    if optionsData == nil {
       optionsData = &Options{}
    }
@@ -86,7 +145,7 @@ type Manifest struct {
    Body []byte
 }
 
-func ListDash(baseUrl *url.URL) (*Manifest, error) {
+func DashList(baseUrl *url.URL) (*Manifest, error) {
    body, err := fetchData(baseUrl, nil, true)
    if err != nil {
       return nil, err
@@ -104,7 +163,7 @@ func ListDash(baseUrl *url.URL) (*Manifest, error) {
    return &Manifest{Url: baseUrl, Body: body}, nil
 }
 
-func ListHls(baseUrl *url.URL) (*Manifest, error) {
+func HlsList(baseUrl *url.URL) (*Manifest, error) {
    body, err := fetchData(baseUrl, nil, true)
    if err != nil {
       return nil, err
