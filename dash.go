@@ -3,7 +3,6 @@ package maya
 import (
    "41.neocities.org/luna/dash"
    "41.neocities.org/sofia"
-   "errors"
    "fmt"
    "slices"
 )
@@ -135,13 +134,9 @@ func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSe
    if err != nil {
       return nil, err
    }
-   parsed, err := sofia.DecodeBoxes(sidxData)
+   sidx, err := sofia.DecodeSidxBox(sidxData)
    if err != nil {
       return nil, err
-   }
-   sidx, ok := sofia.FindSidx(parsed)
-   if !ok {
-      return nil, errors.New("box 'sidx' not found")
    }
    _, end, err := dash.ParseRange(rep.SegmentBase.IndexRange)
    if err != nil {
