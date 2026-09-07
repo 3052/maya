@@ -84,6 +84,12 @@ func orchestrateDownload(job *downloadJob) error {
    segmentsDone, err := executeDownload(job.allRequests[state.Segments:], key, remux, file, job.threads, stop)
    switch {
    case errors.Is(err, errStopped):
+      if !job.info.IsFmp4 {
+         // Streams written without remuxing keep no resume state; the
+         // partial output cannot be resumed and must be deleted.
+         log.Println("stop: raw streams are not resumable; delete the output to start over")
+         return nil
+      }
       // The only path that writes the sidecar.
       total := state.Segments + segmentsDone
       if total > 0 {
