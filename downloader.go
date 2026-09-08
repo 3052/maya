@@ -1,12 +1,15 @@
+// downloader.go
 package maya
 
 import (
    "41.neocities.org/sofia"
    "crypto/aes"
    "errors"
+   "fmt"
    "io"
    "log"
-   "sync"
+   "net/http"
+   "net/url"
    "time"
 )
 
@@ -14,171 +17,172 @@ import (
 // The resume state has been saved; running the same command again resumes.
 var errStopped = errors.New("download stopped")
 
-// executeDownload runs the concurrent worker pool to download all segments.
-// When the stop channel closes, the workers take no new work and the writer
-// finishes the segments already held in memory before returning errStopped
-// along with the number of segments written.
-func executeDownload(requests []segment, key []byte, remux *sofia.Remuxer, dst io.Writer, threads int, stop <-chan struct{}) (int, error) {
-   if threads > 12 {
-      return 0, errors.New("threads cannot be more than 12")
-   }
-   if threads < 0 {
-      return 0, errors.New("threads cannot be less than 0")
-   }
-   if threads == 0 {
-      threads = 1
-   }
-
-   if len(requests) == 0 {
-      if remux != nil {
-         return 0, remux.Finish()
-      }
-      return 0, nil
-   }
-
-   workQueue := make(chan *workItem, len(requests))
-   results := make(chan *result, len(requests))
-   var wg sync.WaitGroup
-   wg.Add(threads)
-   for workerId := 0; workerId < threads; workerId++ {
-      go func() {
-         defer wg.Done()
-         for item := range workQueue {
-            select {
-            case <-stop:
-               return // take no more work; in-flight fetches finish
-            default:
-            }
-            data, err := fetchData(item.request.url, item.request.headers, false)
-            results <- &result{index: item.index, data: data, err: err}
-         }
-      }()
-   }
-   doneChan := make(chan runResult, 1)
-   go processAndWriteSegments(doneChan, results, len(requests), key, remux, dst, stop)
-
-   for reqIndex := range requests {
-      workQueue <- &workItem{index: reqIndex, request: requests[reqIndex]}
-   }
-   close(workQueue)
-   res := <-doneChan
-   wg.Wait()
-   return res.segments, res.err
-}
-
-// processAndWriteSegments consumes results from the worker pool, decrypts,
-// remuxes, and writes data in segment order. On a stop it finishes only
-// the in-order segments already in memory and drops the rest, which are
-// re-downloaded on resume.
-func processAndWriteSegments(
-   doneChan chan<- runResult,
-   results <-chan *result,
-   totalSegments int,
-   key []byte,
-   remux *sofia.Remuxer,
-   dst io.Writer,
-   stop <-chan struct{},
-) {
-   if remux != nil && len(key) > 0 {
-      block, err := aes.NewCipher(key)
-      if err != nil {
-         doneChan <- runResult{err: err}
-         return
-      }
-      remux.OnSample = func(data []byte, sample *sofia.SencSample) {
-         sofia.Decrypt(data, sample, block)
-      }
-   }
-
+// executeSegments downloads per-URL segments one at a time, in playlist
+// order. The stop channel is checked between segments; on stop the file
+// is finalized and the segments after the stop point are re-downloaded
+// on resume. Returns the number of segments written.
+func executeSegments(requests []segment, remux *sofia.Remuxer, dst io.Writer, stop <-chan struct{}) (int, error) {
    tr := tracker{
-      total:  totalSegments,
+      total:  len(requests),
       start:  time.Now(),
       logged: time.Now(),
    }
-
-   pending := make(map[int]*result)
-   nextIndex := 0
-   stopped := false
-
-   for nextIndex < totalSegments {
-      var res *result
-      if stopped {
-         // Stopped: take only what has already been delivered; wait for nothing.
-         select {
-         case res = <-results:
-         default:
-         }
-         if res == nil {
-            break
-         }
-      } else {
+   for i, req := range requests {
+      if stop != nil {
          select {
          case <-stop:
-            stopped = true
-            continue
-         case res = <-results:
-         }
-      }
-
-      if res.err != nil {
-         doneChan <- runResult{err: res.err}
-         return
-      }
-      pending[res.index] = res
-      for {
-         item, ok := pending[nextIndex]
-         if !ok {
-            break
-         }
-
-         if remux != nil {
-            if err := remux.AddSegment(item.data); err != nil {
-               doneChan <- runResult{err: err}
-               return
+            if remux != nil {
+               if err := remux.Finish(); err != nil {
+                  return i, err
+               }
             }
-         } else {
-            if _, err := dst.Write(item.data); err != nil {
-               doneChan <- runResult{err: err}
-               return
-            }
+            return i, errStopped
+         default:
          }
-
-         tr.update()
-
-         delete(pending, nextIndex)
-         nextIndex++
       }
+      data, err := fetchData(req.url, req.headers, false)
+      if err != nil {
+         return i, err
+      }
+      if remux != nil {
+         if err := remux.AddSegment(data); err != nil {
+            return i, err
+         }
+      } else {
+         if _, err := dst.Write(data); err != nil {
+            return i, err
+         }
+      }
+      tr.update()
    }
-
-   // Finalize on both paths: the completed file gets its final moov, and a
-   // cleanly stopped file gets one too — that moov is what makes the
-   // stopped file resumable (and playable as-is).
    if remux != nil {
       if err := remux.Finish(); err != nil {
-         doneChan <- runResult{err: err}
-         return
+         return 0, err
       }
    }
-   if stopped && nextIndex < totalSegments {
-      doneChan <- runResult{segments: nextIndex, err: errStopped}
-      return
+   return len(requests), nil
+}
+
+// executeStream downloads a single-URL stream (DASH SegmentBase) with one
+// request, handing the body straight to sofia.Process: the remuxer
+// consumes it directly — initializing from the in-band moov and
+// processing one segment at a time — so memory is one segment, never
+// the file. remux.Stop is set to the stop channel; on ErrStopped the
+// file is finalized and the caller saves the resume state from
+// Progress.
+func executeStream(req segment, offset int64, remux *sofia.Remuxer, stop <-chan struct{}) error {
+   if remux == nil {
+      return errors.New("single-URL download requires a remuxer")
    }
-   doneChan <- runResult{segments: nextIndex}
+   remux.Stop = stop
+   body, contentLength, err := fetchStream(req.url, offset)
+   if err != nil {
+      return err
+   }
+   defer body.Close()
+   // The total comes from the media request itself: a full response
+   // starts at 0, a resumed one delivers the remainder, so offset plus
+   // content length is the file size either way.
+   progress := &progressReader{
+      R:      body,
+      Base:   offset,
+      Done:   offset,
+      Start:  time.Now(),
+      Logged: time.Now(),
+   }
+   if contentLength >= 0 {
+      progress.Total = offset + contentLength
+   } else {
+      progress.Total = -1
+   }
+   processErr := remux.Process(progress)
+   if processErr != nil && !errors.Is(processErr, sofia.ErrStopped) {
+      return processErr
+   }
+   if err := remux.Finish(); err != nil {
+      return err
+   }
+   if errors.Is(processErr, sofia.ErrStopped) {
+      return errStopped
+   }
+   return nil
 }
 
-// result is the outcome of a download attempt from a worker.
-type result struct {
-   index int
-   data  []byte
-   err   error
+// fetchStream performs a GET (resuming from offset when positive) and
+// returns the response body with its content length.
+func fetchStream(targetUrl *url.URL, offset int64) (io.ReadCloser, int64, error) {
+   req := &http.Request{
+      Method: http.MethodGet,
+      URL:    targetUrl,
+   }
+   if offset > 0 {
+      req.Header = http.Header{"Range": {fmt.Sprintf("bytes=%d-", offset)}}
+   }
+   log.Println(req.Method, req.URL)
+   resp, err := http.DefaultClient.Do(req)
+   if err != nil {
+      return nil, 0, err
+   }
+   if offset > 0 {
+      // A server that ignores Range answers 200 with the full body; fail
+      // loudly rather than silently re-downloading from the start.
+      if resp.StatusCode != http.StatusPartialContent {
+         resp.Body.Close()
+         return nil, 0, fmt.Errorf("server does not honor Range (got %s)", resp.Status)
+      }
+   } else if resp.StatusCode != http.StatusOK {
+      resp.Body.Close()
+      return nil, 0, errors.New(resp.Status)
+   }
+   return resp.Body, resp.ContentLength, nil
 }
 
-// runResult is the outcome of processAndWriteSegments.
-type runResult struct {
-   segments int
-   err      error
+// setDecrypt installs the decryption callback on the remuxer.
+func setDecrypt(remux *sofia.Remuxer, key []byte) error {
+   if remux == nil || len(key) == 0 {
+      return nil
+   }
+   block, err := aes.NewCipher(key)
+   if err != nil {
+      return err
+   }
+   remux.OnSample = func(data []byte, sample *sofia.SencSample) {
+      sofia.Decrypt(data, sample, block)
+   }
+   return nil
 }
 
+// progressReader wraps a stream body and logs MiB progress once a
+// second. It forwards bytes as they are consumed — no buffering.
+type progressReader struct {
+   R      io.Reader
+   Total  int64 // full size of the stream, or -1 when unknown
+   Base   int64 // bytes already downloaded by previous sessions
+   Done   int64 // bytes consumed so far, including Base
+   Start  time.Time
+   Logged time.Time
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+   n, err := p.R.Read(buf)
+   p.Done += int64(n)
+   if now := time.Now(); now.Sub(p.Logged) >= time.Second {
+      elapsed := now.Sub(p.Start).Seconds()
+      rate := float64(p.Done-p.Base) / elapsed / 1048576
+      if p.Total >= 0 {
+         log.Printf("downloaded: %.1f/%.1f MiB (%.2f MiB/s)",
+            float64(p.Done)/1048576, float64(p.Total)/1048576, rate)
+      } else {
+         log.Printf("downloaded: %.1f MiB (%.2f MiB/s)",
+            float64(p.Done)/1048576, rate)
+      }
+      p.Logged = now
+   }
+   return n, err
+}
+
+// tracker logs segment progress: segments done, left, elapsed, and
+// estimated time left, at most once per second.
 type tracker struct {
    total  int
    done   int
@@ -204,12 +208,6 @@ func (t *tracker) update() {
          t.done, segmentsLeft, elapsed.Truncate(time.Second), timeLeft.Truncate(time.Second))
       t.logged = now
    }
-}
-
-// workItem is a request bundled with its index for out-of-order processing.
-type workItem struct {
-   index   int
-   request segment
 }
 
 // downloader.go

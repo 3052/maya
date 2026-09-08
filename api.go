@@ -1,3 +1,4 @@
+// api.go
 package maya
 
 import (
@@ -72,7 +73,7 @@ func DashDownload(streamId string, manifestData *Manifest, optionsData *Options)
       return err
    }
 
-   return downloadDash(mpd, optionsData.Threads, streamId, kFetcher)
+   return downloadDash(mpd, streamId, kFetcher)
 }
 
 func HlsDownload(streamId string, manifestData *Manifest, optionsData *Options) error {
@@ -90,7 +91,7 @@ func HlsDownload(streamId string, manifestData *Manifest, optionsData *Options) 
       return err
    }
 
-   return downloadHls(playlist, optionsData.Threads, streamId, kFetcher)
+   return downloadHls(playlist, streamId, kFetcher)
 }
 
 // fetchContentLength sends a HEAD request and returns the reported content
@@ -198,7 +199,6 @@ func (*Manifest) CachePath() string {
 }
 
 type Options struct {
-   Threads int
    Drm     DrmSystem
    Device  string
    License func([]byte) ([]byte, error)

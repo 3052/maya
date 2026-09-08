@@ -8,7 +8,7 @@
 > Oklou (2026)
 > https://youtube.com/watch?v=s5HaMxmYKlQ
 
-Multi-threaded DASH/HLS downloader with DRM decryption
+DASH/HLS downloader with DRM decryption
 
 https://41.neocities.org/maya
 

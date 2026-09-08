@@ -1,14 +1,14 @@
+// dash.go
 package maya
 
 import (
    "41.neocities.org/luna/dash"
-   "41.neocities.org/sofia"
    "fmt"
    "slices"
 )
 
 // downloadDash parses a DASH manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetcher) error {
+func downloadDash(mpd *dash.Mpd, streamId string, fetchKey keyFetcher) error {
    dashGroup, ok := mpd.GetRepresentations()[streamId]
    if !ok {
       return fmt.Errorf("representation group not found %v", streamId)
@@ -21,25 +21,6 @@ func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetch
    if err != nil {
       return err
    }
-   var sidxData []byte
-   if rep.SegmentBase != nil {
-      baseUrl, err := rep.ResolveBaseUrl()
-      if err != nil {
-         return err
-      }
-      sidxData, err = fetchData(baseUrl, map[string]string{"Range": "bytes=" + rep.SegmentBase.IndexRange}, true)
-      if err != nil {
-         return fmt.Errorf("failed to pre-fetch sidx data: %w", err)
-      }
-   }
-   allRequests, err := getDashMediaRequests(dashGroup, sidxData)
-   if err != nil {
-      return err
-   }
-   initData, err := getDashInitSegment(rep, info)
-   if err != nil {
-      return err
-   }
    protection, err := getDashProtection(rep)
    if err != nil {
       return err
@@ -47,12 +28,36 @@ func downloadDash(mpd *dash.Mpd, threads int, streamId string, fetchKey keyFetch
    job := &downloadJob{
       outputFileNameBase: rep.Id,
       info:               info,
-      allRequests:        allRequests,
-      initSegmentData:    initData,
       manifestProtection: protection,
-      threads:            threads,
       fetchKey:           fetchKey,
    }
+
+   // SegmentBase: one URL, one request handed straight to sofia.Process,
+   // which reads the moov from the stream itself. No sidx. The init
+   // segment is fetched on demand only when resuming, whose byte offset
+   // is past the moov at the front of the stream.
+   if rep.SegmentBase != nil {
+      baseUrl, err := rep.ResolveBaseUrl()
+      if err != nil {
+         return err
+      }
+      job.single = &segment{url: baseUrl}
+      job.fetchInit = func() ([]byte, error) {
+         return getDashInitSegment(rep, info)
+      }
+      return orchestrateDownload(job)
+   }
+
+   initData, err := getDashInitSegment(rep, info)
+   if err != nil {
+      return err
+   }
+   job.initSegmentData = initData
+   allRequests, err := getDashMediaRequests(dashGroup)
+   if err != nil {
+      return err
+   }
+   job.allRequests = allRequests
    return orchestrateDownload(job)
 }
 
@@ -128,50 +133,6 @@ func detectDashType(rep *dash.Representation) (*typeInfo, error) {
    }
 }
 
-// generateSegmentsFromSidx parses a pre-fetched sidx box to generate segments.
-func generateSegmentsFromSidx(rep *dash.Representation, sidxData []byte, groupSegments bool) ([]segment, error) {
-   baseUrl, err := rep.ResolveBaseUrl()
-   if err != nil {
-      return nil, err
-   }
-   sidx, err := sofia.DecodeSidxBox(sidxData)
-   if err != nil {
-      return nil, err
-   }
-   _, end, err := dash.ParseRange(rep.SegmentBase.IndexRange)
-   if err != nil {
-      return nil, err
-   }
-
-   var segments []segment
-   const targetChunkSize = 2 * 1024 * 1024
-
-   currentOffset := end + 1
-   chunkStart := currentOffset
-   var chunkDuration float64
-
-   for index, ref := range sidx.References {
-      refSize := uint64(ref.ReferencedSize)
-      chunkDuration += float64(ref.SubsegmentDuration) / float64(sidx.Timescale)
-      currentOffset += refSize
-
-      if !groupSegments || (currentOffset-chunkStart) >= targetChunkSize || index == len(sidx.References)-1 {
-         endOffset := currentOffset - 1
-
-         segments = append(segments, segment{
-            url:      baseUrl,
-            headers:  map[string]string{"Range": "bytes=" + dash.FormatRange(chunkStart, endOffset)},
-            duration: chunkDuration,
-            sizeBits: (currentOffset - chunkStart) * 8,
-         })
-
-         chunkStart = currentOffset
-         chunkDuration = 0
-      }
-   }
-   return segments, nil
-}
-
 // generateSegments centralizes the logic to produce a list of segments.
 func generateSegments(rep *dash.Representation) ([]segment, error) {
    baseUrl, err := rep.ResolveBaseUrl()
@@ -243,12 +204,9 @@ func generateSegments(rep *dash.Representation) ([]segment, error) {
 }
 
 // getDashMediaRequests generates the full list of media segments for a DASH representation group.
-func getDashMediaRequests(group []*dash.Representation, sidxData []byte) ([]segment, error) {
+func getDashMediaRequests(group []*dash.Representation) ([]segment, error) {
    if len(group) == 0 {
       return nil, nil
-   }
-   if group[0].SegmentBase != nil {
-      return generateSegmentsFromSidx(group[0], sidxData, true)
    }
    var requests []segment
    for _, rep := range group {

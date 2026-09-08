@@ -1,3 +1,4 @@
+// cli.go
 package maya
 
 import (

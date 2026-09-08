@@ -1,3 +1,4 @@
+// hls.go
 package maya
 
 import (
@@ -10,7 +11,7 @@ import (
 )
 
 // downloadHls parses an HLS manifest, extracts all necessary data, and passes it to the central orchestrator.
-func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fetchKey keyFetcher) error {
+func downloadHls(playlist *hls.MasterPlaylist, streamId string, fetchKey keyFetcher) error {
    targetUri, err := getHlsStreamUrl(playlist, streamId)
    if err != nil {
       return err
@@ -46,7 +47,6 @@ func downloadHls(playlist *hls.MasterPlaylist, threads int, streamId string, fet
       allRequests:        allRequests,
       initSegmentData:    initData,
       manifestProtection: nil,
-      threads:            threads,
       fetchKey:           fetchKey,
    }
    return orchestrateDownload(job)

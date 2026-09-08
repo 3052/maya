@@ -1,3 +1,4 @@
+// resume.go
 package maya
 
 import (
@@ -22,12 +23,18 @@ func writeResume(path string, state *resumeState) error {
 // was decrypted, the key, so a resume does not have to fetch a license
 // again. The sample tables needed to resume live in the moov that the
 // stop appends to the output file itself, and sofia.StateFromMoov
-// rebuilds the remuxer state from them. Streams written without remuxing
-// are not resumable and get no sidecar.
+// rebuilds the remuxer state from them. The init segment is re-fetched
+// from the manifest on every run, so it needs no place here.
+//
+// Single-URL streams (DASH SegmentBase) additionally record Offset — the
+// byte position in the media URL just past the last fully processed
+// fragment, resumed with Range requests from that offset. Streams
+// written without remuxing are not resumable and get no sidecar.
 
 type resumeState struct {
    Segments int    `json:"segments"`
    Key      []byte `json:"key,omitempty"`
+   Offset   int64  `json:"offset,omitempty"`
 }
 
 // openOutput opens the output file for writing, resuming from an existing
