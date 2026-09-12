@@ -1,6 +1,6 @@
 module 41.neocities.org/maya
 
-go 1.26.0
+go 1.27.0
 
 require (
 	41.neocities.org/diana v1.10.3
